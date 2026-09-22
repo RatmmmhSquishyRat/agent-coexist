@@ -113,8 +113,8 @@ pub fn list(ctx: &mut Ctx, p: &ListParams) -> Result<Report, Fault> {
         while common < dirs.len() && common < prev_dirs.len() && prev_dirs[common] == dirs[common] {
             common += 1;
         }
-        for i in common..dirs.len() {
-            report.record(format!("{}/", dirs[i]), Vec::new(), 2 + 2 * i, 0);
+        for (i, dir) in dirs.iter().enumerate().skip(common) {
+            report.record(format!("{}/", dir), Vec::new(), 2 + 2 * i, 0);
         }
         prev_dirs = dirs.to_vec();
         report.record(
@@ -189,9 +189,8 @@ fn classify(ctx: &Ctx, file: &Path) -> LeafKind {
 
 /// Lexical components of `file_display` relative to `dir_display`.
 fn relative_components(file_display: &str, dir_display: &str) -> Vec<String> {
-    let strip = |s: &str| s.strip_prefix("./").unwrap_or(s);
-    let file = strip(file_display);
-    let dir = strip(dir_display);
+    let file = strip_dot_slash(file_display);
+    let dir = strip_dot_slash(dir_display);
     let rel = if dir == "." {
         file
     } else {
@@ -202,6 +201,11 @@ fn relative_components(file_display: &str, dir_display: &str) -> Vec<String> {
         .filter(|component| !component.is_empty())
         .map(str::to_string)
         .collect()
+}
+
+/// Lexical `./` prefix strip so both displays compare on the same basis.
+fn strip_dot_slash(s: &str) -> &str {
+    s.strip_prefix("./").unwrap_or(s)
 }
 
 /// Stem of a collaboration file name: everything before the suffix

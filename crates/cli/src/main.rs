@@ -64,14 +64,22 @@ fn main() -> ExitCode {
     };
 
     match args::resolve(cli, &ctx) {
-        Ok(args::Invocation::Base { command, kind, request }) => {
+        Ok(args::Invocation::Base {
+            command,
+            kind,
+            request,
+        }) => {
             let (object, dctx) = object_and_dctx(&ctx, command, &kind);
             let result = ops::run(&mut ctx, request);
             progress.finish();
             match result {
                 Ok(report) => emit(&report, &dctx),
                 Err(Fault::Usage(msg)) => usage_stderr(&msg),
-                Err(Fault::Io { action, path, source }) => {
+                Err(Fault::Io {
+                    action,
+                    path,
+                    source,
+                }) => {
                     let report = io_report(command, &object, action, &path, &source, &ctx);
                     emit(&report, &dctx)
                 }
@@ -95,9 +103,7 @@ fn main() -> ExitCode {
             // (state object = dir; file objects = suffix-stripped display).
             let (command, object) = wait::command_object(&path, &filter);
             let dctx = match &kind {
-                args::DiagKind::File(file) => {
-                    context::diag_context_for_file(&ctx, command, file)
-                }
+                args::DiagKind::File(file) => context::diag_context_for_file(&ctx, command, file),
                 args::DiagKind::Dir(dir) => context::diag_context_for_dir(&ctx, command, dir),
             };
             let cancel = Arc::new(wait::Cancellation::new());
@@ -109,7 +115,7 @@ fn main() -> ExitCode {
                 // fatal.
                 let _ = ctrlc::set_handler(move || cancel.cancel());
             }
-            let ready = move || {
+            let ready = || {
                 // One readiness hint on stderr, best-effort: a failing
                 // stderr must not cancel an otherwise valid wait result.
                 let _ = writeln!(std::io::stderr(), "waiting  {command}  {object}");
@@ -118,7 +124,11 @@ fn main() -> ExitCode {
                 Ok(report) => emit(&report, &dctx),
                 Err(Fault::Cancelled) => ExitCode::from(130),
                 Err(Fault::Usage(msg)) => usage_stderr(&msg),
-                Err(Fault::Io { action, path: io_path, source }) => {
+                Err(Fault::Io {
+                    action,
+                    path: io_path,
+                    source,
+                }) => {
                     let report = io_report(command, &object, action, &io_path, &source, &ctx);
                     emit(&report, &dctx)
                 }
@@ -197,15 +207,24 @@ fn io_report(
 ) -> Report {
     let mut report = Report::new(command, object);
     let display = context::display_file(path);
-    report.kv("reason", vec![format!("cannot {action} {display}: {source}")]);
+    report.kv(
+        "reason",
+        vec![format!("cannot {action} {display}: {source}")],
+    );
     let path_class = matches!(
         source.kind(),
-        ErrorKind::NotFound | ErrorKind::IsADirectory | ErrorKind::NotADirectory | ErrorKind::InvalidFilename
+        ErrorKind::NotFound
+            | ErrorKind::IsADirectory
+            | ErrorKind::NotADirectory
+            | ErrorKind::InvalidFilename
     ) || matches!(source.raw_os_error(), Some(123) | Some(206));
     let fix = if path_class {
         "fix the path, then run the corrected command".to_string()
     } else {
-        format!("check the file's permissions and free space, then retry: {}", ctx.argv)
+        format!(
+            "check the file's permissions and free space, then retry: {}",
+            ctx.argv
+        )
     };
     report.kv("fix", vec![fix]);
     report.status = Status::Error;
@@ -236,11 +255,7 @@ fn reason_from_fault(
 /// Report carrying raw diagnostics for a `Fault::Diagnostics` that escaped
 /// a command (rendered like any diagnostic rows, first line `error`,
 /// exit 1).
-fn diagnostics_report(
-    command: &'static str,
-    object: &str,
-    diagnostics: Vec<Diagnostic>,
-) -> Report {
+fn diagnostics_report(command: &'static str, object: &str, diagnostics: Vec<Diagnostic>) -> Report {
     let mut report = Report::new(command, object);
     for diagnostic in diagnostics {
         report.diagnostic(diagnostic);

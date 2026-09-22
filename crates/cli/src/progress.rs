@@ -31,7 +31,9 @@ struct State {
 fn lock(state: &Mutex<State>) -> MutexGuard<'_, State> {
     // The state is plain data; a panic inside one callback must not cascade
     // into later ones through poisoning.
-    state.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+    state
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
 /// The caller's handle for erasing the line when traversal ends.
@@ -46,8 +48,14 @@ pub struct Progress {
 /// unless `active` and stderr is a TTY; the handle is always returned and
 /// simply writes nothing when no line was ever drawn.
 pub fn make(active: bool) -> (Option<ProgressFn>, Progress) {
-    let state = Arc::new(Mutex::new(State { started: None, drawn: None, drawn_len: 0 }));
-    let progress = Progress { state: Arc::clone(&state) };
+    let state = Arc::new(Mutex::new(State {
+        started: None,
+        drawn: None,
+        drawn_len: 0,
+    }));
+    let progress = Progress {
+        state: Arc::clone(&state),
+    };
     if !active || !std::io::stderr().is_terminal() {
         return (None, progress);
     }

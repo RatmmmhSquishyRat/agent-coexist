@@ -71,20 +71,9 @@ impl<'a> ScanCtx<'a> {
         &self.source[span.start..span.end]
     }
 
-    /// Number of lines (a trailing phantom empty line after a final
-    /// terminator counts and is blank).
-    pub(crate) fn line_count(&self) -> usize {
-        self.lines.count()
-    }
-
     /// 0-based line index of a byte offset.
     pub(crate) fn idx_at(&self, offset: usize) -> usize {
         self.lines.idx_at(offset)
-    }
-
-    /// 1-based line number of a byte offset.
-    pub(crate) fn line_number_at(&self, offset: usize) -> usize {
-        self.lines.line_at(offset)
     }
 
     /// Line content without its terminator. (A leading BOM on line 0 is only
@@ -133,10 +122,7 @@ impl<'a> ScanCtx<'a> {
         self.blocks
             .iter()
             .find(|b| b.open >= lines.start && b.open < lines.end)
-            .map(|b| Body {
-                span: b.block.clone(),
-                content: b.content.clone(),
-            })
+            .map(|b| Body::from_block(self.source, b))
     }
 
     /// Lines of a section excluding its H2: `[head+1, section_end)`.

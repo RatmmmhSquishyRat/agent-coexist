@@ -5,8 +5,8 @@
 //! + 1` bytes in memory — the one extra byte is what distinguishes
 //! "within the limit" from "over the limit" using the bytes actually read
 //! (§10.4.2), never a racy `stat`. [`verify`] walks the §4.4 nine-step
-//! table strictly top to bottom; the state is derived from that order
-//! alone.
+//!   table strictly top to bottom; the state is derived from that order
+//!   alone.
 
 use std::fs::File;
 use std::io::{self, Read};
@@ -145,13 +145,19 @@ pub fn resolve_target(brief_path: &Path, target: &str) -> PathBuf {
     if absolute {
         PathBuf::from(normalized)
     } else {
-        brief_path.parent().unwrap_or(Path::new("")).join(normalized)
+        brief_path
+            .parent()
+            .unwrap_or(Path::new(""))
+            .join(normalized)
     }
 }
 
 /// §4.4 step 7 / §4.3.4: exactly 64 characters of lowercase hex.
 fn is_valid_hash(value: &str) -> bool {
-    value.len() == 64 && value.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'))
+    value.len() == 64
+        && value
+            .bytes()
+            .all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'))
 }
 
 /// 1-based line number of the byte at `index` (a `\n` belongs to the line
@@ -195,7 +201,13 @@ fn expand_to_lines(content: &str, start: usize, end: usize) -> ((usize, usize), 
         .iter()
         .position(|&b| b == b'\n')
         .map_or(bytes.len(), |i| probe + i + 1);
-    ((start_line, end_line), Span { start: line_start, end: line_end })
+    (
+        (start_line, end_line),
+        Span {
+            start: line_start,
+            end: line_end,
+        },
+    )
 }
 
 /// Outcome of checking one brief entry against its target (§4.4).
@@ -322,6 +334,7 @@ pub fn verify(brief_path: &Path, entry: &Entry) -> Verification {
     }
     if !regex_matched {
         return Verification {
+            target: Some(target),
             diagnostics: vec![Diagnostic::new("W-ENTRY-STALE", entry.head_line)
                 .with("title", names::display_text(&entry.title))
                 .with("reason", "regex not found")],
@@ -336,7 +349,10 @@ pub fn verify(brief_path: &Path, entry: &Entry) -> Verification {
         if let Some(content) = target.content.as_deref() {
             let lines = line_count(content);
             range = if lines == 0 { None } else { Some((1, lines)) };
-            content_span = Some(Span { start: 0, end: content.len() });
+            content_span = Some(Span {
+                start: 0,
+                end: content.len(),
+            });
         }
     }
 
@@ -498,7 +514,12 @@ mod tests {
         let non_hex = "z".repeat(64);
         for bad in [upper.as_str(), short.as_str(), non_hex.as_str()] {
             let v = verify(&brief, &entry(Some(&name), Some(bad), None));
-            assert_eq!((v.state, v.reason), ("unchecked", Some("no hash")), "{:?}", bad);
+            assert_eq!(
+                (v.state, v.reason),
+                ("unchecked", Some("no hash")),
+                "{:?}",
+                bad
+            );
             assert!(v.diagnostics.is_empty());
             assert!(v.target.as_ref().unwrap().content.is_some());
             assert_eq!(v.range, Some((1, 1)));
@@ -526,8 +547,7 @@ mod tests {
         assert_eq!(v.diagnostics.len(), 1);
         assert_eq!(v.diagnostics[0].id, "W-ENTRY-STALE");
         assert_eq!(v.diagnostics[0].line, 2);
-        assert!(v
-            .diagnostics[0]
+        assert!(v.diagnostics[0]
             .params
             .iter()
             .any(|(k, val)| *k == "reason" && val == "target missing"));
@@ -535,7 +555,10 @@ mod tests {
         // Step 4 on its own: unreadable regex, readable target — no
         // W-ENTRY-STALE (E-ENTRY-REGEX already reports the fact).
         let (brief, name, full) = scratch("reinvalid", b"content\n");
-        let v = verify(&brief, &entry(Some(&name), Some(EMPTY_SHA), Some("(unclosed")));
+        let v = verify(
+            &brief,
+            &entry(Some(&name), Some(EMPTY_SHA), Some("(unclosed")),
+        );
         assert_eq!((v.state, v.reason), ("stale", Some("regex invalid")));
         assert!(v.diagnostics.is_empty());
         assert!(v.target.is_some());
@@ -547,7 +570,10 @@ mod tests {
         let (brief, name, full) = scratch("rehit", b"one\nfind me here\nthree\n");
         // "find me" matches bytes 4..11 on line 2; the whole line spans
         // 4..17 ("find me here\n").
-        let v = verify(&brief, &entry(Some(&name), Some("not-a-hash"), Some("find me")));
+        let v = verify(
+            &brief,
+            &entry(Some(&name), Some("not-a-hash"), Some("find me")),
+        );
         assert_eq!((v.state, v.reason), ("unchecked", Some("no hash")));
         assert!(v.diagnostics.is_empty());
         assert!(v.target.as_ref().unwrap().content.is_some());
@@ -559,10 +585,7 @@ mod tests {
             &brief,
             &entry(Some(&name), Some("not-a-hash"), Some("(?P<word>find) me")),
         );
-        assert_eq!(
-            v.groups,
-            vec![("word".to_string(), "find".to_string())]
-        );
+        assert_eq!(v.groups, vec![("word".to_string(), "find".to_string())]);
         let _ = fs::remove_file(&full);
     }
 
@@ -586,14 +609,16 @@ mod tests {
     #[test]
     fn regex_not_found_is_stale_with_warning() {
         let (brief, name, full) = scratch("notfound", b"nothing to see\n");
-        let v = verify(&brief, &entry(Some(&name), Some(EMPTY_SHA), Some("absent-token")));
+        let v = verify(
+            &brief,
+            &entry(Some(&name), Some(EMPTY_SHA), Some("absent-token")),
+        );
         assert_eq!((v.state, v.reason), ("stale", Some("regex not found")));
         assert!(v.range.is_none() && v.content_span.is_none() && v.groups.is_empty());
         assert!(v.target.is_some());
         assert_eq!(v.diagnostics.len(), 1);
         assert_eq!(v.diagnostics[0].id, "W-ENTRY-STALE");
-        assert!(v
-            .diagnostics[0]
+        assert!(v.diagnostics[0]
             .params
             .iter()
             .any(|(k, val)| *k == "reason" && val == "regex not found"));

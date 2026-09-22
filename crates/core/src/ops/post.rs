@@ -35,14 +35,21 @@ pub fn run(ctx: &mut Ctx, p: &PostParams) -> Result<Report, Fault> {
         create_parents: !edit,
     };
     // `post` is never subject to the functional lock (spec §7.3, T5).
-    let result = fsx::mutate(&p.path, policy, |bytes, created| step(ctx, p, bytes, created));
+    let result = fsx::mutate(&p.path, policy, |bytes, created| {
+        step(ctx, p, bytes, created)
+    });
     finish(ctx, "post", &p.path, None, result)
 }
 
 /// One attempt under the exclusive lock: build the initial content when the
 /// file was created (or an abandoned zero-byte file was taken over), else
 /// parse the existing bytes and compute the splice.
-fn step(ctx: &mut Ctx, p: &PostParams, bytes: Vec<u8>, created: bool) -> Result<(Mutation, Step), Fault> {
+fn step(
+    ctx: &mut Ctx,
+    p: &PostParams,
+    bytes: Vec<u8>,
+    created: bool,
+) -> Result<(Mutation, Step), Fault> {
     if created {
         return create_step(p, &time::format(ctx.now));
     }
@@ -71,14 +78,22 @@ fn create_step(p: &PostParams, now: &str) -> Result<(Mutation, Step), Fault> {
     let mut done = Done::empty();
     done.kv(
         "comment",
-        vec!["#1".to_string(), format!("L{}", line_of(content.as_bytes(), prefix.len()))],
+        vec![
+            "#1".to_string(),
+            format!("L{}", line_of(content.as_bytes(), prefix.len())),
+        ],
     );
     add_reference_rows(&mut done, &p.body, &[1]);
     Ok((Mutation::Write(content.into_bytes()), Step::Done(done)))
 }
 
 /// §3.5.2 append form: pad to one blank line, then the new section.
-fn append_step(p: &PostParams, doc: &doc::Document, bytes: &[u8], now: &str) -> Result<(Mutation, Step), Fault> {
+fn append_step(
+    p: &PostParams,
+    doc: &doc::Document,
+    bytes: &[u8],
+    now: &str,
+) -> Result<(Mutation, Step), Fault> {
     let max_seq = doc.post.comments.iter().map(|c| c.seq).max().unwrap_or(0);
     if max_seq == u64::MAX - 1 {
         // §3.3.1: the next number would not be a legal comment header.
@@ -110,7 +125,10 @@ fn append_step(p: &PostParams, doc: &doc::Document, bytes: &[u8], now: &str) -> 
             let mut done = Done::empty();
             done.kv(
                 "comment",
-                vec![format!("#{seq}"), format!("L{}", line_of(&new_bytes, header_off))],
+                vec![
+                    format!("#{seq}"),
+                    format!("L{}", line_of(&new_bytes, header_off)),
+                ],
             );
             add_reference_rows(&mut done, &p.body, &seqs);
             Ok((Mutation::Write(new_bytes), Step::Done(done)))
@@ -121,7 +139,13 @@ fn append_step(p: &PostParams, doc: &doc::Document, bytes: &[u8], now: &str) -> 
 
 /// §3.5.3 edit form: replace the body fence (or insert one for a W-BODY
 /// comment) and append/replace `, edited <now>` in the header.
-fn edit_step(p: &PostParams, doc: &doc::Document, bytes: &[u8], n: u64, now: &str) -> Result<(Mutation, Step), Fault> {
+fn edit_step(
+    p: &PostParams,
+    doc: &doc::Document,
+    bytes: &[u8],
+    n: u64,
+    now: &str,
+) -> Result<(Mutation, Step), Fault> {
     let max_seq = doc.post.comments.iter().map(|c| c.seq).max().unwrap_or(0);
     let idx = match doc.post.comments.iter().position(|c| c.seq == n) {
         Some(idx) => idx,
@@ -148,21 +172,36 @@ fn edit_step(p: &PostParams, doc: &doc::Document, bytes: &[u8], n: u64, now: &st
     let head_text = doc.text(&section.head);
     if let Some(rparen) = strip_term(head_text).rfind(')') {
         let header_end = section.head.start + rparen + 1;
-        let mut header = format!("## #{} {} ({}", comment.seq, comment.nick, time::format(comment.created));
+        let mut header = format!(
+            "## #{} {} ({}",
+            comment.seq,
+            comment.nick,
+            time::format(comment.created)
+        );
         header.push_str(", edited ");
         header.push_str(now);
         header.push(')');
-        splices.push(Splice { range: section.head.start..header_end, replacement: header.into_bytes() });
+        splices.push(Splice {
+            range: section.head.start..header_end,
+            replacement: header.into_bytes(),
+        });
     }
     // Body fence.
     match &section.body {
         Some(body) => {
             let span = body.span.clone();
-            splices.push(Splice { range: span, replacement: text::fenced(&p.body).into_bytes() });
+            splices.push(Splice {
+                range: span,
+                replacement: text::fenced(&p.body).into_bytes(),
+            });
         }
         None => {
-            let (pos, inserted) = after_line_and_blank(&doc.source, section.head.start, &fence_block(&p.body));
-            splices.push(Splice { range: pos..pos, replacement: inserted.into_bytes() });
+            let (pos, inserted) =
+                after_line_and_blank(&doc.source, section.head.start, &fence_block(&p.body));
+            splices.push(Splice {
+                range: pos..pos,
+                replacement: inserted.into_bytes(),
+            });
         }
     }
     let line = line_of(doc.source.as_bytes(), section.head.start);
@@ -172,7 +211,11 @@ fn edit_step(p: &PostParams, doc: &doc::Document, bytes: &[u8], n: u64, now: &st
             let mut done = Done::empty();
             done.kv(
                 "comment",
-                vec![format!("#{}", comment.seq), format!("L{line}"), "edited".to_string()],
+                vec![
+                    format!("#{}", comment.seq),
+                    format!("L{line}"),
+                    "edited".to_string(),
+                ],
             );
             add_reference_rows(&mut done, &p.body, &seqs);
             Ok((Mutation::Write(new_bytes), Step::Done(done)))
@@ -217,7 +260,10 @@ pub(super) struct Done {
 
 impl Done {
     pub fn empty() -> Done {
-        Done { rows: Vec::new(), warn: false }
+        Done {
+            rows: Vec::new(),
+            warn: false,
+        }
     }
 
     /// Key/value row with the same layout as `Report::kv`.
@@ -236,7 +282,10 @@ pub(super) enum Step {
     Done(Done),
     /// The target carries blocking diagnostics (spec §1): refuse to write
     /// and emit check-shaped rows (§2.7.4, §8.3.2).
-    Refused { kind: Option<&'static str>, diags: Vec<Diagnostic> },
+    Refused {
+        kind: Option<&'static str>,
+        diags: Vec<Diagnostic>,
+    },
 }
 
 /// Early exits from the shared existing-file gates.
@@ -381,7 +430,9 @@ pub(super) fn finish(
                     }
                     Ok(report)
                 }
-                Step::Refused { kind, diags } => Ok(refuse_report(command, &object, path, kind, diags)),
+                Step::Refused { kind, diags } => {
+                    Ok(refuse_report(command, &object, path, kind, diags))
+                }
             }
         }
         Err(Fault::Reason { id, params }) => {
@@ -390,7 +441,11 @@ pub(super) fn finish(
                     return Ok(flocked_report(ctx, command, &object, path, stash));
                 }
             }
-            let params = if id == "E-FILE-MISSING" { file_missing_params(path) } else { params };
+            let params = if id == "E-FILE-MISSING" {
+                file_missing_params(path)
+            } else {
+                params
+            };
             let dctx = context::diag_context_for_file(ctx, command, path);
             Ok(reason_report(&dctx, command, &object, id, params))
         }
@@ -404,7 +459,13 @@ pub(super) fn finish(
 /// order `shared::functional_lock` already returns), then the skipped /
 /// partial rows for state files the verdict could not read (§10.5.6), then
 /// canonicalize-failure rows.
-fn flocked_report(ctx: &mut Ctx, command: &'static str, object: &str, path: &Path, stash: FlockStash) -> Report {
+fn flocked_report(
+    ctx: &mut Ctx,
+    command: &'static str,
+    object: &str,
+    path: &Path,
+    stash: FlockStash,
+) -> Report {
     let primary = &stash.holders[0];
     let dctx = context::diag_context_for_file(ctx, command, path);
     let mut report = reason_report(
@@ -421,15 +482,25 @@ fn flocked_report(ctx: &mut Ctx, command: &'static str, object: &str, path: &Pat
     for holder in &stash.holders[1..] {
         report.kv(
             "also-locked",
-            vec![holder.nick.clone(), format!("until {}", time::format(holder.until))],
+            vec![
+                holder.nick.clone(),
+                format!("until {}", time::format(holder.until)),
+            ],
         );
     }
     for (dir, issue) in &stash.issues {
         match issue {
-            shared::ScanIssue::Busy => report.kv("skipped", vec![dir.clone(), "busy".to_string()]),
-            shared::ScanIssue::Blocking(id) => report.kv("skipped", vec![dir.clone(), (*id).to_string()]),
+            shared::ScanIssue::Busy => {
+                report.kv("skipped", vec![dir.clone(), "busy".to_string()]);
+            }
+            shared::ScanIssue::Blocking(id) => {
+                report.kv("skipped", vec![dir.clone(), (*id).to_string()]);
+            }
             shared::ScanIssue::Partial { id, line } => {
-                report.kv("partial", vec![dir.clone(), (*id).to_string(), format!("L{line}")]);
+                report.kv(
+                    "partial",
+                    vec![dir.clone(), (*id).to_string(), format!("L{line}")],
+                );
             }
         }
     }
@@ -443,7 +514,10 @@ fn flocked_report(ctx: &mut Ctx, command: &'static str, object: &str, path: &Pat
 /// `created  <file>` (§7.3.2).
 fn created_rows(report: &mut Report, created_dirs: &[PathBuf], file: &Path) {
     for dir in created_dirs {
-        report.kv("created", vec![format!("{}/", names::fold(&fsx::display_path(dir)))]);
+        report.kv(
+            "created",
+            vec![format!("{}/", names::fold(&fsx::walk::display_path(dir)))],
+        );
     }
     report.kv("created", vec![context::display_file(file)]);
 }
@@ -527,7 +601,9 @@ fn line_of(src: &[u8], off: usize) -> usize {
 
 /// Line text without its terminator.
 pub(super) fn strip_term(line: &str) -> &str {
-    line.strip_suffix("\r\n").or_else(|| line.strip_suffix('\n')).unwrap_or(line)
+    line.strip_suffix("\r\n")
+        .or_else(|| line.strip_suffix('\n'))
+        .unwrap_or(line)
 }
 
 /// Blank line per spec §1 (empty, or only spaces and tabs).
@@ -575,7 +651,10 @@ pub(super) fn section_delete_splice(src: &str, section: &doc::Section) -> Splice
     if section.span.end < src.len() && !ends_with_blank_line(&src[..section.span.start]) {
         replacement.push(b'\n');
     }
-    Splice { range: section.span.clone(), replacement }
+    Splice {
+        range: section.span.clone(),
+        replacement,
+    }
 }
 
 fn ends_with_blank_line(prefix: &str) -> bool {
@@ -594,7 +673,11 @@ fn ends_with_blank_line(prefix: &str) -> bool {
 /// lines of the original file).
 pub(super) fn removed_lines_label(src: &str, start: usize, end: usize) -> String {
     let last = if end > start { end - 1 } else { end };
-    format!("L{}..L{}", line_of(src.as_bytes(), start), line_of(src.as_bytes(), last))
+    format!(
+        "L{}..L{}",
+        line_of(src.as_bytes(), start),
+        line_of(src.as_bytes(), last)
+    )
 }
 
 /// Start offset of the anchor line for preamble insertions: the last

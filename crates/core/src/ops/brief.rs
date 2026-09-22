@@ -27,9 +27,9 @@ use crate::types::brief::Entry;
 use crate::Time;
 
 use super::post::{
-    after_line_and_blank, checked_doc, fence_block, finish, flock_blocked, guarded_apply,
-    is_blank, line_end, removed_lines_label, section_delete_splice, stash_flock, stem_of,
-    strip_term, unchanged_done, Applied, Done, Early, FlockStash, Step,
+    after_line_and_blank, checked_doc, fence_block, finish, flock_blocked, guarded_apply, is_blank,
+    line_end, removed_lines_label, section_delete_splice, stash_flock, stem_of, strip_term,
+    unchanged_done, Applied, Done, Early, FlockStash, Step,
 };
 use super::{reason_report, BriefForm, BriefParams, BriefTarget, RegexOpt};
 
@@ -53,7 +53,10 @@ pub fn run(ctx: &mut Ctx, p: &BriefParams) -> Result<Report, Fault> {
                     Some(title) => title.clone(),
                     None => default_title(&resolved, &t.target),
                 };
-                target = Some(TargetInfo { sha: read.sha256, title });
+                target = Some(TargetInfo {
+                    sha: read.sha256,
+                    title,
+                });
             }
             Err(err) if err.kind() == ErrorKind::NotFound => {
                 let dctx = context::diag_context_for_file(ctx, "brief", &p.path);
@@ -117,7 +120,10 @@ fn bare_step(
         if stash_flock(stash, ctx, &p.path, p.as_nick.as_deref()) {
             return flock_blocked(true);
         }
-        return Ok((Mutation::Write(skeleton(&p.path).into_bytes()), Step::Done(Done::empty())));
+        return Ok((
+            Mutation::Write(skeleton(&p.path).into_bytes()),
+            Step::Done(Done::empty()),
+        ));
     }
     match checked_doc(&bytes, &p.path, ctx.now, doc::Kind::Brief) {
         Ok(_) => Ok((Mutation::Unchanged, Step::Done(unchanged_done(&p.path)))),
@@ -155,12 +161,19 @@ fn description_step(
     let splices = match &doc.brief.description {
         Some(body) => {
             let span = body.span.clone();
-            vec![Splice { range: span, replacement: text::fenced(description).into_bytes() }]
+            vec![Splice {
+                range: span,
+                replacement: text::fenced(description).into_bytes(),
+            }]
         }
         None => {
             let anchor = super::post::preamble_anchor(&doc);
-            let (pos, inserted) = after_line_and_blank(&doc.source, anchor, &fence_block(description));
-            vec![Splice { range: pos..pos, replacement: inserted.into_bytes() }]
+            let (pos, inserted) =
+                after_line_and_blank(&doc.source, anchor, &fence_block(description));
+            vec![Splice {
+                range: pos..pos,
+                replacement: inserted.into_bytes(),
+            }]
         }
     };
     if stash_flock(stash, ctx, &p.path, p.as_nick.as_deref()) {
@@ -184,10 +197,18 @@ fn target_step(
     bytes: Vec<u8>,
     created: bool,
     t: &BriefTarget,
+    target: Option<&TargetInfo>,
 ) -> Result<(Mutation, Step), Fault> {
     let info = target.expect("the target form resolves its target before mutate");
     let mut done = Done::empty();
-    done.kv("entry", vec![info.title.clone(), "added".to_string(), display_stored_path(&t.target)]);
+    done.kv(
+        "entry",
+        vec![
+            info.title.clone(),
+            "added".to_string(),
+            display_stored_path(&t.target),
+        ],
+    );
     done.kv("hash", vec![info.sha.clone()]);
     if t.note.is_some() {
         done.kv("note", vec!["set".to_string()]);
@@ -231,7 +252,10 @@ fn target_step(
                 // The default title is reserved for this very target
                 // (§4.5.4); an explicit --entry overrides instead.
                 let new_norm = hash::normalized_target(&t.target);
-                let existing_norm = entry.path.as_ref().map(|prop| hash::normalized_target(&prop.value));
+                let existing_norm = entry
+                    .path
+                    .as_ref()
+                    .map(|prop| hash::normalized_target(&prop.value));
                 if existing_norm.as_deref() != Some(new_norm.as_str()) {
                     return Err(Fault::reason("E-ENTRY-TITLE-TAKEN")
                         .with("title", info.title.clone())
@@ -254,7 +278,11 @@ fn target_step(
             let mut done = Done::empty();
             done.kv(
                 "entry",
-                vec![info.title.clone(), "updated".to_string(), display_stored_path(&t.target)],
+                vec![
+                    info.title.clone(),
+                    "updated".to_string(),
+                    display_stored_path(&t.target),
+                ],
             );
             done.kv("hash", vec![info.sha.clone()]);
             if t.note.is_some() {
@@ -296,11 +324,17 @@ fn note_step(
     let splices = match &doc.sections[entry.section].body {
         Some(body) => {
             let span = body.span.clone();
-            vec![Splice { range: span, replacement: text::fenced(note).into_bytes() }]
+            vec![Splice {
+                range: span,
+                replacement: text::fenced(note).into_bytes(),
+            }]
         }
         None => {
             let (pos, inserted) = note_insert(&doc, entry, note);
-            vec![Splice { range: pos..pos, replacement: inserted.into_bytes() }]
+            vec![Splice {
+                range: pos..pos,
+                replacement: inserted.into_bytes(),
+            }]
         }
     };
     let mut done = Done::empty();
@@ -340,7 +374,11 @@ fn remove_entry_step(
     let mut done = Done::empty();
     done.kv("entry", vec![entry.title.clone(), "removed".to_string()]);
     done.kv("removed-lines", vec![label]);
-    match guarded_apply(&bytes, vec![splice], doc.kind.as_ref().map(doc::Kind::as_str))? {
+    match guarded_apply(
+        &bytes,
+        vec![splice],
+        doc.kind.as_ref().map(doc::Kind::as_str),
+    )? {
         Applied::Bytes(new_bytes) => {
             append_remaining(&mut done, &new_bytes, &p.path, ctx.now)?;
             Ok((Mutation::Write(new_bytes), Step::Done(done)))
@@ -384,7 +422,11 @@ fn refresh_step(
             None => {
                 done.kv(
                     "entry",
-                    vec![entry.title.clone(), "skipped".to_string(), "no path".to_string()],
+                    vec![
+                        entry.title.clone(),
+                        "skipped".to_string(),
+                        "no path".to_string(),
+                    ],
                 );
                 done.warn = true;
                 continue;
@@ -396,7 +438,11 @@ fn refresh_step(
             Err(err) if err.kind() == ErrorKind::NotFound => {
                 done.kv(
                     "entry",
-                    vec![entry.title.clone(), "skipped".to_string(), "target missing".to_string()],
+                    vec![
+                        entry.title.clone(),
+                        "skipped".to_string(),
+                        "target missing".to_string(),
+                    ],
                 );
                 done.warn = true;
                 continue;
@@ -415,7 +461,11 @@ fn refresh_step(
         }
         done.kv(
             "entry",
-            vec![entry.title.clone(), "refreshed".to_string(), display_stored_path(&path_prop.value)],
+            vec![
+                entry.title.clone(),
+                "refreshed".to_string(),
+                display_stored_path(&path_prop.value),
+            ],
         );
     }
     let splices = merge_inserts(splices, inserts);
@@ -435,7 +485,12 @@ fn refresh_step(
 /// and `hash` value spans (or their insertion geometries when the lines
 /// are missing, §4.5.4), the `--regex` tri-state, and the optional note
 /// fence.
-fn target_update_splices(doc: &doc::Document, entry: &Entry, t: &BriefTarget, sha: &str) -> Vec<Splice> {
+fn target_update_splices(
+    doc: &doc::Document,
+    entry: &Entry,
+    t: &BriefTarget,
+    sha: &str,
+) -> Vec<Splice> {
     let mut splices: Vec<Splice> = Vec::new();
     let mut inserts: Vec<(usize, Vec<u8>)> = Vec::new();
     match (&entry.path, &entry.hash) {
@@ -482,9 +537,10 @@ fn target_update_splices(doc: &doc::Document, entry: &Entry, t: &BriefTarget, sh
             }),
             // Already part of the H2-anchored property block when the entry
             // had no `path` line.
-            None if !path_missing => {
-                inserts.push((attrs_anchor(doc, entry), format!("- regex: {pattern}\n").into_bytes()))
-            }
+            None if !path_missing => inserts.push((
+                attrs_anchor(doc, entry),
+                format!("- regex: {pattern}\n").into_bytes(),
+            )),
             None => {}
         },
         RegexOpt::Delete => {
@@ -501,7 +557,10 @@ fn target_update_splices(doc: &doc::Document, entry: &Entry, t: &BriefTarget, sh
         match &doc.sections[entry.section].body {
             Some(body) => {
                 let span = body.span.clone();
-                splices.push(Splice { range: span, replacement: text::fenced(note).into_bytes() });
+                splices.push(Splice {
+                    range: span,
+                    replacement: text::fenced(note).into_bytes(),
+                });
             }
             None => {
                 let (pos, inserted) = note_insert(doc, entry, note);
@@ -544,7 +603,10 @@ fn merge_inserts(splices: Vec<Splice>, mut inserts: Vec<(usize, Vec<u8>)>) -> Ve
             Some(tail) if tail.range.start == pos && tail.range.is_empty() => {
                 tail.replacement.extend_from_slice(&bytes)
             }
-            _ => merged.push(Splice { range: pos..pos, replacement: bytes }),
+            _ => merged.push(Splice {
+                range: pos..pos,
+                replacement: bytes,
+            }),
         }
     }
     let mut all = splices;
@@ -555,7 +617,12 @@ fn merge_inserts(splices: Vec<Splice>, mut inserts: Vec<(usize, Vec<u8>)>) -> Ve
 /// §2.7.4: after a successful write, re-parse the new bytes and list every
 /// surviving non-blocking `E-*` as `remaining  <E-ID>  L<n>` rows (line
 /// ascending) — the last rows of the report, with a `warn` first line.
-fn append_remaining(done: &mut Done, new_bytes: &[u8], path: &Path, now: Time) -> Result<(), Fault> {
+fn append_remaining(
+    done: &mut Done,
+    new_bytes: &[u8],
+    path: &Path,
+    now: Time,
+) -> Result<(), Fault> {
     let doc = doc::parse(new_bytes.to_vec(), path, now)?;
     let mut diags: Vec<&Diagnostic> = doc
         .diagnostics

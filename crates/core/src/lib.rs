@@ -20,18 +20,18 @@
 //! `error::Fault` for usage / OS-level I/O conditions.
 
 pub mod consts;
-pub mod names;
-pub mod error;
 pub mod diag;
-pub mod text;
 pub mod doc;
-pub mod types;
-pub mod time;
+pub mod error;
 pub mod fsx;
 pub mod hash;
-pub mod wait;
-pub mod report;
+pub mod names;
 pub mod ops;
+pub mod report;
+pub mod text;
+pub mod time;
+pub mod types;
+pub mod wait;
 
 /// All timestamps used across the CLI (spec §2.8): UTC, second precision in
 /// serialized form.

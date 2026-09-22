@@ -4,13 +4,13 @@
 pub const SUFFIX: &str = ".agent-besties.md";
 
 /// Default duration of a `locked` declaration: 2h in seconds (§12, per §6.3.1).
-pub const DEFAULT_FOR_LOCKED: i64 = 7200;   // 2h in seconds
+pub const DEFAULT_FOR_LOCKED: i64 = 7200; // 2h in seconds
 
 /// Default duration of non-`locked` state declarations: 8h in seconds (§12, per §6.3.1).
-pub const DEFAULT_FOR_OTHER: i64 = 28800;   // 8h
+pub const DEFAULT_FOR_OTHER: i64 = 28800; // 8h
 
 /// Window in which a nick's own valid state entry is flagged `expiring` (until-now at or below this): 30m in seconds (§12, per §10.6.3).
-pub const EXPIRING_WINDOW: i64 = 1800;      // 30m
+pub const EXPIRING_WINDOW: i64 = 1800; // 30m
 
 /// Exclusive-lock queueing cap for post/subscribe writes: 5000 ms (§12, per §10.2).
 pub const POST_WAIT_MS: u64 = 5000;

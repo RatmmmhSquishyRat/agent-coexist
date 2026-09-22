@@ -36,7 +36,6 @@ pub fn valid_section(s: &str) -> bool {
     NICK.is_match(s)
 }
 
-
 /// Maximal run of NICK characters at the start of `s` (first char class,
 /// then continuation class). This is a scanner helper for comment headers
 /// and state entries; the extracted run still has to pass [`valid_nick`].
@@ -85,7 +84,13 @@ pub fn fold(s: &str) -> String {
 pub fn display_text(s: &str) -> String {
     fold(s)
         .chars()
-        .map(|c| if c.is_control() && c != '\t' { '\u{FFFD}' } else { c })
+        .map(|c| {
+            if c.is_control() && c != '\t' {
+                '\u{FFFD}'
+            } else {
+                c
+            }
+        })
         .collect()
 }
 
@@ -117,8 +122,22 @@ pub fn shell_quote(s: &str) -> String {
         c.is_whitespace()
             || matches!(
                 c,
-                '"' | '\'' | '$' | '\\' | '`' | '&' | '|' | ';' | '<' | '>' | '(' | ')' | '*'
-                    | '?' | '[' | ']' | '!'
+                '"' | '\''
+                    | '$'
+                    | '\\'
+                    | '`'
+                    | '&'
+                    | '|'
+                    | ';'
+                    | '<'
+                    | '>'
+                    | '('
+                    | ')'
+                    | '*'
+                    | '?'
+                    | '['
+                    | ']'
+                    | '!'
             )
     });
     if !needs {

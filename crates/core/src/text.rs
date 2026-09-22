@@ -36,7 +36,12 @@ pub struct Splice {
 /// panics loudly instead of silently dropping bytes.
 pub fn apply(bytes: &[u8], splices: Vec<Splice>) -> Result<Vec<u8>, Fault> {
     let mut sorted = splices;
-    sorted.sort_by(|a, b| a.range.start.cmp(&b.range.start).then(a.range.end.cmp(&b.range.end)));
+    sorted.sort_by(|a, b| {
+        a.range
+            .start
+            .cmp(&b.range.start)
+            .then(a.range.end.cmp(&b.range.end))
+    });
 
     let mut covered_end = 0usize;
     for s in &sorted {
@@ -56,11 +61,11 @@ pub fn apply(bytes: &[u8], splices: Vec<Splice>) -> Result<Vec<u8>, Fault> {
     let added: usize = sorted.iter().map(|s| s.replacement.len()).sum();
     let final_len = bytes.len() - removed + added;
     if final_len > consts::MAX_MANAGED_FILE_BYTES {
-        return Err(Fault::Diagnostics(vec![Diagnostic::new(
-            "E-TOO-LARGE",
-            1,
-        )
-        .with("limit", (consts::MAX_MANAGED_FILE_BYTES / (1024 * 1024)).to_string())]));
+        return Err(Fault::Diagnostics(vec![Diagnostic::new("E-TOO-LARGE", 1)
+            .with(
+                "limit",
+                (consts::MAX_MANAGED_FILE_BYTES / (1024 * 1024)).to_string(),
+            )]));
     }
 
     let mut out = Vec::with_capacity(final_len);
@@ -195,9 +200,8 @@ impl LineIndex {
 /// Closed backtick fence block (spec §2.5).
 #[derive(Debug, Clone)]
 pub(crate) struct FenceBlock {
-    /// 0-based open and close line indices.
+    /// 0-based open line index.
     pub open: usize,
-    pub close: usize,
     /// Whole block: start of the open line through the end of the close
     /// line's content (no trailing terminator).
     pub block: Span,
@@ -249,19 +253,14 @@ impl FenceScan {
                         let lj = lines.line(j);
                         blocks.push(FenceBlock {
                             open: i,
-                            close: j,
                             block: l.start..lj.end,
                             content: l.next..lj.start,
                         });
-                        for k in i..=j {
-                            inside[k] = true;
-                        }
+                        inside[i..=j].fill(true);
                         i = j + 1;
                     }
                     None => {
-                        for k in i..n {
-                            inside[k] = true;
-                        }
+                        inside[i..n].fill(true);
                         unclosed = Some((i, ticks));
                         break;
                     }
@@ -326,13 +325,22 @@ mod tests {
     #[test]
     fn apply_preserves_untouched_bytes() {
         let orig = b"BOM\xff\xfe# head\r\n\r\n## s\r\nold\r\nTAIL".to_vec();
+        // Byte math on `orig` (30 bytes): `BOM\xff\xfe# head` = 0..11,
+        // CRLF = 11..13, CRLF = 13..15, `## s` = 15..19, `\r\n` = 19..21,
+        // `old` = 21..24. An insertion at the H2's line start points at 15
+        // — AFTER the complete CRLF pair — never at 14, which would splice
+        // between the `\r` and its `\n`. apply() is a raw-byte splice
+        // (§10.3.1): it honors any offset it is given verbatim, so the
+        // geometry is derived from the bytes instead of hand-counted.
+        let h2 = orig.windows(4).position(|w| w == b"## s").unwrap();
+        let old = orig.windows(3).position(|w| w == b"old").unwrap();
         let splices = vec![
             Splice {
-                range: 21..24,
+                range: old..old + 3,
                 replacement: b"NEW".to_vec(),
             },
             Splice {
-                range: 14..14,
+                range: h2..h2,
                 replacement: b"insert".to_vec(),
             },
         ];
@@ -401,7 +409,7 @@ mod tests {
     fn apply_refuses_oversize_result() {
         let one_mib = vec![b'x'; 1024 * 1024];
         let mut splices = Vec::new();
-        for i in 0..17usize {
+        for _ in 0..17usize {
             splices.push(Splice {
                 range: 0..0,
                 replacement: one_mib.clone(),
@@ -421,9 +429,20 @@ mod tests {
 
     #[test]
     fn fenced_uses_safe_fence_length() {
-        assert_eq!(fenced("plain"), "```md\nplain\n```");
-        assert_eq!(fenced("a `b` c"), "````md\na `b` c\n````");
-        assert_eq!(fenced("````"), "`````md\n````\n`````");
+        // §2.5.4: info string `md`, fence length = max(3, longest backtick
+        // run in the content + 1). Min-fence boundary: a run of 2 still
+        // rides the minimum 3-fence, and growth starts exactly at a run
+        // of 3, which gets a 4-fence. The exact-block form also pins the
+        // roundtrip — content verbatim between equal fences, and the
+        // fence itself can never occur inside the content it delimits.
+        for (body, fence_len) in [("x `` y", 3usize), ("run ``` mid", 4)] {
+            let fence = "`".repeat(fence_len);
+            assert_eq!(
+                fenced(body),
+                format!("{fence}md\n{body}\n{fence}"),
+                "fence length for {body:?}"
+            );
+        }
     }
 
     #[test]

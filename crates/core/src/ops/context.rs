@@ -79,21 +79,21 @@ impl Ctx {
 /// path, `/`-separated, whitespace folded so no value column can contain a
 /// double space (spec §8.1.9, §10.9).
 pub fn display_file(path: &Path) -> String {
-    names::fold(&fsx::display_path(path))
+    names::fold(&fsx::walk::display_path(path))
 }
 
 /// First-line object for PATH commands: the display path without the
 /// `.agent-besties.md` suffix (spec §8.1.3; a PATH given with its suffix is
 /// displayed without it).
 pub fn object_of_path(path: &Path) -> String {
-    let displayed = fsx::display_path(path);
+    let displayed = fsx::walk::display_path(path);
     let trimmed = displayed.strip_suffix(consts::SUFFIX).unwrap_or(&displayed);
     names::fold(trimmed)
 }
 
 /// First-line object for DIR commands (omitted DIR displays as `.`).
 pub fn object_of_dir(dir: &Path) -> String {
-    names::fold(&fsx::display_path(dir))
+    names::fold(&fsx::walk::display_path(dir))
 }
 
 /// `diag::Context` for a command whose object is a managed file PATH.

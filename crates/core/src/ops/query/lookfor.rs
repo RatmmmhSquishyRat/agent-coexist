@@ -15,29 +15,31 @@ use crate::time;
 use crate::types::post::Comment;
 
 use super::{
-    blocking_report, body_excerpt, file_missing_report, load_file, Loaded, type_report,
+    blocking_report, body_excerpt, file_missing_report, load_file, type_report, LoadError,
 };
 
 pub fn lookfor_comment(ctx: &mut Ctx, p: &LookforCommentParams) -> Result<Report, Fault> {
     let object = context::object_of_path(&p.path);
     let dctx = context::diag_context_for_file(ctx, "lookfor-comment", &p.path);
     let file_display = context::display_file(&p.path);
-    match load_file(&p.path, ctx.now, consts::READ_WAIT_MS)? {
-        Loaded::Missing => Ok(file_missing_report(
+    match load_file(&p.path, ctx.now, consts::READ_WAIT_MS) {
+        Err(LoadError::Missing) => Ok(file_missing_report(
             &dctx,
             "lookfor-comment",
             &object,
             &p.path,
         )),
-        Loaded::Busy { id, params } => Ok(reason_report(&dctx, "lookfor-comment", &object, id, params)),
-        Loaded::Blocking(diags) => Ok(blocking_report(
+        Err(LoadError::Busy { id, params }) => {
+            Ok(reason_report(&dctx, "lookfor-comment", &object, id, params))
+        }
+        Err(LoadError::Blocking(diags)) => Ok(blocking_report(
             "lookfor-comment",
             &object,
             &file_display,
             None,
             diags,
         )),
-        Loaded::Doc(document) => {
+        Ok(document) => {
             // A blocking diagnostic (unclosed fence, duplicate numbers,
             // …) makes numbering and references ambiguous — §8.3.2 form.
             let blocked = document.kind.is_none() || !document.blocking().is_empty();
@@ -52,13 +54,7 @@ pub fn lookfor_comment(ctx: &mut Ctx, p: &LookforCommentParams) -> Result<Report
             }
             match document.kind {
                 Some(doc::Kind::Post) => Ok(rows(&object, &document, &p.filters)),
-                Some(kind) => Ok(type_report(
-                    &dctx,
-                    "lookfor-comment",
-                    &object,
-                    kind,
-                    "post",
-                )),
+                Some(kind) => Ok(type_report(&dctx, "lookfor-comment", &object, kind, "post")),
                 None => Ok(blocking_report(
                     "lookfor-comment",
                     &object,
@@ -68,6 +64,7 @@ pub fn lookfor_comment(ctx: &mut Ctx, p: &LookforCommentParams) -> Result<Report
                 )),
             }
         }
+        Err(LoadError::Fault(f)) => Err(f),
     }
 }
 

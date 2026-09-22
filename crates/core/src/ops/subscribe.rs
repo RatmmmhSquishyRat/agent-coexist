@@ -7,7 +7,6 @@
 
 use std::mem;
 
-
 use crate::doc;
 use crate::error::Fault;
 use crate::fsx::{self, Mutation};
@@ -27,11 +26,18 @@ pub fn run(ctx: &mut Ctx, p: &SubscribeParams) -> Result<Report, Fault> {
         create: !p.cancel,
         create_parents: !p.cancel,
     };
-    let result = fsx::mutate(&p.path, policy, |bytes, created| step(ctx, p, bytes, created));
+    let result = fsx::mutate(&p.path, policy, |bytes, created| {
+        step(ctx, p, bytes, created)
+    });
     finish(ctx, "subscribe", &p.path, None, result)
 }
 
-fn step(ctx: &mut Ctx, p: &SubscribeParams, bytes: Vec<u8>, created: bool) -> Result<(Mutation, Step), Fault> {
+fn step(
+    ctx: &mut Ctx,
+    p: &SubscribeParams,
+    bytes: Vec<u8>,
+    created: bool,
+) -> Result<(Mutation, Step), Fault> {
     if created {
         let mut content = format!("# {}.post\n\n", stem_of(&p.path));
         content.push_str("- subscribers: ");
@@ -67,13 +73,21 @@ fn cancel_step(
     if !subs.contains(&p.nick) {
         done.kv("subscribers", subs_value(subs));
         done.kv("unchanged", vec![p.nick.clone()]);
-        return Ok((Mutation::Unchanged, Step::Done(mem::replace(done, Done::empty()))));
+        return Ok((
+            Mutation::Unchanged,
+            Step::Done(mem::replace(done, Done::empty())),
+        ));
     }
-    let remaining: Vec<String> = subs.iter().filter(|nick| *nick != &p.nick).cloned().collect();
+    let remaining: Vec<String> = subs
+        .iter()
+        .filter(|nick| *nick != &p.nick)
+        .cloned()
+        .collect();
     if remaining.is_empty() {
         // The parser only reports subscribers it read from the property
         // line, so the line (and its span) must exist here.
-        let (line_start, _) = subscribers_line(doc).expect("reported subscribers imply the property line");
+        let (line_start, _) =
+            subscribers_line(doc).expect("reported subscribers imply the property line");
         let splices = vec![Splice {
             range: line_start..line_end(&doc.source, line_start),
             replacement: Vec::new(),
@@ -81,19 +95,28 @@ fn cancel_step(
         match guarded_apply(bytes, splices, doc.kind.as_ref().map(doc::Kind::as_str))? {
             Applied::Bytes(new_bytes) => {
                 done.kv("subscribers", vec!["none".to_string()]);
-                Ok((Mutation::Write(new_bytes), Step::Done(mem::replace(done, Done::empty()))))
+                Ok((
+                    Mutation::Write(new_bytes),
+                    Step::Done(mem::replace(done, Done::empty())),
+                ))
             }
             Applied::Refused(step) => Ok((Mutation::Unchanged, step)),
         }
     } else {
-        let (_, value_span) = subscribers_line(doc)
-            .expect("reported subscribers imply the property line");
+        let (_, value_span) =
+            subscribers_line(doc).expect("reported subscribers imply the property line");
         let joined = remaining.join(", ");
-        let splices = vec![Splice { range: value_span, replacement: joined.clone().into_bytes() }];
+        let splices = vec![Splice {
+            range: value_span,
+            replacement: joined.clone().into_bytes(),
+        }];
         match guarded_apply(bytes, splices, doc.kind.as_ref().map(doc::Kind::as_str))? {
             Applied::Bytes(new_bytes) => {
                 done.kv("subscribers", vec![joined]);
-                Ok((Mutation::Write(new_bytes), Step::Done(mem::replace(done, Done::empty()))))
+                Ok((
+                    Mutation::Write(new_bytes),
+                    Step::Done(mem::replace(done, Done::empty())),
+                ))
             }
             Applied::Refused(step) => Ok((Mutation::Unchanged, step)),
         }
@@ -113,7 +136,10 @@ fn add_step(
     if subs.contains(&p.nick) {
         done.kv("subscribers", subs_value(subs));
         done.kv("unchanged", vec![p.nick.clone()]);
-        return Ok((Mutation::Unchanged, Step::Done(mem::replace(done, Done::empty()))));
+        return Ok((
+            Mutation::Unchanged,
+            Step::Done(mem::replace(done, Done::empty())),
+        ));
     }
     let mut appended = subs.to_vec();
     appended.push(p.nick.clone());
@@ -123,7 +149,10 @@ fn add_step(
             let raw_is_blank = doc.text(&value_span).trim().is_empty();
             if raw_is_blank {
                 // `- subscribers: ` with an empty value: write the first nick.
-                vec![Splice { range: value_span, replacement: p.nick.clone().into_bytes() }]
+                vec![Splice {
+                    range: value_span,
+                    replacement: p.nick.clone().into_bytes(),
+                }]
             } else {
                 vec![Splice {
                     range: value_span.end..value_span.end,
@@ -137,13 +166,19 @@ fn add_step(
             block.push('\n');
             let anchor = preamble_anchor(doc);
             let (pos, inserted) = after_line_and_blank(&doc.source, anchor, &block);
-            vec![Splice { range: pos..pos, replacement: inserted.into_bytes() }]
+            vec![Splice {
+                range: pos..pos,
+                replacement: inserted.into_bytes(),
+            }]
         }
     };
     match guarded_apply(bytes, splices, doc.kind.as_ref().map(doc::Kind::as_str))? {
         Applied::Bytes(new_bytes) => {
             done.kv("subscribers", vec![display]);
-            Ok((Mutation::Write(new_bytes), Step::Done(mem::replace(done, Done::empty()))))
+            Ok((
+                Mutation::Write(new_bytes),
+                Step::Done(mem::replace(done, Done::empty())),
+            ))
         }
         Applied::Refused(step) => Ok((Mutation::Unchanged, step)),
     }
@@ -178,5 +213,3 @@ fn subs_value(subs: &[String]) -> Vec<String> {
         vec![subs.join(", ")]
     }
 }
-
-

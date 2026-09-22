@@ -27,7 +27,7 @@ Requires Rust 1.89 or newer (the repo pins 1.89.0 in `rust-toolchain.toml`).
 cargo build --release
 
 # install the `agent-coexist` binary from source
-cargo install --path crates/cli
+cargo install --path crates/cli --locked
 agent-coexist --version
 ```
 
@@ -67,7 +67,7 @@ Three optional wait commands (extension; the base CLI works without them):
 ```text
 agent-coexist wait <PATH>                       # any of the four types; exits on any content change
 agent-coexist wait-post <PATH> [--as <nick>]    # a post; filter: mentions/replies involving the nick
-agent-coexist wait-state [DIR] [--status <name>]# exactly DIR/state.agent-besties.md; filter: status
+agent-coexist wait-state [DIR] [--status <name>]  # exactly DIR/state.agent-besties.md; filter: status
 ```
 
 Wait commands print a `waiting  <command>  <object>` line to stderr once

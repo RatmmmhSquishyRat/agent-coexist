@@ -98,7 +98,11 @@ impl Waiting {
     fn expect_hit(&self, context: &str) -> Report {
         match self.finish() {
             Ok(report) => report,
-            Err(fault) => panic!("expected a hit ({}), got: {}", context, fault_summary(&fault)),
+            Err(fault) => panic!(
+                "expected a hit ({}), got: {}",
+                context,
+                fault_summary(&fault)
+            ),
         }
     }
 }
@@ -226,7 +230,9 @@ fn post_with_first_author(author: &str) -> String {
     doc(&[
         "# standup.post",
         "",
-        "## #1 carol (2026-09-17T09:00:00Z)".replace("carol", author).as_str(),
+        "## #1 carol (2026-09-17T09:00:00Z)"
+            .replace("carol", author)
+            .as_str(),
         "",
         "```md",
         "topic",
@@ -289,11 +295,9 @@ fn unqualified_deletion_advances_baseline_and_recreation_is_judged_fresh() {
         waiting.settle().is_none(),
         "deletion must not hit a post filter"
     );
-    // Recreate with the byte-identical #1 plus a new relevant #2. Only a
-    // baseline that actually advanced to Absent reports `created` and an
-    // add for the identical #1; a stale Present baseline would show an
-    // update for #1 and no `created` row, so these assertions distinguish
-    // real advancement from a filtered-away illusion of it.
+    // Recreate with byte-identical, unrelated #1 and new relevant #2.
+    // Advancing to Absent must produce a file-level creation, not merely
+    // #2's created timestamp. The filtered report must still omit #1.
     write_file(
         &path,
         &doc(&[
@@ -315,13 +319,16 @@ fn unqualified_deletion_advances_baseline_and_recreation_is_judged_fresh() {
     let report = waiting.expect_hit("recreated post with a relevant message");
     let text = row_text(&report);
     assert!(
-        text.contains("created"),
+        report
+            .rows
+            .iter()
+            .any(|row| { matches!(row, Row::Fields { key, .. } if key == "created") }),
         "only an Absent baseline can report creation:\n{}",
         text
     );
     assert!(
-        text.contains("add comment #1"),
-        "an identical re-observed comment is new from Absent:\n{}",
+        !text.contains("add comment #1"),
+        "unrelated comments stay outside the projection even on recreation:\n{}",
         text
     );
     assert!(
@@ -331,7 +338,7 @@ fn unqualified_deletion_advances_baseline_and_recreation_is_judged_fresh() {
     );
     assert!(
         !text.contains("update comment"),
-        "a stale baseline would have shown updates instead:\n{}",
+        "comments admitted from Absent must be added, not updated:\n{}",
         text
     );
 }
@@ -483,7 +490,9 @@ fn duplicate_state_nick_fails_instead_of_waiting() {
     );
     match waiting.finish() {
         Err(Fault::Diagnostics(diags)) => assert!(
-            diags.iter().any(|diagnostic| diagnostic.id == "W-STATE-DUP"),
+            diags
+                .iter()
+                .any(|diagnostic| diagnostic.id == "W-STATE-DUP"),
             "expected W-STATE-DUP diagnostics, got {:?}",
             diags
                 .iter()
@@ -571,6 +580,7 @@ fn cancellation_returns_cancelled_fault() {
         "expected Fault::Cancelled, got: {}",
         result
             .err()
+            .as_ref()
             .map(fault_summary)
             .unwrap_or_else(|| "hit report".to_string())
     );
@@ -622,21 +632,12 @@ fn specialized_command_with_wrong_type_fails_with_e_type() {
     let path = dir.path().join("notes.agent-besties.md");
     write_file(
         &path,
-        &doc(&[
-            "# notes.brief",
-            "",
-            "```md",
-            "description",
-            "```",
-        ]),
+        &doc(&["# notes.brief", "", "```md", "description", "```"]),
     );
     let waiting = spawn(&path, Filter::Post(None));
     match waiting.finish() {
         Err(Fault::Reason { id, .. }) => assert_eq!(id, "E-TYPE"),
-        Err(other) => panic!(
-            "expected E-TYPE failure, got: {}",
-            fault_summary(&other)
-        ),
+        Err(other) => panic!("expected E-TYPE failure, got: {}", fault_summary(&other)),
         Ok(report) => panic!(
             "wrong type must fail, not hit; rows:\n{}",
             row_text(&report)

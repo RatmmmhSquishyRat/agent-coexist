@@ -8,8 +8,6 @@
 //! judges a functional lock (§10.8.1). The remove form never creates a
 //! file or directories (§7.3.2).
 
-
-
 use crate::consts;
 use crate::doc;
 use crate::error::Fault;
@@ -67,7 +65,10 @@ fn bare_step(
             return flock_blocked(true);
         }
         let content = format!("# {}.agent-profile\n", stem_of(&p.path));
-        return Ok((Mutation::Write(content.into_bytes()), Step::Done(Done::empty())));
+        return Ok((
+            Mutation::Write(content.into_bytes()),
+            Step::Done(Done::empty()),
+        ));
     }
     match checked_doc(&bytes, &p.path, ctx.now, doc::Kind::Profile) {
         Ok(_) => Ok((Mutation::Unchanged, Step::Done(unchanged_done(&p.path)))),
@@ -88,7 +89,10 @@ fn set_step(
     content: &str,
 ) -> Result<(Mutation, Step), Fault> {
     // The CLI grammar pairs `--section` with exactly one of `-m`/`--remove`.
-    let name = p.section.as_deref().expect("--section is paired with -m or --remove");
+    let name = p
+        .section
+        .as_deref()
+        .expect("--section is paired with -m or --remove");
     let mut done = Done::empty();
     done.kv("section", vec![name.to_string(), "set".to_string()]);
     if created {
@@ -111,12 +115,21 @@ fn set_step(
             match &section.body {
                 Some(body) => {
                     let span = body.span.clone();
-                    vec![Splice { range: span, replacement: text::fenced(content).into_bytes() }]
+                    vec![Splice {
+                        range: span,
+                        replacement: text::fenced(content).into_bytes(),
+                    }]
                 }
                 None => {
-                    let (pos, inserted) =
-                        after_line_and_blank(&doc.source, section.head.start, &fence_block(content));
-                    vec![Splice { range: pos..pos, replacement: inserted.into_bytes() }]
+                    let (pos, inserted) = after_line_and_blank(
+                        &doc.source,
+                        section.head.start,
+                        &fence_block(content),
+                    );
+                    vec![Splice {
+                        range: pos..pos,
+                        replacement: inserted.into_bytes(),
+                    }]
                 }
             }
         }
@@ -147,7 +160,10 @@ fn remove_step(
     stash: &mut Option<FlockStash>,
     bytes: Vec<u8>,
 ) -> Result<(Mutation, Step), Fault> {
-    let name = p.section.as_deref().expect("--section is paired with -m or --remove");
+    let name = p
+        .section
+        .as_deref()
+        .expect("--section is paired with -m or --remove");
     let doc = match checked_doc(&bytes, &p.path, ctx.now, doc::Kind::Profile) {
         Ok(doc) => doc,
         Err(Early::Step(step)) => return Ok((Mutation::Unchanged, step)),
@@ -169,7 +185,11 @@ fn remove_step(
     let mut done = Done::empty();
     done.kv("section", vec![name.to_string(), "removed".to_string()]);
     done.kv("removed-lines", vec![label]);
-    match guarded_apply(&bytes, vec![splice], doc.kind.as_ref().map(doc::Kind::as_str))? {
+    match guarded_apply(
+        &bytes,
+        vec![splice],
+        doc.kind.as_ref().map(doc::Kind::as_str),
+    )? {
         Applied::Bytes(new_bytes) => Ok((Mutation::Write(new_bytes), Step::Done(done))),
         Applied::Refused(step) => Ok((Mutation::Unchanged, step)),
     }

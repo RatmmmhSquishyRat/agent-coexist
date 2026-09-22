@@ -7,7 +7,9 @@
 //! path for any input; results must stay within years 0001..=9999, the
 //! range TIME can represent.
 
-use chrono::{DateTime, Datelike, NaiveDate, NaiveDateTime, NaiveTime, TimeDelta, Timelike, Utc};
+use chrono::{
+    DateTime, Datelike, NaiveDate, NaiveDateTime, NaiveTime, SubsecRound, TimeDelta, Timelike, Utc,
+};
 use std::env;
 
 use crate::consts::POST_WAIT_MS;
@@ -56,16 +58,24 @@ fn parse_strict_time(s: &str) -> Option<Time> {
     if bytes.len() != 20 {
         return None;
     }
-    const SEPARATORS: [(usize, u8); 6] =
-        [(4, b'-'), (7, b'-'), (10, b'T'), (13, b':'), (16, b':'), (19, b'Z')];
+    const SEPARATORS: [(usize, u8); 6] = [
+        (4, b'-'),
+        (7, b'-'),
+        (10, b'T'),
+        (13, b':'),
+        (16, b':'),
+        (19, b'Z'),
+    ];
     for &(index, expected) in &SEPARATORS {
         if bytes[index] != expected {
             return None;
         }
     }
-    if !bytes.iter().enumerate().all(|(index, &byte)| {
-        matches!(index, 4 | 7 | 10 | 13 | 16 | 19) || byte.is_ascii_digit()
-    }) {
+    if !bytes
+        .iter()
+        .enumerate()
+        .all(|(index, &byte)| matches!(index, 4 | 7 | 10 | 13 | 16 | 19) || byte.is_ascii_digit())
+    {
         return None;
     }
     let year = s.get(0..4)?.parse::<i32>().ok()?;
@@ -144,7 +154,7 @@ pub fn duration(s: &str) -> Result<i64, Fault> {
             return Err(invalid()); // digits with no unit
         }
         let rank = unit_rank(bytes[i]).ok_or_else(invalid)?;
-        if prev_rank.map_or(false, |prev| rank <= prev) {
+        if prev_rank.is_some_and(|prev| rank <= prev) {
             return Err(invalid()); // not strictly descending (covers repeats)
         }
         prev_rank = Some(rank);
@@ -188,8 +198,7 @@ pub fn since(s: &str, now: Time) -> Result<Time, Fault> {
 /// never a panic, for any i64 input.
 pub fn until(now: Time, secs: i64) -> Result<Time, Fault> {
     const OUT_OF_RANGE: &str = "--for/lock window out of representable range";
-    let delta =
-        TimeDelta::try_seconds(secs).ok_or_else(|| Fault::Usage(OUT_OF_RANGE.into()))?;
+    let delta = TimeDelta::try_seconds(secs).ok_or_else(|| Fault::Usage(OUT_OF_RANGE.into()))?;
     now.checked_add_signed(delta)
         .filter(in_representable_year)
         .ok_or_else(|| Fault::Usage(OUT_OF_RANGE.into()))
@@ -280,7 +289,10 @@ mod tests {
         let t = parse("9999-12-31T23:00:00+02:00").unwrap();
         assert_eq!(format(t), "9999-12-31T21:00:00Z");
         // ... while this one converts to 10000-01-01T01:00:00Z (out).
-        assert!(parse("9999-12-31T23:00:00-02:00").is_err(), "year-10000 crossing");
+        assert!(
+            parse("9999-12-31T23:00:00-02:00").is_err(),
+            "year-10000 crossing"
+        );
         assert!(parse("2026-09-17 09:12:00Z").is_err(), "space separator");
         assert!(parse("2026-09-17T09:12").is_err(), "too short");
         assert!(parse("").is_err());
@@ -294,8 +306,20 @@ mod tests {
         assert_eq!(duration("1h30m").unwrap(), 5_400);
         assert_eq!(duration("1d2h3m4s").unwrap(), 93_784);
         for bad in [
-            "", "0s", "0h0m", "1s0s", "2m1h", "1h1h", " 1h", "1h ", "1.5h", "h", "1x", "1",
-            "1d1d", "999999999999999999999999s",
+            "",
+            "0s",
+            "0h0m",
+            "1s0s",
+            "2m1h",
+            "1h1h",
+            " 1h",
+            "1h ",
+            "1.5h",
+            "h",
+            "1x",
+            "1",
+            "1d1d",
+            "999999999999999999999999s",
         ] {
             assert!(duration(bad).is_err(), "should reject {:?}", bad);
         }

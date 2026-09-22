@@ -25,14 +25,14 @@
 //!
 //! [`run`] dispatches one validated invocation.
 
+pub mod brief;
 pub mod context;
+pub mod post;
+pub mod profile;
+pub mod query;
 pub mod shared;
 pub mod state;
-pub mod post;
 pub mod subscribe;
-pub mod profile;
-pub mod brief;
-pub mod query;
 
 pub use context::Ctx;
 

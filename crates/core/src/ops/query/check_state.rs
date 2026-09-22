@@ -111,7 +111,11 @@ pub fn check_state(ctx: &mut Ctx, p: &CheckStateParams) -> Result<Report, Fault>
                 aux.push((dir_display.clone(), "skipped", vec![id.to_string()]));
             }
             ScanIssue::Partial { id, line } => {
-                aux.push((dir_display.clone(), "partial", vec![format!("{id} L{line}")]));
+                aux.push((
+                    dir_display.clone(),
+                    "partial",
+                    vec![format!("{id} L{line}")],
+                ));
             }
         }
     }
@@ -205,9 +209,8 @@ fn span_of_times(start: Time, until: Time) -> String {
 
 /// Group heading for a descendant: its display path relative to DIR.
 fn relative_dir_name(display: &str, dir_display: &str) -> String {
-    let strip = |s: &str| s.strip_prefix("./").unwrap_or(s);
-    let display = strip(display);
-    let base = strip(dir_display);
+    let display = strip_dot_slash(display);
+    let base = strip_dot_slash(dir_display);
     if base == "." {
         return display.to_string();
     }
@@ -216,4 +219,10 @@ fn relative_dir_name(display: &str, dir_display: &str) -> String {
         Some(rest) if !rest.is_empty() => rest.to_string(),
         _ => display.to_string(),
     }
+}
+
+/// Lexical `./` prefix strip for display paths (a DIR of `.`-relative form
+/// leaves it; comparing both sides on the same stripped basis).
+fn strip_dot_slash(s: &str) -> &str {
+    s.strip_prefix("./").unwrap_or(s)
 }

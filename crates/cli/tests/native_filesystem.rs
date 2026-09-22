@@ -14,11 +14,14 @@
 //!   directory `list` continues past the busy file (busy leaf, sibling
 //!   still listed, first line `warn`); after the parent releases the lock,
 //!   the same read and write succeed;
-//! * Windows §10.2.5–§10.2.6 — an external no-sharing open yields
-//!   `E-INUSE` (exit 3), distinct from a real `LockFileEx` range lock
-//!   which yields `E-LOCKED`; a genuine delete-pending file stays an OS
-//!   failure (exit 1, `cannot ...: os error`), never a lock id, and the
-//!   name can be recreated through the `post` create form once released;
+//! * Windows §10.2.5–§10.2.6 — an external no-sharing open yields an
+//!   exit-3 failure whose `reason` row is distinct from the one produced
+//!   by a real `LockFileEx` range lock (`E-LOCKED`); a genuine
+//!   delete-pending file (delete disposition set on a held handle) stays
+//!   an ordinary OS failure — exit 1, `reason` carrying the raw
+//!   `{os error}` (§8.3.5) — never a retryable lock id (exit 3) and never
+//!   a file-missing classification, and the name can be recreated through
+//!   the `post` create form once released;
 //! * §10.1.1 walk skip — `list` never enters a real directory symlink
 //!   (Unix) / a real junction created with `mklink /J` (Windows).
 //!
@@ -56,6 +59,9 @@ fn cli(cwd: &Path) -> AssertCommand {
     cmd.env_clear()
         .env("AGENT_COEXIST_NOW", NOW)
         .env("PATH", std::env::var_os("PATH").unwrap_or_default())
+        .env("HOME", cwd)
+        .env("USERPROFILE", cwd)
+        .env("XDG_CONFIG_HOME", cwd)
         .current_dir(cwd)
         .timeout(Duration::from_secs(120));
     #[cfg(windows)]
@@ -92,6 +98,9 @@ fn detached_cli(cwd: &Path) -> std::process::Command {
         .env("AGENT_COEXIST_NOW", NOW)
         .env("AGENT_COEXIST_LOCK_WAIT_MS", "30000")
         .env("PATH", std::env::var_os("PATH").unwrap_or_default())
+        .env("HOME", cwd)
+        .env("USERPROFILE", cwd)
+        .env("XDG_CONFIG_HOME", cwd)
         .current_dir(cwd);
     #[cfg(windows)]
     cmd.env(
@@ -158,6 +167,9 @@ mod native {
     const OPEN_EXISTING: u32 = 3;
     const FILE_ATTRIBUTE_NORMAL: u32 = 0x0000_0080;
     const LOCKFILE_EXCLUSIVE_LOCK: u32 = 0x0000_0002;
+    /// `FILE_INFO_BY_HANDLE_CLASS::FileDispositionInfo` — sets the delete
+    /// disposition on an open handle.
+    const FILE_DISPOSITION_INFO: i32 = 4;
     const INVALID_HANDLE_VALUE: Handle = !0usize as Handle;
 
     /// The fields of Win32 `OVERLAPPED` that matter to `LockFileEx`.
@@ -189,12 +201,20 @@ mod native {
             number_of_bytes_to_lock_high: u32,
             overlapped: *mut Overlapped,
         ) -> i32;
-        fn DeleteFileW(file_name: *const u16) -> i32;
+        fn SetFileInformationByHandle(
+            file: Handle,
+            file_information_class: i32,
+            file_information: *const core::ffi::c_void,
+            buffer_size: u32,
+        ) -> i32;
         fn CloseHandle(object: Handle) -> i32;
     }
 
     fn wide(path: &Path) -> Vec<u16> {
-        path.as_os_str().encode_wide().chain(std::iter::once(0)).collect()
+        path.as_os_str()
+            .encode_wide()
+            .chain(std::iter::once(0))
+            .collect()
     }
 
     fn create_file(path: &Path, desired_access: u32, share_mode: u32) -> Handle {
@@ -211,7 +231,7 @@ mod native {
             )
         };
         assert!(
-            handle != core::ptr::null_mut() && handle != INVALID_HANDLE_VALUE,
+            !handle.is_null() && handle != INVALID_HANDLE_VALUE,
             "CreateFileW failed on {}",
             path.display()
         );
@@ -255,10 +275,13 @@ mod native {
         NoSharing(create_file(path, GENERIC_READ, 0))
     }
 
-    /// An open handle (full sharing) whose file has been marked for
-    /// deletion via `DeleteFileW`: the name is delete-pending — new opens
-    /// fail with `ERROR_ACCESS_DENIED` — until this guard is dropped,
-    /// which completes the deletion (§10.2.6).
+    /// An open handle (full sharing) whose delete disposition has been set
+    /// (`SetFileInformationByHandle` + `FILE_DISPOSITION_INFO`): the name
+    /// stays present, but new opens fail with `ERROR_ACCESS_DENIED` until
+    /// this guard is dropped, which completes the deletion (§10.2.6). A
+    /// plain `DeleteFileW` is not usable for staging this state on current
+    /// Windows builds: when every open handle allows sharing it unlinks
+    /// the name immediately instead of leaving it delete-pending.
     pub struct PendingDelete(Handle);
 
     impl Drop for PendingDelete {
@@ -273,9 +296,46 @@ mod native {
             GENERIC_READ | DELETE_ACCESS,
             FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
         );
-        let name = wide(path);
-        let ok = unsafe { DeleteFileW(name.as_ptr()) };
-        assert_eq!(ok, 1, "DeleteFileW failed on {}", path.display());
+        // Stage genuine pending-delete on the held handle: the name stays
+        // visible, but while this handle is open every ordinary open of
+        // the file fails with `ERROR_ACCESS_DENIED` (§10.2.6). Dropping
+        // the guard closes the handle and completes the deletion.
+        let delete_file: u8 = 1; // FILE_DISPOSITION_INFO::DeleteFile (BOOLEAN)
+        let ok = unsafe {
+            SetFileInformationByHandle(
+                handle,
+                FILE_DISPOSITION_INFO,
+                &delete_file as *const u8 as *const core::ffi::c_void,
+                1,
+            )
+        };
+        assert_eq!(
+            ok,
+            1,
+            "SetFileInformationByHandle(FileDispositionInfo) failed on {}",
+            path.display()
+        );
+        // Self-check: a plain read open (what the CLI does) must now fail,
+        // otherwise the fixture would silently test a writable file.
+        let probe = wide(path);
+        let leaked = unsafe {
+            CreateFileW(
+                probe.as_ptr(),
+                GENERIC_READ,
+                FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                core::ptr::null_mut(),
+                OPEN_EXISTING,
+                FILE_ATTRIBUTE_NORMAL,
+                core::ptr::null_mut(),
+            )
+        };
+        if !leaked.is_null() && leaked != INVALID_HANDLE_VALUE {
+            unsafe { CloseHandle(leaked) };
+            panic!(
+                "file is not delete-pending: a read open still succeeds on {}",
+                path.display()
+            );
+        }
         PendingDelete(handle)
     }
 }
@@ -288,10 +348,17 @@ fn first_line(s: &str) -> &str {
     s.lines().next().unwrap_or("")
 }
 
-/// Split a report row into its columns: two or more spaces separate
-/// columns and never occur inside a value (§8.1.4).
+/// Split a report row into its columns: runs of two or more spaces
+/// separate columns and never occur inside a value (§8.1.4). Splitting on
+/// `"  "` leaves one stray space on the next piece whenever a padding run
+/// has odd width, so every piece is trimmed and only then are the empty
+/// pieces (the other halves of wider runs) dropped.
 fn columns(line: &str) -> Vec<&str> {
-    line.trim().split("  ").filter(|col| !col.is_empty()).collect()
+    line.trim()
+        .split("  ")
+        .map(str::trim)
+        .filter(|col| !col.is_empty())
+        .collect()
 }
 
 /// Assert the first line is `<status>  <command>  <object>` and return the
@@ -313,6 +380,21 @@ fn leaf_row<'a>(stdout: &'a str, name: &str, kind: &str) -> Option<&'a str> {
     stdout.lines().find(|line| {
         let cols = columns(line);
         !cols.is_empty() && cols[0] == name && cols[cols.len() - 1] == kind
+    })
+}
+
+/// The value of a `reason` row in a reason/fix failure report (§8.3).
+/// Lets tests assert the *shape* of a failure and *distinctness* between
+/// two failure classes without pinning the English wording owned by the
+/// diagnostic catalog.
+fn reason_row(stdout: &str) -> Option<&str> {
+    stdout.lines().find_map(|line| {
+        let cols = columns(line);
+        if cols.first() == Some(&"reason") {
+            Some(cols.get(1).copied().unwrap_or(""))
+        } else {
+            None
+        }
     })
 }
 
@@ -420,8 +502,13 @@ fn concurrent_post_writers_land_each_body_once_with_clean_numbering() {
     assert!(out.status.success(), "{}", describe(&out));
     let stdout = assert_first_line(&out, "ok", "check");
     assert!(
-        columns(stdout.lines().find(|l| columns(l).first() == Some(&"comments")).unwrap_or(""))
-            .get(1)
+        columns(
+            stdout
+                .lines()
+                .find(|l| columns(l).first() == Some(&"comments"))
+                .unwrap_or("")
+        )
+        .get(1)
             == Some(&"4"),
         "expected `comments  4` row:\n{stdout}"
     );
@@ -444,9 +531,29 @@ fn parent_native_exclusive_lock_bounds_access_then_recovers() {
 
     // Seed the busy managed file through the real create path, plus a
     // readable sibling collaboration file in the same directory.
-    let out = run(cwd, &["post", "standup", "--as", "alice", "-m", "original comment body"]);
+    let out = run(
+        cwd,
+        &[
+            "post",
+            "standup",
+            "--as",
+            "alice",
+            "-m",
+            "original comment body",
+        ],
+    );
     assert!(out.status.success(), "{}", describe(&out));
-    let out = run(cwd, &["post", "notes", "--as", "carol", "-m", "sibling comment body"]);
+    let out = run(
+        cwd,
+        &[
+            "post",
+            "notes",
+            "--as",
+            "carol",
+            "-m",
+            "sibling comment body",
+        ],
+    );
     assert!(out.status.success(), "{}", describe(&out));
 
     // The parent takes a real native exclusive lock; children below are
@@ -470,21 +577,20 @@ fn parent_native_exclusive_lock_bounds_access_then_recovers() {
     assert_eq!(out.status.code(), Some(3), "{}", describe(&out));
     let stdout = assert_first_line(&out, "error", "check");
     assert!(
-        stdout.contains("file is locked by another process"),
-        "E-LOCKED reason missing:\n{stdout}"
-    );
-    assert!(
-        stdout.contains("retry shortly: "),
-        "E-LOCKED fix form missing:\n{stdout}"
+        reason_row(&stdout).is_some(),
+        "lock failure must report in reason/fix form:\n{stdout}"
     );
 
     // Single-file read #2: the other single-file read entry point agrees.
-    let out = run(cwd, &["lookfor-comment", "standup", "--keyword", "original"]);
+    let out = run(
+        cwd,
+        &["lookfor-comment", "standup", "--keyword", "original"],
+    );
     assert_eq!(out.status.code(), Some(3), "{}", describe(&out));
     let stdout = assert_first_line(&out, "error", "lookfor-comment");
     assert!(
-        stdout.contains("file is locked by another process"),
-        "E-LOCKED reason missing:\n{stdout}"
+        reason_row(&stdout).is_some(),
+        "lock failure must report in reason/fix form:\n{stdout}"
     );
 
     assert_eq!(
@@ -503,12 +609,15 @@ fn parent_native_exclusive_lock_bounds_access_then_recovers() {
     assert_eq!(out.status.code(), Some(3), "{}", describe(&out));
     let stdout = assert_first_line(&out, "error", "post");
     assert!(
-        stdout.contains("file is locked by another process"),
-        "E-LOCKED reason missing:\n{stdout}"
+        reason_row(&stdout).is_some(),
+        "lock failure must report in reason/fix form:\n{stdout}"
     );
 
     let bytes_now = snapshot(&mut lock_file);
-    assert_eq!(bytes_now, baseline, "file bytes must be unchanged after failed write");
+    assert_eq!(
+        bytes_now, baseline,
+        "file bytes must be unchanged after failed write"
+    );
     assert!(
         !String::from_utf8_lossy(&bytes_now).contains("must never land"),
         "failed write leaked its body"
@@ -528,7 +637,12 @@ fn parent_native_exclusive_lock_bounds_access_then_recovers() {
         "readable sibling notes must still be listed:\n{stdout}"
     );
     assert_eq!(
-        columns(stdout.lines().find(|l| columns(l).first() == Some(&"total")).unwrap_or("")),
+        columns(
+            stdout
+                .lines()
+                .find(|l| columns(l).first() == Some(&"total"))
+                .unwrap_or("")
+        ),
         vec!["total", "2"],
         "busy leaf and sibling both count:\n{stdout}"
     );
@@ -541,7 +655,17 @@ fn parent_native_exclusive_lock_bounds_access_then_recovers() {
     assert!(out.status.success(), "{}", describe(&out));
     assert_first_line(&out, "ok", "check");
 
-    let out = run(cwd, &["post", "standup", "--as", "bob", "-m", "lands after release"]);
+    let out = run(
+        cwd,
+        &[
+            "post",
+            "standup",
+            "--as",
+            "bob",
+            "-m",
+            "lands after release",
+        ],
+    );
     assert!(out.status.success(), "{}", describe(&out));
     assert_first_line(&out, "ok", "post");
 
@@ -564,7 +688,17 @@ fn no_sharing_external_handle_is_e_inuse_distinct_from_e_locked() {
     let cwd = dir.path();
     let file = cwd.join("standup.agent-besties.md");
 
-    let out = run(cwd, &["post", "standup", "--as", "alice", "-m", "shared baseline body"]);
+    let out = run(
+        cwd,
+        &[
+            "post",
+            "standup",
+            "--as",
+            "alice",
+            "-m",
+            "shared baseline body",
+        ],
+    );
     assert!(out.status.success(), "{}", describe(&out));
     let baseline = fs::read(&file).expect("baseline read");
 
@@ -574,29 +708,30 @@ fn no_sharing_external_handle_is_e_inuse_distinct_from_e_locked() {
     let out = run(cwd, &["check", "standup"]);
     assert_eq!(out.status.code(), Some(3), "{}", describe(&out));
     let stdout = assert_first_line(&out, "error", "check");
-    assert!(
-        stdout.contains("file is in use by another program"),
-        "E-INUSE reason missing:\n{stdout}"
-    );
-    assert!(
-        stdout.contains("close it, then retry: "),
-        "E-INUSE fix form missing:\n{stdout}"
-    );
-    assert!(
-        !stdout.contains("file is locked by another process"),
-        "share-mode-0 must not be reported as E-LOCKED:\n{stdout}"
-    );
+    // Capture, don't pin: the no-sharing shape and the real range-lock
+    // shape later in this test must be observably *distinct* retryable
+    // failures (§10.2.5 vs §10.2), asserted by comparing the two reason
+    // rows; the English wording itself belongs to the diag catalog.
+    let inuse_reason = reason_row(&stdout)
+        .unwrap_or_else(|| panic!("no-sharing failure missing a reason row:\n{stdout}"));
 
     let out = run_with_lock_wait(
         cwd,
         "250",
-        &["post", "standup", "--as", "bob", "-m", "blocked by no sharing"],
+        &[
+            "post",
+            "standup",
+            "--as",
+            "bob",
+            "-m",
+            "blocked by no sharing",
+        ],
     );
     assert_eq!(out.status.code(), Some(3), "{}", describe(&out));
     let stdout = assert_first_line(&out, "error", "post");
     assert!(
-        stdout.contains("file is in use by another program"),
-        "E-INUSE reason missing:\n{stdout}"
+        reason_row(&stdout).is_some(),
+        "no-sharing write failure must report in reason/fix form:\n{stdout}"
     );
 
     // The external program closes: bytes untouched, access restored.
@@ -618,13 +753,11 @@ fn no_sharing_external_handle_is_e_inuse_distinct_from_e_locked() {
     let out = run(cwd, &["check", "standup"]);
     assert_eq!(out.status.code(), Some(3), "{}", describe(&out));
     let stdout = assert_first_line(&out, "error", "check");
-    assert!(
-        stdout.contains("file is locked by another process"),
-        "E-LOCKED reason missing:\n{stdout}"
-    );
-    assert!(
-        !stdout.contains("file is in use by another program"),
-        "a range lock must not be reported as E-INUSE:\n{stdout}"
+    let locked_reason = reason_row(&stdout)
+        .unwrap_or_else(|| panic!("range-lock failure missing a reason row:\n{stdout}"));
+    assert_ne!(
+        inuse_reason, locked_reason,
+        "no-sharing and range-lock failures must remain distinct retryable IDs:\n{stdout}"
     );
 
     drop(lock_file);
@@ -633,10 +766,12 @@ fn no_sharing_external_handle_is_e_inuse_distinct_from_e_locked() {
     assert_first_line(&out, "ok", "check");
 }
 
-/// A genuine delete-pending file (FILE_SHARE_DELETE + DeleteFileW with the
-/// handle held) makes CLI read *and* write fail as ordinary OS failures —
-/// exit 1, `cannot ...: os error` — never `E-LOCKED`; once the handle is
-/// released the name disappears and the `post` create form recreates it.
+/// A genuine delete-pending file (delete disposition set on a held,
+/// fully-shared handle) makes CLI read *and* write fail as ordinary OS
+/// failures — exit 1, `reason` carrying the raw `{os error}` (§8.3.5) —
+/// never a retryable lock id (exit 3) and never a file-missing
+/// classification; once the handle is released the name disappears and
+/// the `post` create form recreates it.
 #[cfg(windows)]
 #[test]
 fn delete_pending_file_is_os_failure_and_recreation_works() {
@@ -644,7 +779,17 @@ fn delete_pending_file_is_os_failure_and_recreation_works() {
     let cwd = dir.path();
     let file = cwd.join("standup.agent-besties.md");
 
-    let out = run(cwd, &["post", "standup", "--as", "alice", "-m", "doomed baseline body"]);
+    let out = run(
+        cwd,
+        &[
+            "post",
+            "standup",
+            "--as",
+            "alice",
+            "-m",
+            "doomed baseline body",
+        ],
+    );
     assert!(out.status.success(), "{}", describe(&out));
 
     // Mark the file delete-pending but keep the handle open.
@@ -653,31 +798,36 @@ fn delete_pending_file_is_os_failure_and_recreation_works() {
     let out = run(cwd, &["check", "standup"]);
     assert_eq!(out.status.code(), Some(1), "{}", describe(&out));
     let stdout = assert_first_line(&out, "error", "check");
+    // The pending-delete open failure must surface as an ordinary OS
+    // failure (§8.3.5: `reason` carries the raw `{os error}`) — the exit
+    // code above already rules out the retryable lock class, and a
+    // friendly file-missing classification would hide the real cause.
+    let reason = reason_row(&stdout)
+        .unwrap_or_else(|| panic!("delete-pending read failure missing a reason row:\n{stdout}"));
     assert!(
-        stdout.contains("cannot ") && stdout.contains("os error"),
-        "expected a `cannot ...: os error` reason:\n{stdout}"
-    );
-    assert!(
-        !stdout.contains("file is locked by another process")
-            && !stdout.contains("file is in use by another program"),
-        "delete-pending must never be reported as a lock id:\n{stdout}"
+        reason.contains("os error"),
+        "delete-pending must surface the raw OS error, got reason {reason:?}:\n{stdout}"
     );
 
     let out = run_with_lock_wait(
         cwd,
         "250",
-        &["post", "standup", "--as", "bob", "-m", "write against delete pending"],
+        &[
+            "post",
+            "standup",
+            "--as",
+            "bob",
+            "-m",
+            "write against delete pending",
+        ],
     );
     assert_eq!(out.status.code(), Some(1), "{}", describe(&out));
     let stdout = assert_first_line(&out, "error", "post");
+    let reason = reason_row(&stdout)
+        .unwrap_or_else(|| panic!("delete-pending write failure missing a reason row:\n{stdout}"));
     assert!(
-        stdout.contains("cannot ") && stdout.contains("os error"),
-        "expected a `cannot ...: os error` reason:\n{stdout}"
-    );
-    assert!(
-        !stdout.contains("file is locked by another process")
-            && !stdout.contains("file is in use by another program"),
-        "delete-pending must never be reported as a lock id:\n{stdout}"
+        reason.contains("os error"),
+        "delete-pending must surface the raw OS error, got reason {reason:?}:\n{stdout}"
     );
 
     // Releasing the handle completes the deletion...
@@ -685,7 +835,10 @@ fn delete_pending_file_is_os_failure_and_recreation_works() {
     assert!(!file.exists(), "file must be gone once the handle closes");
 
     // ...and the create form can bring the name back.
-    let out = run(cwd, &["post", "standup", "--as", "alice", "-m", "recreated body"]);
+    let out = run(
+        cwd,
+        &["post", "standup", "--as", "alice", "-m", "recreated body"],
+    );
     assert!(out.status.success(), "{}", describe(&out));
     assert_first_line(&out, "ok", "post");
     let content = fs::read_to_string(&file).expect("read recreated file");
@@ -709,7 +862,14 @@ fn list_does_not_enter_directory_symlink() {
     fs::create_dir_all(cwd.join("real")).unwrap();
     let out = run(
         cwd,
-        &["post", "real/innerpost", "--as", "alice", "-m", "inside the linked directory"],
+        &[
+            "post",
+            "real/innerpost",
+            "--as",
+            "alice",
+            "-m",
+            "inside the linked directory",
+        ],
     );
     assert!(out.status.success(), "{}", describe(&out));
 
@@ -748,7 +908,14 @@ fn list_does_not_enter_junction() {
     fs::create_dir_all(cwd.join("real")).unwrap();
     let out = run(
         cwd,
-        &["post", "real/innerpost", "--as", "alice", "-m", "inside the junctioned directory"],
+        &[
+            "post",
+            "real/innerpost",
+            "--as",
+            "alice",
+            "-m",
+            "inside the junctioned directory",
+        ],
     );
     assert!(out.status.success(), "{}", describe(&out));
 

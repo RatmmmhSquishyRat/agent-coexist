@@ -2,7 +2,19 @@
 //! semantic diff, projection filters and a bounded, cancellable one-shot
 //! sampling loop over a single managed file.
 //!
-//! Behavior contract: outer `docs/dev/wait/README.md`. This module reuses the
+//! Behavior contract (self-contained): each wait command takes a baseline
+//! snapshot of its single managed file, prints a `waiting  <command>  <object>`
+//! line to stderr once the baseline is established, then samples that one file
+//! once per second (`WAIT_POLL_MS`) until a change, a Ctrl-C cancellation
+//! (exit 130) or a real failure. `wait <PATH>` watches any of the four types;
+//! `wait-post <PATH> [--as <nick>]` watches a single post;
+//! `wait-state [DIR] [--status <name>]` watches exactly
+//! `DIR/state.agent-besties.md`. Without a projection filter any change ends
+//! the wait, including byte-only format changes; `--as <nick>` /
+//! `--status <name>` end the wait only on semantic changes qualifying for
+//! that nick or status. The ending report carries `bytes: changed` and
+//! `semantic: changed|unchanged` (plus `created` / `removed` where
+//! applicable). This module reuses the
 //! base parser (`doc`, `types`), the report rows, the time helpers and the
 //! storage read entry `fsx::read_stable_optional`; it owns no renderer, no
 //! watcher and no persistent state. Only adjacent admitted snapshots are
@@ -31,7 +43,7 @@
 //!   the literal `none`.
 
 use std::collections::HashMap;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Condvar, Mutex};
 use std::time::{Duration, Instant};
@@ -168,11 +180,11 @@ pub fn run(
     ensure_parent_dir(path, command)?;
 
     let mut baseline = match read_raw(path, cancel)? {
-        Raw::Absent => Snapshot::Absent,
+        Raw::Absent => None,
         Raw::Present(bytes) => {
             let parsed = doc::parse(bytes, path, now)?;
             validate(&parsed, &filter, path)?;
-            Snapshot::Present(parsed)
+            Some(parsed)
         }
     };
     ready();
@@ -185,35 +197,31 @@ pub fn run(
         // Same bytes are never re-parsed (cheap pre-check against the
         // baseline's retained original bytes).
         let unchanged = match (&baseline, &raw) {
-            (Snapshot::Absent, Raw::Absent) => true,
-            (Snapshot::Present(before), Raw::Present(bytes)) => {
-                before.source.as_bytes() == bytes.as_slice()
-            }
+            (None, Raw::Absent) => true,
+            (Some(before), Raw::Present(bytes)) => before.source.as_bytes() == bytes.as_slice(),
             _ => false,
         };
         if unchanged {
             continue;
         }
         let next = match raw {
-            Raw::Absent => Snapshot::Absent,
+            Raw::Absent => None,
             Raw::Present(bytes) => {
                 let parsed = doc::parse(bytes, path, now)?;
                 validate(&parsed, &filter, path)?;
-                Snapshot::Present(parsed)
+                Some(parsed)
             }
         };
         // The transition is decided between the two admitted snapshots
         // (identical retained bytes ⇒ no transition at all).
         let changed = match (&baseline, &next) {
-            (Snapshot::Absent, Snapshot::Absent) => false,
-            (Snapshot::Present(before), Snapshot::Present(after)) => {
-                before.source != after.source
-            }
+            (None, None) => false,
+            (Some(before), Some(after)) => before.source != after.source,
             _ => true,
         };
         if changed {
-            let before_model = baseline.model();
-            let after_model = next.model();
+            let before_model = baseline.as_ref().map(extract);
+            let after_model = next.as_ref().map(extract);
             if let Some(report) = evaluate(&before_model, &after_model, &filter, path) {
                 return Ok(report);
             }
@@ -229,20 +237,6 @@ pub fn run(
 enum Raw {
     Absent,
     Present(Vec<u8>),
-}
-
-enum Snapshot {
-    Absent,
-    Present(Document),
-}
-
-impl Snapshot {
-    fn model(&self) -> Option<Model<'_>> {
-        match self {
-            Snapshot::Absent => None,
-            Snapshot::Present(document) => Some(extract(document)),
-        }
-    }
 }
 
 fn read_raw(path: &Path, cancel: &Cancellation) -> Result<Raw, Fault> {
@@ -276,11 +270,11 @@ fn ensure_parent_dir(path: &Path, command: &str) -> Result<(), Fault> {
             .with("path", fsx::walk::display_path(parent))
             .with("cmd", command)
             .with("parent", listed)),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Err(Fault::reason(
-            "E-DIR-MISSING",
-        )
-        .with("dir", fsx::walk::display_path(parent))
-        .with("parent", listed)),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            Err(Fault::reason("E-DIR-MISSING")
+                .with("dir", fsx::walk::display_path(parent))
+                .with("parent", listed))
+        }
         Err(error) => Err(Fault::io("read", parent.to_path_buf(), error)),
     }
 }
@@ -335,7 +329,7 @@ fn check_duplicate_state_identities(document: &Document, path: &Path) -> Result<
     for section in &document.state {
         let mut seen: Vec<&str> = Vec::new();
         for declaration in &section.entries {
-            if seen.iter().any(|nick| *nick == declaration.nick.as_str()) {
+            if seen.contains(&declaration.nick.as_str()) {
                 let mut diagnostics: Vec<Diagnostic> = document
                     .diagnostics
                     .iter()
@@ -361,7 +355,7 @@ fn check_duplicate_state_identities(document: &Document, path: &Path) -> Result<
 fn clone_diagnostic(source: &Diagnostic) -> Diagnostic {
     let mut copy = Diagnostic::new(source.id, source.line);
     for (key, value) in &source.params {
-        copy = copy.with(*key, value.clone());
+        copy = copy.with(key, value.clone());
     }
     copy
 }
@@ -639,10 +633,12 @@ fn relevant(comment: &CommentView<'_>, post: &PostView<'_>, nick: &str) -> bool 
     {
         return true;
     }
-    comment
-        .replies
-        .iter()
-        .any(|seq| post.authors.get(seq).map(|author| *author == nick).unwrap_or(false))
+    comment.replies.iter().any(|seq| {
+        post.authors
+            .get(seq)
+            .map(|author| *author == nick)
+            .unwrap_or(false)
+    })
 }
 
 /// The reference that makes `comment` relevant (for emission only): the
@@ -658,7 +654,12 @@ fn relevance_source(comment: &CommentView<'_>, post: &PostView<'_>, nick: &str) 
     comment
         .replies
         .iter()
-        .find(|seq| post.authors.get(seq).map(|author| *author == nick).unwrap_or(false))
+        .find(|seq| {
+            post.authors
+                .get(seq)
+                .map(|author| *author == nick)
+                .unwrap_or(false)
+        })
         .map(|seq| format!("@#{}", seq))
 }
 
@@ -898,11 +899,7 @@ fn build_report(
     let (command, object) = command_object(path, filter);
     let mut report = Report::new(command, object);
     report.kv("bytes", vec!["changed".to_string()]);
-    let semantic_value = if semantic {
-        "changed"
-    } else {
-        "unchanged"
-    };
+    let semantic_value = if semantic { "changed" } else { "unchanged" };
     report.kv("semantic", vec![semantic_value.to_string()]);
     if created {
         report.kv("created", vec![fsx::walk::display_path(path)]);
@@ -920,7 +917,10 @@ fn build_report(
         None => before.as_ref().map(|model| model.warnings).unwrap_or(&[]),
     };
     let mut has_warnings = false;
-    for diagnostic in warnings.iter().filter(|diagnostic| !diag::is_error(diagnostic.id)) {
+    for diagnostic in warnings
+        .iter()
+        .filter(|diagnostic| !diag::is_error(diagnostic.id))
+    {
         report.diagnostic(clone_diagnostic(diagnostic));
         has_warnings = true;
     }
@@ -981,9 +981,7 @@ fn semantic_changed(before: &Model<'_>, after: &Model<'_>) -> bool {
 }
 
 fn post_changed(before: &PostView<'_>, after: &PostView<'_>) -> bool {
-    if before.comments.len() != after.comments.len()
-        || before.subscribers != after.subscribers
-    {
+    if before.comments.len() != after.comments.len() || before.subscribers != after.subscribers {
         return true;
     }
     for (previous, current) in before.comments.iter().zip(after.comments.iter()) {
@@ -995,9 +993,7 @@ fn post_changed(before: &PostView<'_>, after: &PostView<'_>) -> bool {
 }
 
 fn brief_changed(before: &BriefView<'_>, after: &BriefView<'_>) -> bool {
-    if before.description != after.description
-        || before.entries.len() != after.entries.len()
-    {
+    if before.description != after.description || before.entries.len() != after.entries.len() {
         return true;
     }
     for (previous, current) in before.entries.iter().zip(after.entries.iter()) {
@@ -1201,8 +1197,8 @@ fn state_all_blocks(state: &StateView<'_>, side: Side) -> Vec<Block> {
 fn post_blocks(before: Option<&PostView<'_>>, after: &PostView<'_>) -> Vec<Block> {
     let mut blocks = Vec::new();
     for comment in &after.comments {
-        let previous = before
-            .and_then(|post| post.comments.iter().find(|other| other.seq == comment.seq));
+        let previous =
+            before.and_then(|post| post.comments.iter().find(|other| other.seq == comment.seq));
         match previous {
             None => blocks.push(comment_block(Side::After, comment)),
             Some(previous) => {
@@ -1246,7 +1242,7 @@ fn post_blocks(before: Option<&PostView<'_>>, after: &PostView<'_>) -> Vec<Block
             }
         }
     }
-    for nick in &after.subscribers {
+    for nick in after.subscribers {
         if !before
             .map(|post| post.subscribers.iter().any(|other| other == nick))
             .unwrap_or(false)
@@ -1260,7 +1256,7 @@ fn post_blocks(before: Option<&PostView<'_>>, after: &PostView<'_>) -> Vec<Block
                 blocks.push(comment_block(Side::Before, comment));
             }
         }
-        for nick in &before.subscribers {
+        for nick in before.subscribers {
             if !after.subscribers.iter().any(|other| other == nick) {
                 blocks.push(subscriber_block(Side::Before, nick));
             }
@@ -1295,8 +1291,12 @@ fn post_order_rows(before: Option<&PostView<'_>>, after: &PostView<'_>) -> Vec<O
 fn brief_blocks(before: Option<&BriefView<'_>>, after: &BriefView<'_>) -> Vec<Block> {
     let mut blocks = Vec::new();
     for entry in &after.entries {
-        let previous = before
-            .and_then(|brief| brief.entries.iter().find(|other| other.title == entry.title));
+        let previous = before.and_then(|brief| {
+            brief
+                .entries
+                .iter()
+                .find(|other| other.title == entry.title)
+        });
         match previous {
             None => blocks.push(entry_block(Side::After, entry)),
             Some(previous) => {
@@ -1369,8 +1369,12 @@ fn brief_order_rows(before: Option<&BriefView<'_>>, after: &BriefView<'_>) -> Ve
 fn profile_blocks(before: Option<&ProfileView<'_>>, after: &ProfileView<'_>) -> Vec<Block> {
     let mut blocks = Vec::new();
     for section in &after.sections {
-        let previous = before
-            .and_then(|profile| profile.sections.iter().find(|other| other.name == section.name));
+        let previous = before.and_then(|profile| {
+            profile
+                .sections
+                .iter()
+                .find(|other| other.name == section.name)
+        });
         match previous {
             None => blocks.push(section_block(Side::After, section)),
             Some(previous) => {
@@ -1388,7 +1392,11 @@ fn profile_blocks(before: Option<&ProfileView<'_>>, after: &ProfileView<'_>) -> 
     }
     if let Some(before) = before {
         for section in &before.sections {
-            if !after.sections.iter().any(|other| other.name == section.name) {
+            if !after
+                .sections
+                .iter()
+                .any(|other| other.name == section.name)
+            {
                 blocks.push(section_block(Side::Before, section));
             }
         }
@@ -1551,8 +1559,8 @@ fn post_qualified_blocks(
         if !relevant(comment, after, nick) {
             continue;
         }
-        let previous = before
-            .and_then(|post| post.comments.iter().find(|other| other.seq == comment.seq));
+        let previous =
+            before.and_then(|post| post.comments.iter().find(|other| other.seq == comment.seq));
         match previous {
             None => blocks.push(comment_block(Side::After, comment)),
             Some(previous) => {
@@ -1675,9 +1683,7 @@ fn state_qualified_blocks(
 }
 
 fn same_set_different_order<T: PartialEq>(before: &[T], after: &[T]) -> bool {
-    before != after
-        && before.len() == after.len()
-        && before.iter().all(|item| after.contains(item))
+    before != after && before.len() == after.len() && before.iter().all(|item| after.contains(item))
 }
 
 fn join_seqs(seqs: &[u64]) -> String {

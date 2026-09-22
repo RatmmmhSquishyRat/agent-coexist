@@ -136,7 +136,7 @@ fn compile_pattern(original: &str) -> Result<Pattern, String> {
         .build()
         .map_err(|e| e.to_string())?;
     Ok(Pattern {
-        matcher: glob.compile(),
+        matcher: glob.compile_matcher(),
         anchored: root_anchored || pattern.contains('/'),
         dir_only,
     })
@@ -175,7 +175,7 @@ pub fn validate(opts: &Options) -> Result<(), Fault> {
 /// `None` file type is treated as non-directory (no special skip).
 fn entry_is_enterable(entry: &ignore::DirEntry) -> bool {
     let file_type = entry.file_type();
-    let is_dir = file_type.map_or(false, |ft| ft.is_dir());
+    let is_dir = file_type.is_some_and(|ft| ft.is_dir());
     if is_dir && entry.file_name().eq_ignore_ascii_case(".git") {
         return false;
     }
@@ -192,7 +192,7 @@ fn entry_is_enterable(entry: &ignore::DirEntry) -> bool {
                 }
             }
         }
-        if file_type.map_or(false, |ft| ft.is_symlink()) {
+        if file_type.is_some_and(|ft| ft.is_symlink()) {
             // Directory symlinks are never entered; file symlinks are kept.
             // A broken symlink (metadata fails) is kept and simply never
             // matches anything the callers care about.
@@ -224,7 +224,10 @@ enum WalkErrorFact {
     /// Anything else — a malformed ignore file, a pathless I/O error, an
     /// unrecognized definition. Surfacing as a scan fault is strictly better
     /// than returning a silently incomplete success.
-    Fatal { path: Option<PathBuf>, message: String },
+    Fatal {
+        path: Option<PathBuf>,
+        message: String,
+    },
 }
 
 /// `true` when the error is ultimately an I/O error behind the
@@ -232,8 +235,9 @@ enum WalkErrorFact {
 fn is_io_cause(err: &ignore::Error) -> bool {
     match err {
         ignore::Error::Io(_) => true,
-        ignore::Error::WithLineNumber { err, .. }
-        | ignore::Error::WithDepth { err, .. } => is_io_cause(err),
+        ignore::Error::WithLineNumber { err, .. } | ignore::Error::WithDepth { err, .. } => {
+            is_io_cause(err)
+        }
         ignore::Error::Partial(errors) => !errors.is_empty() && errors.iter().all(is_io_cause),
         _ => false,
     }
@@ -257,7 +261,7 @@ fn classify_error(err: &ignore::Error) -> Vec<WalkErrorFact> {
                 // that behind an empty-looking result.
                 vec![WalkErrorFact::Fatal {
                     path: Some(path.clone()),
-                    message: format!("{err}"),
+                    message: format!("{}", &**err),
                 }]
             }
         }
@@ -362,7 +366,7 @@ pub fn scan(
                         return Err(fault);
                     }
                 }
-                if e.file_type().map_or(false, |ft| ft.is_dir()) {
+                if e.file_type().is_some_and(|ft| ft.is_dir()) {
                     dirs += 1;
                     entered_dirs.push(e.path().to_path_buf());
                     progress(dirs, found);
@@ -625,9 +629,7 @@ fn expand_tilde(value: &str) -> PathBuf {
 
 fn default_global_ignore_file() -> Option<PathBuf> {
     match std::env::var_os("XDG_CONFIG_HOME") {
-        Some(value) if !value.is_empty() => {
-            Some(PathBuf::from(value).join("git").join("ignore"))
-        }
+        Some(value) if !value.is_empty() => Some(PathBuf::from(value).join("git").join("ignore")),
         _ => home().map(|home| home.join(".config").join("git").join("ignore")),
     }
 }
@@ -731,9 +733,8 @@ pub fn display_path(path: &Path) -> String {
         return forward_slashed(path);
     }
 
-    let mut parts: Vec<String> = Vec::with_capacity(
-        (cwd_components.len() - common) + (path_components.len() - common),
-    );
+    let mut parts: Vec<String> =
+        Vec::with_capacity((cwd_components.len() - common) + (path_components.len() - common));
     for _ in common..cwd_components.len() {
         parts.push("..".to_string());
     }
@@ -754,7 +755,10 @@ pub fn display_path(path: &Path) -> String {
 /// components are never touched.
 pub fn managed_path(path: &Path) -> PathBuf {
     if let Some(name) = path.file_name() {
-        if name.as_encoded_bytes().ends_with(crate::consts::SUFFIX.as_bytes()) {
+        if name
+            .as_encoded_bytes()
+            .ends_with(crate::consts::SUFFIX.as_bytes())
+        {
             return path.to_path_buf();
         }
     }
@@ -776,10 +780,12 @@ pub fn object_path(path: &Path) -> String {
             let stem = &name_bytes[..name_bytes.len() - suffix_bytes.len()];
             if stem.is_empty() {
                 stripped.pop();
-            } else if let Ok(stem_name) = OsStr::from_encoded_bytes(stem) {
-                // Removing an ASCII tail cannot invalidate the encoding;
-                // the checked constructor keeps this sound without unsafe.
-                stripped.set_file_name(stem_name);
+            } else {
+                // SUFFIX is exactly two dot segments (`.agent-besties.md`);
+                // clearing the extension twice peels both natively at the
+                // OsStr level, so native name bytes stay opaque.
+                stripped.set_extension("");
+                stripped.set_extension("");
             }
         }
     }
@@ -872,8 +878,12 @@ mod tests {
         touch(&root, "sub/deep/nested.agent-besties.md");
 
         // Basename pattern: matches the name at any depth.
-        let res = scan(&root, &opts(vec!["top.agent-besties.md"], vec![]), &mut sink)
-            .expect("basename scan ok");
+        let res = scan(
+            &root,
+            &opts(vec!["top.agent-besties.md"], vec![]),
+            &mut sink,
+        )
+        .expect("basename scan ok");
         assert_eq!(res.files.len(), 2);
         assert!(res
             .files
@@ -882,8 +892,7 @@ mod tests {
 
         // Anchored pattern: `*` does not cross `/`, so only sub's direct
         // child matches — not sub/deep/nested (spec §10.1.3).
-        let res = scan(&root, &opts(vec!["sub/*"], vec![]), &mut sink)
-            .expect("anchored scan ok");
+        let res = scan(&root, &opts(vec!["sub/*"], vec![]), &mut sink).expect("anchored scan ok");
         assert_eq!(res.files.len(), 1);
         assert!(display_path(&res.files[0]).ends_with("sub/top.agent-besties.md"));
         let _ = fs::remove_dir_all(&root);
@@ -900,8 +909,12 @@ mod tests {
         // `build/` is a slash-free directory pattern (any ancestor component
         // named build); `vendor/pkg/` is an anchored directory pattern (any
         // ancestor relative path matching vendor/pkg).
-        let res = scan(&root, &opts(vec![], vec!["build/", "vendor/pkg/"]), &mut sink)
-            .expect("scan ok");
+        let res = scan(
+            &root,
+            &opts(vec![], vec!["build/", "vendor/pkg/"]),
+            &mut sink,
+        )
+        .expect("scan ok");
         assert_eq!(res.files.len(), 1);
         assert!(display_path(&res.files[0]).ends_with("src/main.agent-besties.md"));
         let _ = fs::remove_dir_all(&root);
@@ -982,7 +995,9 @@ mod tests {
     fn state_file_name_case_rules() {
         let exact = scratch("state-exact");
         fs::write(exact.join(STATE_FILE_NAME), b"").expect("write state file");
-        let hit = state_file(&exact).expect("read_dir ok").expect("exact name found");
+        let hit = state_file(&exact)
+            .expect("read_dir ok")
+            .expect("exact name found");
         assert_eq!(hit, exact.join(STATE_FILE_NAME));
 
         let cased = scratch("state-cased");
@@ -1108,13 +1123,16 @@ mod tests {
         touch(&root, "top.agent-besties.md");
         touch(&root, "sub/top.agent-besties.md");
 
-        let res = scan(&root, &opts(vec!["/top.agent-besties.md"], vec![]), &mut sink)
-            .expect("scan ok");
+        let res = scan(
+            &root,
+            &opts(vec!["/top.agent-besties.md"], vec![]),
+            &mut sink,
+        )
+        .expect("scan ok");
 
         assert_eq!(res.files.len(), 1);
         let dirname = root.file_name().unwrap().to_string_lossy().into_owned();
-        assert!(display_path(&res.files[0])
-            .ends_with(&format!("{}/top.agent-besties.md", dirname)));
+        assert!(display_path(&res.files[0]).ends_with(&format!("{}/top.agent-besties.md", dirname)));
         let _ = fs::remove_dir_all(&root);
     }
 

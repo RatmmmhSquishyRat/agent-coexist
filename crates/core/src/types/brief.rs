@@ -94,9 +94,7 @@ pub(crate) fn scan(ctx: &mut ScanCtx, preamble: Range<usize>, sections: &[Sectio
         if is_blank_line(line) || line.starts_with("> ") {
             continue;
         }
-        ctx.push(
-            Diagnostic::new("W-STRAY", idx + 1).with("n", (idx + 1).to_string()),
-        );
+        ctx.push(Diagnostic::new("W-STRAY", idx + 1).with("n", (idx + 1).to_string()));
     }
 
     let mut seen_titles: HashSet<&str> = HashSet::new();
@@ -145,9 +143,15 @@ pub(crate) fn scan(ctx: &mut ScanCtx, preamble: Range<usize>, sections: &[Sectio
                         line: idx + 1,
                     };
                     match key {
-                        "path" => path.get_or_insert(prop),
-                        "hash" => hash.get_or_insert(prop),
-                        "regex" => regex.get_or_insert(prop),
+                        "path" => {
+                            path.get_or_insert(prop);
+                        }
+                        "hash" => {
+                            hash.get_or_insert(prop);
+                        }
+                        "regex" => {
+                            regex.get_or_insert(prop);
+                        }
                         _ => {
                             // unknown key: kept byte-for-byte, flagged
                             ctx.push(
@@ -155,7 +159,7 @@ pub(crate) fn scan(ctx: &mut ScanCtx, preamble: Range<usize>, sections: &[Sectio
                                     .with("title", names::display_text(&sec.title))
                                     .with("key", key.to_string()),
                             );
-                            attributes.push(prop)
+                            attributes.push(prop);
                         }
                     };
                 }
@@ -216,9 +220,7 @@ pub(crate) fn scan(ctx: &mut ScanCtx, preamble: Range<usize>, sections: &[Sectio
                 if is_blank_line(line) {
                     continue;
                 }
-                ctx.push(
-                    Diagnostic::new("W-STRAY", idx + 1).with("n", (idx + 1).to_string()),
-                );
+                ctx.push(Diagnostic::new("W-STRAY", idx + 1).with("n", (idx + 1).to_string()));
             }
         }
 
@@ -242,13 +244,14 @@ pub(crate) fn scan(ctx: &mut ScanCtx, preamble: Range<usize>, sections: &[Sectio
 
 #[cfg(test)]
 mod tests {
+    use super::is_sha256_hex;
     use crate::doc::{self, Document, Kind};
     use std::path::Path;
 
-    fn parse_brief(src: &str) -> Document {
+    fn parse_brief(src: &str, stem: &str) -> Document {
         doc::parse(
             src.as_bytes().to_vec(),
-            Path::new("onboarding"),
+            Path::new(stem),
             "2026-09-17T10:00:00Z".parse().unwrap(),
         )
         .unwrap()
@@ -262,7 +265,7 @@ mod tests {
 
     #[test]
     fn minimal_document_parses_cleanly() {
-        let d = parse_brief(BASE);
+        let d = parse_brief(BASE, "onboarding");
         assert_eq!(d.kind, Some(Kind::Brief));
         assert_eq!(ids(&d), Vec::<&str>::new());
         assert_eq!(d.brief.entries.len(), 1);
@@ -289,24 +292,30 @@ mod tests {
     fn attrs_end_tracks_property_area() {
         // blank line inside the area, then the note fence ends it
         let src = "# b.brief\n\n## t\n\n- path: x\n\n```md\nn\n```\n";
-        let d = parse_brief(src);
+        let d = parse_brief(src, "b");
         let e = &d.brief.entries[0];
         let fence_start = src.find("```md").unwrap();
         assert_eq!(e.attrs_end, fence_start);
         // no fence at all: area runs to the section end
         let src = "# b.brief\n\n## t\n\n- path: x\n";
-        let d = parse_brief(src);
+        let d = parse_brief(src, "b");
         let e = &d.brief.entries[0];
         assert_eq!(e.attrs_end, src.len());
     }
 
     #[test]
     fn entry_level_diagnostics_anchor_correctly() {
-        let src = "# b.brief\n\n## lexer\n\n- path: /abs/x\n- hash: nothex\n- regex: (\n- extra: kept\n";
-        let d = parse_brief(src);
+        let src =
+            "# b.brief\n\n## lexer\n\n- path: /abs/x\n- hash: nothex\n- regex: (\n- extra: kept\n";
+        let d = parse_brief(src, "b");
         assert_eq!(
             ids(&d),
-            vec!["E-ENTRY-HASH", "W-ENTRY-ABS", "E-ENTRY-REGEX", "W-ENTRY-KEY"]
+            vec![
+                "E-ENTRY-HASH",
+                "W-ENTRY-ABS",
+                "E-ENTRY-REGEX",
+                "W-ENTRY-KEY"
+            ]
         );
         assert_eq!(d.diagnostics[0].line, 3); // E-ENTRY-HASH at the H2
         assert_eq!(d.diagnostics[1].line, 5); // W-ENTRY-ABS at the path line
@@ -324,8 +333,11 @@ mod tests {
         assert_eq!(p.1, "/abs/x");
         // missing path -> E-ENTRY-PATH and target unavailable in regex diag
         let src = "# b.brief\n\n## t\n\n- regex: (\n";
-        let d = parse_brief(src);
-        assert_eq!(ids(&d), vec!["E-ENTRY-PATH", "E-ENTRY-HASH", "E-ENTRY-REGEX"]);
+        let d = parse_brief(src, "b");
+        assert_eq!(
+            ids(&d),
+            vec!["E-ENTRY-PATH", "E-ENTRY-HASH", "E-ENTRY-REGEX"]
+        );
         let p = d.diagnostics[2]
             .params
             .iter()
@@ -336,18 +348,34 @@ mod tests {
 
     #[test]
     fn duplicate_entries_and_stray_lines() {
-        let src = "# b.brief\n\n## same\n\n- path: a\n\n## same\n\n- path: b\n\nloose text\n";
-        let d = parse_brief(src);
+        // hash lines are required on every entry (§4.3.4); without them the
+        // E-ENTRY-HASH diagnostics would drown out the dup/stray contract
+        let src = concat!(
+            "# b.brief\n",
+            "\n",
+            "## same\n",
+            "\n",
+            "- path: a\n",
+            "- hash: aaa464743ddb6056ca84ab76bcf57d71533713c1bed9a493e8c0e787709e0540\n",
+            "\n",
+            "## same\n",
+            "\n",
+            "- path: b\n",
+            "- hash: bbb464743ddb6056ca84ab76bcf57d71533713c1bed9a493e8c0e787709e0540\n",
+            "\n",
+            "loose text\n",
+        );
+        let d = parse_brief(src, "b");
         assert_eq!(ids(&d), vec!["E-ENTRY-DUP", "W-STRAY"]);
-        assert_eq!(d.diagnostics[0].line, 7); // second occurrence head
-        assert_eq!(d.diagnostics[1].line, 11);
+        assert_eq!(d.diagnostics[0].line, 8); // second occurrence head
+        assert_eq!(d.diagnostics[1].line, 13);
         assert_eq!(d.brief.entries.len(), 2);
     }
 
     #[test]
     fn preamble_comment_lines_are_not_stray() {
         let src = "# b.brief\n\n> note for readers\n\n```md\ndesc\n```\n";
-        let d = parse_brief(src);
+        let d = parse_brief(src, "b");
         assert_eq!(ids(&d), Vec::<&str>::new());
         assert!(d.brief.description.is_some());
     }

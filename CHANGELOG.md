@@ -22,9 +22,12 @@ Initial release.
   walking with gitignore-family rules, brief-target SHA-256 verification
   with fresh/shifted/stale/unchecked states, and directory-state conflict
   detection with functional locks for `profile`/`brief` writes.
-- Three optional wait commands (`wait`, `wait-post`, `wait-state`) that
-  block until a qualifying semantic change of a single collaboration file,
-  with Ctrl-C cancellation (exit 130).
+- Three optional wait commands (`wait`, `wait-post`, `wait-state`) that poll
+  a single collaboration file until its first change: without a projection
+  filter any change ends the wait (including byte-only format changes),
+  while `wait-post --as <nick>` / `wait-state --status <name>` end it only
+  on changes qualifying for that nick or status; each result reports the
+  change with `bytes` and `semantic` rows. Ctrl-C cancels with exit 130.
 - Structured first-line/status output with two-space column rows,
   diagnostics with `why`/`fix`, stderr-only progress, and exit codes
   0/1/2/3 (+130 for cancelled waits).

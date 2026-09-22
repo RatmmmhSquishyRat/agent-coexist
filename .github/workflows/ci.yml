@@ -38,7 +38,7 @@ jobs:
 
       - name: Install into an isolated prefix
         shell: bash
-        run: cargo install --path crates/cli --root "$RUNNER_TEMP/install"
+        run: cargo install --path crates/cli --locked --root "$RUNNER_TEMP/install"
 
       - name: "Smoke: installed binary end-to-end (real mechanism exercise)"
         shell: bash
@@ -92,7 +92,7 @@ jobs:
           # #2 is both @#1 (alice's comment) and @alice → reply wins over mention
           out="$(env $NOW "$BIN" read-notification . --as alice --since 1h)"
           test "$(first_line "$out")" = "ok  read-notification  ."
-          printf '%s\n' "$out" | grep -E '^  reply +2026-09-17T09:30:00Z +docs/standup +#2 +bob '
+          printf '%s\n' "$out" | grep -E '^  reply +2026-09-17T09:30:00Z +(\./)?docs/standup +#2 +bob '
 
           set +e
           out="$(env $NOW "$BIN" check does/not/exist 2>/dev/null)"

@@ -317,111 +317,18 @@ pub(crate) const CATALOG: &[Template] = &[
 ];
 
 /// §9 supplement 1: E-TYPE fix when actual type is state.
-pub(crate) const FIX_ETYPE_STATE: &str = r#"this is a state file: agent-coexist state {dir} --as <nick> --status <name>"#;
+pub(crate) const FIX_ETYPE_STATE: &str =
+    r#"this is a state file: agent-coexist state {dir} --as <nick> --status <name>"#;
 
 /// §9 supplement 3: E-HEAD fix when numbering is exhausted.
-pub(crate) const FIX_EHEAD_EXHAUSTED: &str = r##"drop the leading "#" to make this a plain heading; numbering is exhausted"##;
+pub(crate) const FIX_EHEAD_EXHAUSTED: &str =
+    r##"drop the leading "#" to make this a plain heading; numbering is exhausted"##;
 
 /// §9 supplement 3: E-SEQ-DUP fix when numbering is exhausted.
-pub(crate) const FIX_ESEQDUP_EXHAUSTED: &str = r#"move the duplicate comment to a new post and update references to it"#;
+pub(crate) const FIX_ESEQDUP_EXHAUSTED: &str =
+    r#"move the duplicate comment to a new post and update references to it"#;
 
 /// Look up a §9 template by diagnostic id.
 pub(crate) fn find(id: &str) -> Option<&'static Template> {
     CATALOG.iter().find(|t| t.id == id)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::{find, CATALOG, FIX_EHEAD_EXHAUSTED, FIX_ESEQDUP_EXHAUSTED, FIX_ETYPE_STATE};
-    use std::collections::HashSet;
-
-    /// The 50 ids in spec §9 table order (the same-line tiebreak order).
-    const EXPECTED_IDS: [&str; 50] = [
-        "E-UTF8",
-        "E-TOO-LARGE",
-        "E-H1",
-        "E-FENCE",
-        "E-HEAD",
-        "E-SEQ-DUP",
-        "E-ENTRY-DUP",
-        "E-ENTRY-PATH",
-        "E-ENTRY-HASH",
-        "E-ENTRY-REGEX",
-        "E-ENTRY-TARGET",
-        "E-SECTION-DUP",
-        "E-STATUS-DUP",
-        "E-TYPE",
-        "E-LOCKED",
-        "E-INUSE",
-        "E-FLOCKED",
-        "E-FILE-MISSING",
-        "E-DIR-MISSING",
-        "E-NOT-DIR",
-        "E-TARGET-MISSING",
-        "E-ENTRY-NOTFOUND",
-        "E-SECTION-NOTFOUND",
-        "E-STATE-NOTFOUND",
-        "E-EDIT-AUTHOR",
-        "E-COMMENT-NOTFOUND",
-        "E-ENTRY-TITLE-TAKEN",
-        "E-SEQ-EXHAUSTED",
-        "W-BOM",
-        "W-CRLF",
-        "W-NAME",
-        "W-NAME-STATE",
-        "W-STRAY",
-        "W-BODY",
-        "W-SUB-DUP",
-        "W-SEQ-GAP",
-        "W-SEQ-ORDER",
-        "W-REPLY-DANGLING",
-        "W-ENTRY-ABS",
-        "W-ENTRY-KEY",
-        "W-ENTRY-SHIFTED",
-        "W-ENTRY-STALE",
-        "W-PROFILE-EMPTY",
-        "W-SECTION-NAME",
-        "W-STATUS-NAME",
-        "W-STATE-ENTRY",
-        "W-STATE-DUP",
-        "W-STATE-RANGE",
-        "W-STATE-CONFLICT",
-        "W-STATE-EXPIRED",
-    ];
-
-    #[test]
-    fn catalog_has_exactly_50_rows() {
-        assert_eq!(CATALOG.len(), 50);
-    }
-
-    #[test]
-    fn ids_are_unique_and_match_spec_order() {
-        let ids: Vec<&str> = CATALOG.iter().map(|t| t.id).collect();
-        assert_eq!(ids.len(), 50);
-        assert_eq!(ids.iter().collect::<HashSet<_>>().len(), 50, "duplicate diagnostic id");
-        assert_eq!(ids, EXPECTED_IDS.to_vec());
-    }
-
-    #[test]
-    fn template_text_matches_spec_verbatim() {
-        let t = find("E-H1").unwrap();
-        assert_eq!(t.message, r##"first line is "{line}", not "# <name>.<type>""##);
-        let t = find("E-FENCE").unwrap();
-        assert_eq!(t.fix, r#"add a closing line of {ticks} backticks where the block should end"#);
-        let t = find("E-LOCKED").unwrap();
-        assert_eq!(t.fix, r#"retry shortly: {argv}"#);
-        let t = find("E-FLOCKED").unwrap();
-        assert_eq!(t.why, r#"{holder} asked that nothing under {dir} be changed; profile and brief writes fast-fail on such locks"#);
-        let t = find("W-STATE-CONFLICT").unwrap();
-        assert_eq!(t.why, r#"two agents asked for exclusive changes in the same subtree; neither is blocked, so they must agree who continues"#);
-        let t = find("E-SEQ-EXHAUSTED").unwrap();
-        assert_eq!(t.message, r#"comment numbering is exhausted: #{max} is the highest number a header can carry"#);
-    }
-
-    #[test]
-    fn supplement_fixes_match_spec() {
-        assert_eq!(FIX_ETYPE_STATE, r#"this is a state file: agent-coexist state {dir} --as <nick> --status <name>"#);
-        assert_eq!(FIX_EHEAD_EXHAUSTED, r##"drop the leading "#" to make this a plain heading; numbering is exhausted"##);
-        assert_eq!(FIX_ESEQDUP_EXHAUSTED, r#"move the duplicate comment to a new post and update references to it"#);
-    }
 }

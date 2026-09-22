@@ -16,17 +16,25 @@ use crate::ops::context::{self, Ctx};
 use crate::ops::{reason_report, ReadBriefParams};
 use crate::report::Report;
 
-use super::{blocking_report, file_missing_report, load_file, Loaded, type_report};
+use super::{blocking_report, file_missing_report, load_file, type_report, LoadError};
 
 pub fn read_brief(ctx: &mut Ctx, p: &ReadBriefParams) -> Result<Report, Fault> {
     let object = context::object_of_path(&p.path);
     let dctx = context::diag_context_for_file(ctx, "read-brief", &p.path);
     let file_display = context::display_file(&p.path);
-    match load_file(&p.path, ctx.now, consts::READ_WAIT_MS)? {
-        Loaded::Missing => Ok(file_missing_report(&dctx, "read-brief", &object, &p.path)),
-        Loaded::Busy { id, params } => Ok(reason_report(&dctx, "read-brief", &object, id, params)),
-        Loaded::Blocking(diags) => Ok(blocking_report("read-brief", &object, &file_display, None, diags)),
-        Loaded::Doc(document) => {
+    match load_file(&p.path, ctx.now, consts::READ_WAIT_MS) {
+        Err(LoadError::Missing) => Ok(file_missing_report(&dctx, "read-brief", &object, &p.path)),
+        Err(LoadError::Busy { id, params }) => {
+            Ok(reason_report(&dctx, "read-brief", &object, id, params))
+        }
+        Err(LoadError::Blocking(diags)) => Ok(blocking_report(
+            "read-brief",
+            &object,
+            &file_display,
+            None,
+            diags,
+        )),
+        Ok(document) => {
             // Blocking structure (duplicate titles make `--entry`
             // ambiguous, an unclosed fence the rest unjudgeable): the
             // §8.3.2 diagnostic form instead of a rendering.
@@ -54,10 +62,7 @@ pub fn read_brief(ctx: &mut Ctx, p: &ReadBriefParams) -> Result<Report, Fault> {
                                 "read-brief",
                                 &object,
                                 "E-ENTRY-NOTFOUND",
-                                vec![
-                                    ("title", title.to_string()),
-                                    ("path", object.clone()),
-                                ],
+                                vec![("title", title.to_string()), ("path", object.clone())],
                             ));
                         }
                     }
@@ -73,10 +78,16 @@ pub fn read_brief(ctx: &mut Ctx, p: &ReadBriefParams) -> Result<Report, Fault> {
                 )),
             }
         }
+        Err(LoadError::Fault(f)) => Err(f),
     }
 }
 
-fn render(path: &Path, object: &str, document: &doc::Document, entry_filter: Option<&str>) -> Report {
+fn render(
+    path: &Path,
+    object: &str,
+    document: &doc::Document,
+    entry_filter: Option<&str>,
+) -> Report {
     let mut report = Report::new("read-brief", object);
     // §10.10.1: `--entry` renders only that entry, no description.
     if entry_filter.is_none() {

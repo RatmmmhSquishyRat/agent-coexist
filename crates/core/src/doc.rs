@@ -15,7 +15,7 @@ use crate::consts;
 use crate::diag;
 use crate::error::{Diagnostic, Fault};
 use crate::names;
-use crate::text::{FenceScan, LineIndex, Span};
+use crate::text::{FenceBlock, FenceScan, LineIndex, Span};
 use crate::types::{self, ScanCtx};
 
 /// The four managed file types (spec §1). Recorded only by the H1.
@@ -47,6 +47,31 @@ impl Kind {
 pub struct Body {
     pub span: Span,
     pub content: Span,
+}
+
+impl Body {
+    /// Build from a scanned fence block. `content` drops exactly the final
+    /// line terminator (LF or CRLF): the newline separating the last
+    /// content line from the closing fence is geometry, not body text, so
+    /// a CLI-written one-line body reads back as exactly that line (spec
+    /// §2.5.5 with §2.1.3; §8.2 renders one row per content line). Inner
+    /// terminators stay verbatim in the span.
+    pub(crate) fn from_block(source: &str, b: &FenceBlock) -> Body {
+        let mut content = b.content.clone();
+        if content.end > content.start {
+            let bytes = source.as_bytes();
+            if bytes[content.end - 1] == b'\n' {
+                content.end -= 1;
+                if content.end > content.start && bytes[content.end - 1] == b'\r' {
+                    content.end -= 1;
+                }
+            }
+        }
+        Body {
+            span: b.block.clone(),
+            content,
+        }
+    }
 }
 
 /// One H2 section (spec §1): an H2 line and everything up to the next H2
@@ -169,10 +194,32 @@ pub fn parse(bytes: Vec<u8>, path: &Path, now: DateTime<Utc>) -> Result<Document
         );
     }
 
-    let stem: String = path
-        .file_stem()
-        .map(|s| s.to_string_lossy().into_owned())
-        .unwrap_or_default();
+    // Stem = file name minus the COMPLETE managed suffix (spec §1, §2.4).
+    // `Path::file_stem` peels only the final `.md`, so every valid
+    // `standup.agent-besties.md` compared as `standup.agent-besties` and
+    // tripped W-NAME / W-NAME-STATE. The suffix is matched
+    // case-insensitively, like the walker's managed-file test (§10.1.4);
+    // a name without it (bare-stem paths) is the stem as-is, dots
+    // included (NAME allows them, §2.3). The name is borrowed as `&str` —
+    // no lossy codec on the normal path.
+    let stem: String = match path.file_name().and_then(|n| n.to_str()) {
+        Some(name) => {
+            let bytes = name.as_bytes();
+            let tail = bytes.len().saturating_sub(consts::SUFFIX.len());
+            if bytes.len() >= consts::SUFFIX.len()
+                && bytes[tail..].eq_ignore_ascii_case(consts::SUFFIX.as_bytes())
+            {
+                // the matched tail is ASCII, so `tail` is a char boundary
+                name[..tail].to_string()
+            } else {
+                name.to_string()
+            }
+        }
+        None => path
+            .file_stem()
+            .map(|s| s.to_string_lossy().into_owned())
+            .unwrap_or_default(),
+    };
 
     // --- H1: the first non-blank line (spec §2.2), BOM stripped. ----------
     let mut h1: Option<Span> = None;
@@ -270,10 +317,7 @@ pub fn parse(bytes: Vec<u8>, path: &Path, now: DateTime<Utc>) -> Result<Document
             .blocks
             .iter()
             .find(|b| b.open > h && b.open < end_idx)
-            .map(|b| Body {
-                span: b.block.clone(),
-                content: b.content.clone(),
-            });
+            .map(|b| Body::from_block(&source, b));
         sections.push(Section {
             title: names::fold(&source[hl.start + 3..hl.end]),
             head: hl.start..hl.end,
@@ -293,7 +337,8 @@ pub fn parse(bytes: Vec<u8>, path: &Path, now: DateTime<Utc>) -> Result<Document
         .map(|s| s.head.start)
         .unwrap_or(source.len());
     let preamble = pre_start..pre_end;
-    let preamble_lines = lines.idx_at(pre_start)..lines.idx_at(pre_end).max(lines.idx_at(pre_start));
+    let preamble_lines =
+        lines.idx_at(pre_start)..lines.idx_at(pre_end).max(lines.idx_at(pre_start));
 
     // --- per-type views -----------------------------------------------------
     let empty_post = || types::post::Post {
@@ -443,7 +488,7 @@ mod tests {
         assert_eq!(d.text(&sec.head), "## #1 alice (2026-09-17T09:12:00Z)");
         // section spans through EOF including terminators
         assert_eq!(&src[sec.span.clone()], &src[16..]);
-        // body content excludes the fence lines
+        // body content excludes the fence lines and the final terminator
         assert_eq!(d.body(0), Some("hi @bob"));
         // preamble: after the H1 terminator up to the H2 line
         assert_eq!(&src[d.preamble.clone()], "\n");
@@ -452,15 +497,18 @@ mod tests {
 
     #[test]
     fn bom_blank_prefix_and_mixed_terminators_are_preserved() {
-        let src = "\u{feff}\n\n# a.post\r\n\r\n## s\r\n```md\r\nx\r\n```\r\n";
+        let src = "\u{feff}\n\n# a.post\r\n\r\n## s\r\n```md\r\nx\r\ny\r\n```\r\n";
         let d = parse_str(src, "a");
         assert_eq!(d.kind, Some(Kind::Post));
-        assert_eq!(ids(&d), vec!["W-BOM", "W-CRLF"]);
+        // `## s` is a plain H2 in a post: kept, but W-STRAY per §3.3.2
+        assert_eq!(ids(&d), vec!["W-BOM", "W-CRLF", "W-STRAY"]);
         assert_eq!(d.diagnostics[0].line, 1);
         assert_eq!(d.diagnostics[1].line, 3);
+        assert_eq!(d.diagnostics[2].line, 5);
         assert_eq!(d.sections.len(), 1);
-        // inner line terminators stay in the raw content span
-        assert_eq!(d.body(0), Some("x\r\n"));
+        // inner line terminators stay in the raw content span; only the
+        // final one before the closing fence is excluded
+        assert_eq!(d.body(0), Some("x\r\ny"));
         assert_eq!(d.text(&d.sections[0].head), "## s");
     }
 
@@ -507,11 +555,22 @@ mod tests {
         assert_eq!(ids(&d), vec!["W-NAME-STATE"]);
         let d = parse_str("# .state\n", "state");
         assert_eq!(ids(&d), Vec::<&str>::new());
+        // the complete managed suffix is stripped from the stem: real
+        // on-disk names (dotted or not) compare by their true stem
+        let d = parse_str("# standup.post\n", "standup.agent-besties.md");
+        assert_eq!(ids(&d), Vec::<&str>::new());
+        let d = parse_str("# a.b.post\n", "a.b.agent-besties.md");
+        assert_eq!(ids(&d), Vec::<&str>::new());
+        let d = parse_str("# .state\n", "state.agent-besties.md");
+        assert_eq!(ids(&d), Vec::<&str>::new());
     }
 
     #[test]
     fn invalid_utf8_and_oversize_are_typed_faults() {
-        let err = parse(vec![0x23, 0x20, 0x61, 0xFF, 0x2E], Path::new("a"), now()).unwrap_err();
+        let err = match parse(vec![0x23, 0x20, 0x61, 0xFF, 0x2E], Path::new("a"), now()) {
+            Err(err) => err,
+            Ok(_) => panic!("invalid UTF-8 input must fail to parse"),
+        };
         match err {
             Fault::Diagnostics(d) => {
                 assert_eq!(d[0].id, "E-UTF8");
@@ -519,7 +578,10 @@ mod tests {
             }
             other => panic!("unexpected: {other:?}"),
         }
-        let err = parse(vec![0x61; 16 * 1024 * 1024 + 1], Path::new("a"), now()).unwrap_err();
+        let err = match parse(vec![0x61; 16 * 1024 * 1024 + 1], Path::new("a"), now()) {
+            Err(err) => err,
+            Ok(_) => panic!("oversize input must fail to parse"),
+        };
         match err {
             Fault::Diagnostics(d) => {
                 assert_eq!(d[0].id, "E-TOO-LARGE");
@@ -556,7 +618,8 @@ mod tests {
         assert_eq!(ids(&d), vec!["W-STRAY", "W-STRAY", "E-FENCE"]);
 
         // H2 inside a fence is not a section boundary
-        let src = "# a.post\n\n## #1 alice (2026-09-17T09:12:00Z)\n\n```md\n## not a section\n```\n";
+        let src =
+            "# a.post\n\n## #1 alice (2026-09-17T09:12:00Z)\n\n```md\n## not a section\n```\n";
         let d = parse_str(src, "a");
         assert_eq!(d.sections.len(), 1);
         assert_eq!(d.body(0), Some("## not a section"));

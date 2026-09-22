@@ -31,8 +31,7 @@ pub struct ProfileSection {
 /// (SECTION cannot start with it), truncate to 64 chars, fall back to
 /// `section`.
 pub(crate) fn suggested_section_name(title: &str) -> String {
-    static NON_SECTION: LazyLock<Regex> =
-        LazyLock::new(|| Regex::new(r"[^\p{L}\p{N}_-]").unwrap());
+    static NON_SECTION: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"[^\p{L}\p{N}_-]").unwrap());
     let dashed = names::fold(title).replace(' ', "-");
     let stripped = NON_SECTION.replace_all(&dashed, "");
     let trimmed = stripped.trim_start_matches('-');
@@ -67,7 +66,10 @@ pub(crate) fn scan(ctx: &mut ScanCtx, sections: &[Section]) -> Vec<ProfileSectio
         if sec.body.is_none() {
             ctx.push(
                 Diagnostic::new("W-BODY", head_line)
-                    .with("unit", format!("section \"{}\"", names::display_text(&sec.title)))
+                    .with(
+                        "unit",
+                        format!("section \"{}\"", names::display_text(&sec.title)),
+                    )
                     .with("n", head_line.to_string())
                     .with("name", sec.title.clone()),
             );
@@ -93,22 +95,28 @@ pub(crate) fn scan(ctx: &mut ScanCtx, sections: &[Section]) -> Vec<ProfileSectio
 
 #[cfg(test)]
 mod tests {
-    use crate::doc::{self, Document, Kind};
+    use super::suggested_section_name;
+    use crate::doc::{self, Document};
     use std::path::Path;
 
     fn parse_profile(src: &str) -> Document {
         doc::parse(
             src.as_bytes().to_vec(),
-            Path::new("alice"),
+            Path::new("a"),
             "2026-09-17T10:00:00Z".parse().unwrap(),
         )
         .unwrap()
     }
+
+    fn ids(d: &Document) -> Vec<&'static str> {
+        d.diagnostics.iter().map(|x| x.id).collect()
+    }
     #[test]
     fn invalid_names_get_suggestions_and_bodies_flagged() {
-        let src = "# a.agent-profile\n\n## my role 9!\n\n## empty one\n";
+        let src = "# a.agent-profile\n\n## my role 9!\n\n## empty-one\n";
         let d = parse_profile(src);
-        // same line 3: W-BODY precedes W-SECTION-NAME in catalog order
+        // same line 3: W-BODY precedes W-SECTION-NAME in catalog order;
+        // `empty-one` is a valid SECTION, its section just has no body
         assert_eq!(ids(&d), vec!["W-BODY", "W-SECTION-NAME", "W-BODY"]);
         assert_eq!(d.diagnostics[0].line, 3);
         let w = &d.diagnostics[1];
@@ -123,16 +131,23 @@ mod tests {
 
     #[test]
     fn duplicate_sections_and_stray_property_lines() {
-        let src = "# a.agent-profile\n\n## role\n\n```md\nx\n```\n\n## role\n- path: no semantics here\n";
+        let src =
+            "# a.agent-profile\n\n## role\n\n```md\nx\n```\n\n## role\n- path: no semantics here\n";
         let d = parse_profile(src);
-        assert_eq!(ids(&d), vec!["E-SECTION-DUP", "W-STRAY"]);
+        // the duplicate section has no fence: W-BODY (§5.2.2) alongside
+        // E-SECTION-DUP at the same line; the property line is W-STRAY
+        // (no property semantics in profiles, §2.6.1)
+        assert_eq!(ids(&d), vec!["E-SECTION-DUP", "W-BODY", "W-STRAY"]);
         assert_eq!(d.diagnostics[0].line, 9);
-        assert_eq!(d.diagnostics[1].line, 10);
+        assert_eq!(d.diagnostics[1].line, 9);
+        assert_eq!(d.diagnostics[2].line, 10);
     }
 
     #[test]
     fn suggestion_algorithm_edges() {
-        assert_eq!(suggested_section_name("  --- Role ---  "), "Role");
+        // dashes stay (SECTION allows them after the first char, §2.3);
+        // only LEADING dashes are dropped (§9 suppl. 8)
+        assert_eq!(suggested_section_name("  --- Role ---  "), "Role----");
         assert_eq!(suggested_section_name("!!!"), "section");
         assert_eq!(suggested_section_name("a b c"), "a-b-c");
     }

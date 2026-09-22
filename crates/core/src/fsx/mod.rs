@@ -344,7 +344,7 @@ pub fn mutate<T>(
                             );
                         }
                         return Err(Fault::Diagnostics(vec![
-                            Diagnostic::new("E-H1", 1).with("line", ""),
+                            Diagnostic::new("E-H1", 1).with("line", "")
                         ]));
                     }
                     // Release the lock, wait one poll, reopen; zero-byte retries
@@ -393,7 +393,6 @@ pub fn mutate<T>(
                         // writer took over our creation.
                         let bytes = read_all_bounded(&file).map_err(|e| read_fault(path, e))?;
                         if bytes.is_empty() {
-                            created_by_us = true;
                             return run_plan(
                                 file,
                                 path,
@@ -404,7 +403,6 @@ pub fn mutate<T>(
                                 &mut plan,
                             );
                         }
-                        created_by_us = false;
                         return run_plan(file, path, bytes, false, false, Vec::new(), &mut plan);
                     }
                     Err(e2) if e2.kind() == io::ErrorKind::AlreadyExists => {
@@ -481,12 +479,19 @@ fn run_plan<T>(
                 drop(file);
                 for dir in created_dirs.iter().rev() {
                     match std::fs::read_dir(dir) {
-                        Ok(mut entries) if entries.next().is_none() => {
-                            if let Err(e) = std::fs::remove_dir(dir) {
-                                return Err(Fault::io("delete", dir.clone(), e));
+                        Ok(mut entries) => match entries.next() {
+                            // Owned-directory cleanup: only a directory this
+                            // call created, and only while it is still empty.
+                            None => {
+                                if let Err(e) = std::fs::remove_dir(dir) {
+                                    return Err(Fault::io("delete", dir.clone(), e));
+                                }
                             }
-                        }
-                        Ok(_) => {}
+                            // A real directory-entry error is a cleanup
+                            // failure, not an occupied directory.
+                            Some(Err(e)) => return Err(Fault::io("delete", dir.clone(), e)),
+                            Some(Ok(_)) => {}
+                        },
                         Err(e) => return Err(Fault::io("delete", dir.clone(), e)),
                     }
                 }
@@ -639,7 +644,9 @@ fn read_fault(path: &Path, e: io::Error) -> Fault {
 
 fn too_large_fault() -> Fault {
     let mib = consts::MAX_MANAGED_FILE_BYTES / (1024 * 1024);
-    Fault::Diagnostics(vec![Diagnostic::new("E-TOO-LARGE", 1).with("limit", mib.to_string())])
+    Fault::Diagnostics(vec![
+        Diagnostic::new("E-TOO-LARGE", 1).with("limit", mib.to_string())
+    ])
 }
 
 /// Contention observed *while reading* under a lock: Windows lock violation
@@ -649,7 +656,10 @@ fn is_read_stage_busy(e: &io::Error) -> bool {
     if cfg!(windows) {
         is_win_error(e, WIN_ERROR_LOCK_VIOLATION)
     } else {
-        matches!(e.kind(), io::ErrorKind::WouldBlock | io::ErrorKind::PermissionDenied)
+        matches!(
+            e.kind(),
+            io::ErrorKind::WouldBlock | io::ErrorKind::PermissionDenied
+        )
     }
 }
 
@@ -659,7 +669,10 @@ fn is_write_stage_busy(e: &io::Error) -> bool {
     if cfg!(windows) {
         is_win_error(e, WIN_ERROR_LOCK_VIOLATION)
     } else {
-        matches!(e.kind(), io::ErrorKind::WouldBlock | io::ErrorKind::PermissionDenied)
+        matches!(
+            e.kind(),
+            io::ErrorKind::WouldBlock | io::ErrorKind::PermissionDenied
+        )
     }
 }
 
@@ -710,7 +723,6 @@ fn parent_is_valid_dir(path: &Path) -> Result<bool, Fault> {
     }
 }
 
-
 /// Create the missing parent chain of `path`, outer→inner, recording what
 /// this call created. A directory that appears concurrently is fine (not
 /// recorded); real failures surface as `Fault::Io`.
@@ -739,17 +751,15 @@ mod tests {
     use super::*;
 
     fn scratch(tag: &str) -> PathBuf {
-        let dir = std::env::temp_dir()
-            .join("coexist-fsx-tests")
-            .join(format!(
-                "{}-{}-{}",
-                tag,
-                std::process::id(),
-                std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .map(|d| d.as_nanos())
-                    .unwrap_or(0)
-            ));
+        let dir = std::env::temp_dir().join("coexist-fsx-tests").join(format!(
+            "{}-{}-{}",
+            tag,
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
+        ));
         std::fs::create_dir_all(&dir).unwrap();
         dir
     }
@@ -766,15 +776,11 @@ mod tests {
     fn mutate_creates_file_and_parents() {
         let dir = scratch("create");
         let target = dir.join("a/b/notes.agent-besties.md");
-        let res = mutate(
-            &target,
-            policy(200, true, true),
-            |bytes, initial| {
-                assert!(bytes.is_empty());
-                assert!(initial);
-                Ok((Mutation::Write(b"# notes.post\n".to_vec()), ()))
-            },
-        )
+        let res = mutate(&target, policy(200, true, true), |bytes, initial| {
+            assert!(bytes.is_empty());
+            assert!(initial);
+            Ok((Mutation::Write(b"# notes.post\n".to_vec()), ()))
+        })
         .unwrap();
         assert!(res.created);
         assert!(!res.deleted);
@@ -789,9 +795,11 @@ mod tests {
     fn mutate_missing_without_create_reports_file_missing() {
         let dir = scratch("missing");
         let target = dir.join("none.agent-besties.md");
-        let err = mutate(&target, policy(0, false, false), |_, _| -> Result<(Mutation, ()), Fault> {
-            unreachable!()
-        })
+        let err = mutate(
+            &target,
+            policy(0, false, false),
+            |_, _| -> Result<(Mutation, ()), Fault> { unreachable!() },
+        )
         .unwrap_err();
         match err {
             Fault::Reason { id, params } => {
@@ -809,15 +817,11 @@ mod tests {
         let dir = scratch("splice");
         let target = dir.join("x.agent-besties.md");
         std::fs::write(&target, b"old-bytes").unwrap();
-        let res = mutate(
-            &target,
-            policy(200, true, true),
-            |bytes, initial| {
-                assert_eq!(bytes, b"old-bytes");
-                assert!(!initial);
-                Ok((Mutation::Write(b"new-bytes".to_vec()), bytes.len()))
-            },
-        )
+        let res = mutate(&target, policy(200, true, true), |bytes, initial| {
+            assert_eq!(bytes, b"old-bytes");
+            assert!(!initial);
+            Ok((Mutation::Write(b"new-bytes".to_vec()), bytes.len()))
+        })
         .unwrap();
         assert!(!res.created);
         assert_eq!(res.value, 9usize);
@@ -879,9 +883,11 @@ mod tests {
         let dir = scratch("empty-no-create");
         let target = dir.join("x.agent-besties.md");
         std::fs::write(&target, b"").unwrap();
-        let err = mutate(&target, policy(0, false, false), |_, _| -> Result<(Mutation, ()), Fault> {
-            unreachable!()
-        })
+        let err = mutate(
+            &target,
+            policy(0, false, false),
+            |_, _| -> Result<(Mutation, ()), Fault> { unreachable!() },
+        )
         .unwrap_err();
         match err {
             Fault::Diagnostics(diags) => {
@@ -901,15 +907,11 @@ mod tests {
         let dir = scratch("takeover");
         let target = dir.join("x.agent-besties.md");
         std::fs::write(&target, b"").unwrap();
-        let res = mutate(
-            &target,
-            policy(0, true, true),
-            |bytes, initial| {
-                assert!(bytes.is_empty());
-                assert!(initial);
-                Ok((Mutation::Write(b"# x.post\n".to_vec()), ()))
-            },
-        )
+        let res = mutate(&target, policy(0, true, true), |bytes, initial| {
+            assert!(bytes.is_empty());
+            assert!(initial);
+            Ok((Mutation::Write(b"# x.post\n".to_vec()), ()))
+        })
         .unwrap();
         assert!(res.created);
         assert_eq!(std::fs::read(&target).unwrap(), b"# x.post\n");
@@ -966,7 +968,10 @@ mod tests {
         assert!(!target.exists());
         // Present zero-byte -> Some(empty): absence is never faked.
         std::fs::write(&target, b"").unwrap();
-        assert_eq!(read_stable_optional(&target, None).unwrap(), Some(Vec::new()));
+        assert_eq!(
+            read_stable_optional(&target, None).unwrap(),
+            Some(Vec::new())
+        );
         // Present content -> Some(bytes).
         std::fs::write(&target, b"body").unwrap();
         assert_eq!(
@@ -975,6 +980,7 @@ mod tests {
         );
         // Parent gone -> error, not None.
         let nested = dir.join("gone/x.agent-besties.md");
+        std::fs::create_dir(dir.join("gone")).unwrap();
         std::fs::write(&nested, b"body").unwrap();
         std::fs::remove_file(&nested).unwrap();
         std::fs::remove_dir(dir.join("gone")).unwrap();
@@ -995,15 +1001,11 @@ mod tests {
         let target = dir.join("x.agent-besties.md");
         std::fs::write(&target, b"payload").unwrap();
         assert_eq!(read(&target, u64::MAX, None).unwrap(), b"payload");
-        let res = mutate(
-            &target,
-            policy(u64::MAX, false, false),
-            |bytes, initial| {
-                assert_eq!(bytes, b"payload");
-                assert!(!initial);
-                Ok((Mutation::Write(b"replaced".to_vec()), ()))
-            },
-        )
+        let res = mutate(&target, policy(u64::MAX, false, false), |bytes, initial| {
+            assert_eq!(bytes, b"payload");
+            assert!(!initial);
+            Ok((Mutation::Write(b"replaced".to_vec()), ()))
+        })
         .unwrap();
         assert!(!res.created);
         assert_eq!(std::fs::read(&target).unwrap(), b"replaced");

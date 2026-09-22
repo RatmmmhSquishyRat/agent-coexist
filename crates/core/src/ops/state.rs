@@ -53,7 +53,7 @@ fn declare(ctx: &mut Ctx, p: &super::StateDeclare) -> Result<Report, Fault> {
     let now = ctx.now;
     let until = time::until(now, for_secs)?;
 
-    let target = match fsx::state_file(&p.dir)? {
+    let target = match fsx::walk::state_file(&p.dir)? {
         Some(f) => f,
         None => p.dir.join(format!("state{}", consts::SUFFIX)),
     };
@@ -71,25 +71,35 @@ fn declare(ctx: &mut Ctx, p: &super::StateDeclare) -> Result<Report, Fault> {
         |bytes: Vec<u8>, _initial: bool| {
             let plan = plan_declare(&bytes, &file_for_parse, now, &nick, &status, until)?;
             Ok(match plan {
-                DeclarePlan::Write { bytes: new_bytes, cleaned } => (
+                DeclarePlan::Write {
+                    bytes: new_bytes,
+                    cleaned,
+                } => (
                     fsx::Mutation::Write(new_bytes),
                     DeclareOut::Written { cleaned },
                 ),
-                DeclarePlan::Refused(r) => {
-                    (fsx::Mutation::Unchanged, DeclareOut::Refused(r))
-                }
+                DeclarePlan::Refused(r) => (fsx::Mutation::Unchanged, DeclareOut::Refused(r)),
             })
         },
     );
 
     let result = match outcome {
         Ok(r) => r,
-        Err(Fault::Reason { id: "E-FILE-MISSING", mut params }) => {
+        Err(Fault::Reason {
+            id: "E-FILE-MISSING",
+            mut params,
+        }) => {
             // Should not happen with create: true; render honestly.
             if !params.iter().any(|(k, _)| *k == "dir") {
                 params.push(("dir", parent_display(&p.dir)));
             }
-            return Ok(reason_report(&dctx, "state", &object, "E-FILE-MISSING", params));
+            return Ok(reason_report(
+                &dctx,
+                "state",
+                &object,
+                "E-FILE-MISSING",
+                params,
+            ));
         }
         Err(Fault::Reason { id, params }) => {
             return Ok(reason_report(&dctx, "state", &object, id, params));
@@ -191,7 +201,10 @@ struct CleanedEntry {
 }
 
 enum DeclarePlan {
-    Write { bytes: Vec<u8>, cleaned: Vec<CleanedEntry> },
+    Write {
+        bytes: Vec<u8>,
+        cleaned: Vec<CleanedEntry>,
+    },
     Refused(Refusal),
 }
 
@@ -287,17 +300,30 @@ fn plan_declare(
                 let (at, prefix) = h2_insert_point(source, after);
                 let mut bytes = prefix.as_bytes().to_vec();
                 bytes.extend_from_slice(&serialize_line(&merged));
-                splices.push(Splice { range: at..at, replacement: bytes });
+                splices.push(Splice {
+                    range: at..at,
+                    replacement: bytes,
+                });
             }
             // A non-target section without clean lines has nothing to clean.
         } else {
-            let mut spans: Vec<Span> = sec.clean_lines.iter().map(|s| norm_span(source, s)).collect();
+            let mut spans: Vec<Span> = sec
+                .clean_lines
+                .iter()
+                .map(|s| norm_span(source, s))
+                .collect();
             spans.sort_by_key(|s| s.start);
             let first = spans[0].clone();
             for s in &spans[1..] {
-                splices.push(Splice { range: s.clone(), replacement: Vec::new() });
+                splices.push(Splice {
+                    range: s.clone(),
+                    replacement: Vec::new(),
+                });
             }
-            splices.push(Splice { range: first, replacement: serialize_line(&merged) });
+            splices.push(Splice {
+                range: first,
+                replacement: serialize_line(&merged),
+            });
         }
     }
 
@@ -330,7 +356,7 @@ fn remove(ctx: &mut Ctx, p: &super::StateRemove) -> Result<Report, Fault> {
 
     // A missing state file (DIR exists) is E-STATE-NOTFOUND; --remove never
     // creates files (§6.4.2, §7.3.2).
-    let target = match fsx::state_file(&p.dir)? {
+    let target = match fsx::walk::state_file(&p.dir)? {
         Some(f) => f,
         None => return Ok(state_notfound(&dctx, &object, &p.nick)),
     };
@@ -347,9 +373,19 @@ fn remove(ctx: &mut Ctx, p: &super::StateRemove) -> Result<Report, Fault> {
             create_parents: false,
         },
         |bytes: Vec<u8>, _initial: bool| {
-            let plan = plan_remove(&bytes, &file_for_parse, now, &nick, status_filter.as_deref())?;
+            let plan = plan_remove(
+                &bytes,
+                &file_for_parse,
+                now,
+                &nick,
+                status_filter.as_deref(),
+            )?;
             Ok(match plan {
-                RemovePlan::Write { bytes: new_bytes, rows, delete_file } => {
+                RemovePlan::Write {
+                    bytes: new_bytes,
+                    rows,
+                    delete_file,
+                } => {
                     let mutation = if delete_file {
                         fsx::Mutation::Delete
                     } else {
@@ -365,7 +401,10 @@ fn remove(ctx: &mut Ctx, p: &super::StateRemove) -> Result<Report, Fault> {
 
     let result = match outcome {
         Ok(r) => r,
-        Err(Fault::Reason { id: "E-FILE-MISSING", .. }) => {
+        Err(Fault::Reason {
+            id: "E-FILE-MISSING",
+            ..
+        }) => {
             return Ok(state_notfound(&dctx, &object, &p.nick));
         }
         Err(Fault::Reason { id, params }) => {
@@ -411,7 +450,11 @@ struct SectionRows {
 }
 
 enum RemovePlan {
-    Write { bytes: Vec<u8>, rows: Vec<SectionRows>, delete_file: bool },
+    Write {
+        bytes: Vec<u8>,
+        rows: Vec<SectionRows>,
+        delete_file: bool,
+    },
     Refused(Refusal),
     NotFound,
 }
@@ -485,20 +528,33 @@ fn plan_remove(
             if span.end < source.len() && !preceded_by_blank(source, span.start) {
                 replacement.push(b'\n');
             }
-            splices.push(Splice { range: span, replacement });
+            splices.push(Splice {
+                range: span,
+                replacement,
+            });
             rows.push(SectionRows {
                 status: sec.status.clone(),
                 removed_lines: Some((a, b)),
             });
         } else {
-            let mut spans: Vec<Span> = sec.clean_lines.iter().map(|s| norm_span(source, s)).collect();
+            let mut spans: Vec<Span> = sec
+                .clean_lines
+                .iter()
+                .map(|s| norm_span(source, s))
+                .collect();
             spans.sort_by_key(|s| s.start);
             if !spans.is_empty() {
                 let first = spans[0].clone();
                 for s in &spans[1..] {
-                    splices.push(Splice { range: s.clone(), replacement: Vec::new() });
+                    splices.push(Splice {
+                        range: s.clone(),
+                        replacement: Vec::new(),
+                    });
                 }
-                splices.push(Splice { range: first, replacement: serialize_line(&survivors) });
+                splices.push(Splice {
+                    range: first,
+                    replacement: serialize_line(&survivors),
+                });
                 rows.push(SectionRows {
                     status: sec.status.clone(),
                     removed_lines: None,
@@ -514,7 +570,11 @@ fn plan_remove(
     }
     let bytes = text::apply(source, splices)?;
     let delete_file = is_state_skeleton(&bytes);
-    Ok(RemovePlan::Write { bytes, rows, delete_file })
+    Ok(RemovePlan::Write {
+        bytes,
+        rows,
+        delete_file,
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -531,12 +591,20 @@ struct Refusal {
 
 impl Refusal {
     fn blocking(kind: Option<&'static str>, diagnostics: Vec<Diagnostic>) -> Self {
-        Refusal { kind, diagnostics, e_type: None }
+        Refusal {
+            kind,
+            diagnostics,
+            e_type: None,
+        }
     }
 
     fn e_type(actual: doc::Kind) -> Self {
         let s = actual.as_str();
-        Refusal { kind: Some(s), diagnostics: Vec::new(), e_type: Some(s) }
+        Refusal {
+            kind: Some(s),
+            diagnostics: Vec::new(),
+            e_type: Some(s),
+        }
     }
 }
 
@@ -638,7 +706,7 @@ fn check_dir(ctx: &Ctx, dir: &Path) -> Result<Option<Report>, Fault> {
 
 fn parent_display(dir: &Path) -> String {
     match dir.parent() {
-        Some(p) if !p.as_os_str().is_empty() => names::fold(&fsx::display_path(p)),
+        Some(p) if !p.as_os_str().is_empty() => names::fold(&fsx::walk::display_path(p)),
         _ => ".".to_string(),
     }
 }

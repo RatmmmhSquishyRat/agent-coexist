@@ -22,19 +22,27 @@ use crate::types;
 use crate::Time;
 
 use super::{
-    blocking_report, body_excerpt, file_missing_report, load_file, Loaded, parent_display,
-    sort_diagnostics,
+    blocking_report, body_excerpt, file_missing_report, load_file, parent_display,
+    sort_diagnostics, LoadError,
 };
 
 pub fn check(ctx: &mut Ctx, p: &CheckParams) -> Result<Report, Fault> {
     let object = context::object_of_path(&p.path);
     let dctx = context::diag_context_for_file(ctx, "check", &p.path);
     let file_display = context::display_file(&p.path);
-    match load_file(&p.path, ctx.now, consts::READ_WAIT_MS)? {
-        Loaded::Missing => Ok(file_missing_report(&dctx, "check", &object, &p.path)),
-        Loaded::Busy { id, params } => Ok(reason_report(&dctx, "check", &object, id, params)),
-        Loaded::Blocking(diags) => Ok(blocking_report("check", &object, &file_display, None, diags)),
-        Loaded::Doc(document) => match document.kind {
+    match load_file(&p.path, ctx.now, consts::READ_WAIT_MS) {
+        Err(LoadError::Missing) => Ok(file_missing_report(&dctx, "check", &object, &p.path)),
+        Err(LoadError::Busy { id, params }) => {
+            Ok(reason_report(&dctx, "check", &object, id, params))
+        }
+        Err(LoadError::Blocking(diags)) => Ok(blocking_report(
+            "check",
+            &object,
+            &file_display,
+            None,
+            diags,
+        )),
+        Ok(document) => match document.kind {
             None => Ok(blocking_report(
                 "check",
                 &object,
@@ -42,8 +50,16 @@ pub fn check(ctx: &mut Ctx, p: &CheckParams) -> Result<Report, Fault> {
                 None,
                 document.diagnostics,
             )),
-            Some(kind) => Ok(report_for(ctx, &p.path, &object, &file_display, kind, document)),
+            Some(kind) => Ok(report_for(
+                ctx,
+                &p.path,
+                &object,
+                &file_display,
+                kind,
+                document,
+            )),
         },
+        Err(LoadError::Fault(f)) => Err(f),
     }
 }
 

@@ -40,7 +40,6 @@ use coexist_core::time;
 use coexist_core::wait;
 
 /// One dispatchable invocation produced by [`resolve`].
-#[derive(Debug)]
 pub enum Invocation {
     /// A base command: the validated [`Request`] plus the object its report
     /// first line and diag context are built from.
@@ -101,7 +100,7 @@ pub struct WalkArgs {
 /// `--type` value (spec §7.1.8): the four type words; `profile` is accepted
 /// as an alias for `agent-profile`.
 #[derive(Clone, Copy, Debug)]
-enum KindArg {
+pub(crate) enum KindArg {
     Post,
     Brief,
     Profile,
@@ -355,7 +354,13 @@ pub fn resolve(cli: Cli, ctx: &Ctx) -> Result<Invocation, String> {
                 request: Request::Check(CheckParams { path }),
             })
         }
-        Commands::Profile { path, as_nick, section, message, remove } => {
+        Commands::Profile {
+            path,
+            as_nick,
+            section,
+            message,
+            remove,
+        } => {
             let path = suffixed(path);
             let as_nick = opt_nick(as_nick)?;
             let section = opt_section(section)?;
@@ -366,7 +371,7 @@ pub fn resolve(cli: Cli, ctx: &Ctx) -> Result<Invocation, String> {
                 }
                 (Some(_), None, false) => {
                     return Err(
-                        "--section requires exactly one of -m <content> or --remove".to_string(),
+                        "--section requires exactly one of -m <content> or --remove".to_string()
                     );
                 }
                 (Some(_), Some(_), true) => {
@@ -381,20 +386,39 @@ pub fn resolve(cli: Cli, ctx: &Ctx) -> Result<Invocation, String> {
             Ok(Invocation::Base {
                 command: "profile",
                 kind: DiagKind::File(path.clone()),
-                request: Request::Profile(ProfileParams { path, as_nick, section, action }),
+                request: Request::Profile(ProfileParams {
+                    path,
+                    as_nick,
+                    section,
+                    action,
+                }),
             })
         }
-        Commands::Post { path, as_nick, message, edit } => {
+        Commands::Post {
+            path,
+            as_nick,
+            message,
+            edit,
+        } => {
             let nick = nick_value(as_nick, "--as")?;
             let body = normalize_message(message)?;
             let path = suffixed(path);
             Ok(Invocation::Base {
                 command: "post",
                 kind: DiagKind::File(path.clone()),
-                request: Request::Post(PostParams { path, nick, body, edit }),
+                request: Request::Post(PostParams {
+                    path,
+                    nick,
+                    body,
+                    edit,
+                }),
             })
         }
-        Commands::Subscribe { path, as_nick, cancel } => {
+        Commands::Subscribe {
+            path,
+            as_nick,
+            cancel,
+        } => {
             let nick = nick_value(as_nick, "--as")?;
             let path = suffixed(path);
             Ok(Invocation::Base {
@@ -403,7 +427,16 @@ pub fn resolve(cli: Cli, ctx: &Ctx) -> Result<Invocation, String> {
                 request: Request::Subscribe(SubscribeParams { path, nick, cancel }),
             })
         }
-        Commands::Brief { path, as_nick, message, target, entry, regex, remove, refresh } => {
+        Commands::Brief {
+            path,
+            as_nick,
+            message,
+            target,
+            entry,
+            regex,
+            remove,
+            refresh,
+        } => {
             let as_nick = opt_nick(as_nick)?;
             let entry = opt_entry(entry)?;
             if let Some(pattern) = &regex {
@@ -423,13 +456,12 @@ pub fn resolve(cli: Cli, ctx: &Ctx) -> Result<Invocation, String> {
             let form = if refresh {
                 if target.is_some() || message.is_some() || remove {
                     return Err(
-                        "--refresh cannot be combined with --target, -m or --remove".to_string(),
+                        "--refresh cannot be combined with --target, -m or --remove".to_string()
                     );
                 }
                 BriefForm::Refresh { entry }
             } else if remove {
-                let entry =
-                    entry.ok_or_else(|| "--remove requires --entry <title>".to_string())?;
+                let entry = entry.ok_or_else(|| "--remove requires --entry <title>".to_string())?;
                 if message.is_some() {
                     return Err("-m cannot be combined with --remove".to_string());
                 }
@@ -449,7 +481,10 @@ pub fn resolve(cli: Cli, ctx: &Ctx) -> Result<Invocation, String> {
                 let note = message.ok_or_else(|| {
                     "--entry requires -m (note), --remove or --refresh".to_string()
                 })?;
-                BriefForm::NoteOnly { entry: title, note: normalize_message(note)? }
+                BriefForm::NoteOnly {
+                    entry: title,
+                    note: normalize_message(note)?,
+                }
             } else if let Some(m) = message {
                 BriefForm::SetDescription(normalize_message(m)?)
             } else {
@@ -459,10 +494,20 @@ pub fn resolve(cli: Cli, ctx: &Ctx) -> Result<Invocation, String> {
             Ok(Invocation::Base {
                 command: "brief",
                 kind: DiagKind::File(path.clone()),
-                request: Request::Brief(BriefParams { path, as_nick, form }),
+                request: Request::Brief(BriefParams {
+                    path,
+                    as_nick,
+                    form,
+                }),
             })
         }
-        Commands::State { dir, as_nick, status, for_duration, remove } => {
+        Commands::State {
+            dir,
+            as_nick,
+            status,
+            for_duration,
+            remove,
+        } => {
             let dir = dir.unwrap_or_else(|| PathBuf::from("."));
             if let Some(removed) = remove {
                 let nick = nick_value(removed, "--remove")?;
@@ -497,9 +542,7 @@ pub fn resolve(cli: Cli, ctx: &Ctx) -> Result<Invocation, String> {
                 let status = match status {
                     Some(s) => status_value(s)?,
                     None => {
-                        return Err(
-                            "--status <name> is required in the declare form".to_string()
-                        );
+                        return Err("--status <name> is required in the declare form".to_string());
                     }
                 };
                 let for_secs = match for_duration {
@@ -518,7 +561,12 @@ pub fn resolve(cli: Cli, ctx: &Ctx) -> Result<Invocation, String> {
                 })
             }
         }
-        Commands::ReadNotification { dir, as_nick, since, walk } => {
+        Commands::ReadNotification {
+            dir,
+            as_nick,
+            since,
+            walk,
+        } => {
             let dir = dir.unwrap_or_else(|| PathBuf::from("."));
             let nick = nick_value(as_nick, "--as")?;
             let since = time::since(&since, ctx.now).map_err(|f| {
@@ -542,7 +590,14 @@ pub fn resolve(cli: Cli, ctx: &Ctx) -> Result<Invocation, String> {
                 }),
             })
         }
-        Commands::LookforComment { path, keyword, by, mention, reply_to, comment } => {
+        Commands::LookforComment {
+            path,
+            keyword,
+            by,
+            mention,
+            reply_to,
+            comment,
+        } => {
             let keyword = match keyword {
                 Some(k) if k.is_empty() => {
                     return Err("--keyword must not be empty".to_string());
@@ -557,7 +612,13 @@ pub fn resolve(cli: Cli, ctx: &Ctx) -> Result<Invocation, String> {
                 kind: DiagKind::File(path.clone()),
                 request: Request::LookforComment(LookforCommentParams {
                     path,
-                    filters: Filters { keyword, by, mention, reply_to, comment },
+                    filters: Filters {
+                        keyword,
+                        by,
+                        mention,
+                        reply_to,
+                        comment,
+                    },
                 }),
             })
         }

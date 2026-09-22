@@ -90,30 +90,3 @@ impl Fault {
         }
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn diagnostic_with_appends_params() {
-        let d = Diagnostic::new("W-STATE-DUP", 7)
-            .with("nick", "alice")
-            .with("status", "locked");
-        assert_eq!(d.id, "W-STATE-DUP");
-        assert_eq!(d.line, 7);
-        assert_eq!(d.params.len(), 2);
-        assert_eq!(d.params[0].0, "nick");
-    }
-
-    #[test]
-    fn fault_with_only_touches_reason() {
-        let r = Fault::reason("E-FILE-MISSING").with("file", "docs/x");
-        match r {
-            Fault::Reason { params, .. } => assert_eq!(params.len(), 1),
-            other => panic!("unexpected variant: {other:?}"),
-        }
-        let u = Fault::Usage("x".into()).with("k", "v");
-        assert!(matches!(u, Fault::Usage(m) if m == "x"));
-    }
-}

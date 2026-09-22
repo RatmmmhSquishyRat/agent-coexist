@@ -146,9 +146,7 @@ pub(crate) fn scan(ctx: &mut ScanCtx, sections: &[Section]) -> Vec<StateSection>
             );
         }
         if seen_titles.contains(&sec.title.as_str()) {
-            ctx.push(
-                Diagnostic::new("E-STATUS-DUP", head_no).with("status", status.clone()),
-            );
+            ctx.push(Diagnostic::new("E-STATUS-DUP", head_no).with("status", status.clone()));
         } else {
             seen_titles.push(sec.title.as_str());
         }
@@ -457,21 +455,33 @@ mod tests {
         assert_eq!(
             rows,
             vec![
-                ("W-STATE-CONFLICT", 6),  // bob vs the first valid locked (alice)
-                ("W-STATE-DUP", 7),       // alice again under locked
-                ("W-STATE-ENTRY", 8),     // broken entry
-                ("W-STATE-EXPIRED", 9),   // carol: now == until
-                ("W-STATE-ENTRY", 10),    // lone \r: folded fragment
+                ("W-STATE-CONFLICT", 6), // bob vs the first valid locked (alice)
+                ("W-STATE-DUP", 7),      // alice again under locked
+                ("W-STATE-ENTRY", 8),    // broken entry
+                ("W-STATE-EXPIRED", 9),  // carol: now == until
+                ("W-STATE-ENTRY", 10),   // lone \r: folded fragment
                 ("W-STATUS-NAME", 12),
-                ("W-STATE-RANGE", 14),    // fred: starts after it ends
+                ("W-STATE-RANGE", 14), // fred: starts after it ends
                 ("E-STATUS-DUP", 16),
                 ("W-STATE-CONFLICT", 17), // gina vs alice
             ]
         );
-        let expired = doc.diagnostics.iter().find(|d| d.id == "W-STATE-EXPIRED").unwrap();
-        assert!(expired.params.contains(&("until", "2026-09-17T10:00:00Z".to_string())));
-        let status_name = doc.diagnostics.iter().find(|d| d.id == "W-STATUS-NAME").unwrap();
-        assert!(status_name.params.contains(&("lowercased", "bad-name".to_string())));
+        let expired = doc
+            .diagnostics
+            .iter()
+            .find(|d| d.id == "W-STATE-EXPIRED")
+            .unwrap();
+        assert!(expired
+            .params
+            .contains(&("until", "2026-09-17T10:00:00Z".to_string())));
+        let status_name = doc
+            .diagnostics
+            .iter()
+            .find(|d| d.id == "W-STATUS-NAME")
+            .unwrap();
+        assert!(status_name
+            .params
+            .contains(&("lowercased", "bad-name".to_string())));
         let entry10 = doc
             .diagnostics
             .iter()

@@ -55,11 +55,9 @@ impl Comment {
     }
 }
 
-static MENTION_RE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"(?:^|[^\p{L}\p{N}_@])@([\p{L}\p{N}_][\p{L}\p{N}_-]*)").unwrap()
-});
-static REPLY_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"@#([1-9][0-9]*)").unwrap());
+static MENTION_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"(?:^|[^\p{L}\p{N}_@])@([\p{L}\p{N}_][\p{L}\p{N}_-]*)").unwrap());
+static REPLY_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"@#([1-9][0-9]*)").unwrap());
 
 /// Mentions and replies of a body text (spec §3.4.2), each deduplicated
 /// preserving first-occurrence order.
@@ -110,6 +108,15 @@ fn parse_subscribers(value: &str) -> Option<(Vec<String>, bool)> {
     Some((list, dup))
 }
 
+/// One parsed comment header (§3.3): the fields of `#<seq> <nick>
+/// (<created>[, edited <edited>])`.
+struct ParsedHeader {
+    seq: u64,
+    nick: String,
+    created: DateTime<Utc>,
+    edited: Option<DateTime<Utc>>,
+}
+
 /// The `#…` part of a comment-header H2 (everything after `## `; the line
 /// is known to start with `#`). Grammar (spec §3.3):
 /// `#<seq> <nick> (<created>)` or `#<seq> <nick> (<created>, edited
@@ -117,7 +124,7 @@ fn parse_subscribers(value: &str) -> Option<(Vec<String>, bool)> {
 /// at or above it the header is malformed (E-HEAD, §3.3.1). Only
 /// whitespace may follow the closing `)`. Returns `None` on any
 /// deviation.
-fn parse_header(text: &str) -> Option<(u64, String, DateTime<Utc>, Option<DateTime<Utc>>)> {
+fn parse_header(text: &str) -> Option<ParsedHeader> {
     let rest = text.strip_prefix('#')?;
     let b = rest.as_bytes();
     if b.is_empty() || b[0] < b'1' || b[0] > b'9' {
@@ -130,7 +137,7 @@ fn parse_header(text: &str) -> Option<(u64, String, DateTime<Utc>, Option<DateTi
     // legal seqs are 1..=u64::MAX-1 (§3.3.1): a value that does not fit or
     // equals u64::MAX is a malformed header, not a comment
     let seq: u64 = rest[..i].parse().ok()?;
-    if seq >= u64::MAX {
+    if seq == u64::MAX {
         return None;
     }
     // exactly one space, then the maximal nick run
@@ -140,9 +147,11 @@ fn parse_header(text: &str) -> Option<(u64, String, DateTime<Utc>, Option<DateTi
         return None;
     }
     // exactly one space, then '('
-    let in_paren = after_seq[nick.len()..].strip_prefix(' ')?.strip_prefix('(')?;
+    let in_paren = after_seq[nick.len()..]
+        .strip_prefix(' ')?
+        .strip_prefix('(')?;
     // created: up to the first ',' or ')', no whitespace inside
-    let split = in_paren.find(|c: char| c == ',' || c == ')')?;
+    let split = in_paren.find([',', ')'])?;
     let created_s = &in_paren[..split];
     if created_s.chars().any(char::is_whitespace) {
         return None;
@@ -166,7 +175,12 @@ fn parse_header(text: &str) -> Option<(u64, String, DateTime<Utc>, Option<DateTi
         }
         None
     };
-    Some((seq, nick.to_string(), created, edited))
+    Some(ParsedHeader {
+        seq,
+        nick: nick.to_string(),
+        created,
+        edited,
+    })
 }
 
 /// Scan a post (spec §3): the preamble subscribers line (§3.2), then every
@@ -201,7 +215,7 @@ pub(crate) fn scan(ctx: &mut ScanCtx, preamble: Range<usize>, sections: &[Sectio
             None // matches no structure grammar (§2.1.2)
         } else {
             match property_parts(line) {
-                Some((key, value)) if key == "subscribers" => parse_subscribers(value),
+                Some(("subscribers", value)) => parse_subscribers(value),
                 _ => None,
             }
         };
@@ -241,9 +255,14 @@ pub(crate) fn scan(ctx: &mut ScanCtx, preamble: Range<usize>, sections: &[Sectio
         let parsed = if ctx.lone_cr(head_idx) {
             None
         } else {
-            parse_header(&text[1..])
+            parse_header(text)
         };
-        let (seq, nick, created, edited) = match parsed {
+        let ParsedHeader {
+            seq,
+            nick,
+            created,
+            edited,
+        } = match parsed {
             Some(ok) => ok,
             None => {
                 let disp = names::display_text(raw);
@@ -352,21 +371,23 @@ mod tests {
 
     #[test]
     fn header_grammar_accepts_and_rejects() {
-        let (seq, nick, created, edited) =
-            parse_header("#1 alice (2026-09-17T09:12:00Z)").expect("plain header parses");
-        assert_eq!(seq, 1);
-        assert_eq!(nick, "alice");
-        assert_eq!(crate::time::format(created), "2026-09-17T09:12:00Z");
-        assert!(edited.is_none());
+        let header = parse_header("#1 alice (2026-09-17T09:12:00Z)").expect("plain header parses");
+        assert_eq!(header.seq, 1);
+        assert_eq!(header.nick, "alice");
+        assert_eq!(crate::time::format(header.created), "2026-09-17T09:12:00Z");
+        assert!(header.edited.is_none());
 
-        let (seq, _, _, edited) =
+        let header =
             parse_header("#2 bob (2026-09-17T09:20:00Z, edited 2026-09-17T09:22:00Z)").unwrap();
-        assert_eq!(seq, 2);
-        assert_eq!(crate::time::format(edited.unwrap()), "2026-09-17T09:22:00Z");
+        assert_eq!(header.seq, 2);
+        assert_eq!(
+            crate::time::format(header.edited.unwrap()),
+            "2026-09-17T09:22:00Z"
+        );
 
         // any RFC 3339 offset is accepted and converted to UTC (§2.8.2)
-        let (_, _, created, _) = parse_header("#3 c (2026-09-17T11:00:00+02:00)").unwrap();
-        assert_eq!(crate::time::format(created), "2026-09-17T09:00:00Z");
+        let header = parse_header("#3 c (2026-09-17T11:00:00+02:00)").unwrap();
+        assert_eq!(crate::time::format(header.created), "2026-09-17T09:00:00Z");
 
         // trailing whitespace after ')' is padding; anything else is not
         assert!(parse_header("#1 alice (2026-09-17T09:12:00Z)  ").is_some());
@@ -398,18 +419,14 @@ mod tests {
 
     #[test]
     fn references_extracts_mentions_and_replies() {
-        let (mentions, replies) =
-            references("hi @bob, @#1 and @#2; @@x, mail@work, a@bob, @#1");
+        let (mentions, replies) = references("hi @bob, @#1 and @#2; @@x, mail@work, a@bob, @#1");
         assert_eq!(mentions, vec!["bob".to_string()]);
         assert_eq!(replies, vec![1, 2]);
 
         // start-of-text and space/newline-preceded '@' count; a letter
         // before does not
         let (mentions, _) = references("@alice\nsecond @dave\nmail@nope");
-        assert_eq!(
-            mentions,
-            vec!["alice".to_string(), "dave".to_string()]
-        );
+        assert_eq!(mentions, vec!["alice".to_string(), "dave".to_string()]);
 
         // a run longer than 64 nick characters is not a mention (§2.3)
         let (mentions, _) = references(&format!("@{}", "a".repeat(65)));
@@ -472,7 +489,10 @@ mod tests {
         )
         .expect("parses");
 
-        assert_eq!(doc.post.subscribers, vec!["alice".to_string(), "bob".to_string()]);
+        assert_eq!(
+            doc.post.subscribers,
+            vec!["alice".to_string(), "bob".to_string()]
+        );
         let sp = doc.post.subscribers_span.expect("first line wins");
         assert_eq!(&doc.source[sp.start..sp.end], "- subscribers: alice, bob\n");
 

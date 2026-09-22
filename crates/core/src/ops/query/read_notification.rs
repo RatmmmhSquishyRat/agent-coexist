@@ -13,6 +13,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use super::{dir_error, sort_diagnostics};
+use crate::consts;
 use crate::doc;
 use crate::error::{Diagnostic, Fault};
 use crate::fsx;
@@ -104,14 +105,7 @@ pub fn read_notification(ctx: &mut Ctx, p: &ReadNotificationParams) -> Result<Re
                                     vec![format!("{} L{}", d.id, d.line)],
                                 ));
                             }
-                            post_events(
-                                &parsed,
-                                &p.nick,
-                                since,
-                                now,
-                                &path_key,
-                                &mut events,
-                            );
+                            post_events(&parsed, &p.nick, since, now, &path_key, &mut events);
                         }
                     }
                     Some(doc::Kind::State) => {
@@ -142,7 +136,7 @@ pub fn read_notification(ctx: &mut Ctx, p: &ReadNotificationParams) -> Result<Re
     // canonicalized path (§10.5.2; lexical fallback per §13 Q4).
     let root = std::fs::canonicalize(&p.dir).unwrap_or_else(|_| p.dir.clone());
     for ancestor in fsx::walk::ancestors(&root) {
-        let state_file = match fsx::state_file(&ancestor) {
+        let state_file = match fsx::walk::state_file(&ancestor) {
             Ok(Some(file)) => file,
             Ok(None) => continue,
             Err(Fault::Io { .. }) => {
@@ -154,7 +148,7 @@ pub fn read_notification(ctx: &mut Ctx, p: &ReadNotificationParams) -> Result<Re
             Err(f) => return Err(f),
         };
         let canonical = canonical_of(&state_file);
-        if seen_state.iter().any(|seen| *seen == canonical) {
+        if seen_state.contains(&canonical) {
             continue;
         }
         seen_state.push(canonical);
@@ -184,7 +178,11 @@ pub fn read_notification(ctx: &mut Ctx, p: &ReadNotificationParams) -> Result<Re
         .map(|dir| context::display_file(dir))
         .collect();
     for dir_display in &unreadable {
-        aux.push((dir_display.clone(), "skipped", vec!["unreadable".to_string()]));
+        aux.push((
+            dir_display.clone(),
+            "skipped",
+            vec!["unreadable".to_string()],
+        ));
     }
 
     // Conflicts and own-entry records on the assembled scope.
@@ -242,9 +240,7 @@ pub fn read_notification(ctx: &mut Ctx, p: &ReadNotificationParams) -> Result<Re
             }
             // §10.6.3: expiring needs no window (own valid entries within
             // EXPIRING_WINDOW of ending); expired uses until ∈ [since, now).
-            if entry.valid(now)
-                && (entry.until - now).num_seconds() <= consts::EXPIRING_WINDOW
-            {
+            if entry.valid(now) && (entry.until - now).num_seconds() <= consts::EXPIRING_WINDOW {
                 let minutes = (entry.until - now).num_seconds().max(0) / 60;
                 events.push(Event {
                     when: entry.until,
@@ -346,7 +342,9 @@ fn post_events(
     // First author per seq decides who `@#m` refers to.
     let mut author_of: HashMap<u64, &str> = HashMap::new();
     for comment in &post.comments {
-        author_of.entry(comment.seq).or_insert(comment.nick.as_str());
+        author_of
+            .entry(comment.seq)
+            .or_insert(comment.nick.as_str());
     }
     let subscribed = post.subscribers.iter().any(|s| s == nick);
     for comment in &post.comments {
@@ -449,7 +447,10 @@ fn build_state_info(file: &Path, parsed: &doc::Document) -> StateFileInfo {
         issue = Some(ScanIssue::Blocking(d.id));
         entries.clear();
     } else if let Some(d) = sorted.iter().find(|d| PARTIAL_CLASS.contains(&d.id)) {
-        issue = Some(ScanIssue::Partial { id: d.id, line: d.line });
+        issue = Some(ScanIssue::Partial {
+            id: d.id,
+            line: d.line,
+        });
     }
     StateFileInfo {
         file: file.to_path_buf(),
@@ -491,4 +492,3 @@ fn blocking_id(diags: &[Diagnostic]) -> Option<&'static str> {
         .find(|d| SKIP_CLASS.contains(&d.id))
         .map(|d| d.id)
 }
-

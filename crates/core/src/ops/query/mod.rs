@@ -5,8 +5,9 @@
 //! read path and the §8.3 failure forms identically:
 //!
 //! - [`load_file`]: one shared-locked read plus parse; a missing path, a
-//!   busy lock and read/parse refusals come back as data, OS-level
-//!   conditions as `Fault::Io` (mapped by the CLI per §8.3.5).
+//!   busy lock, read/parse refusals and OS-level conditions all come
+//!   back as `LoadError` data, the OS case as `Fault::Io` (mapped by
+//!   the CLI per §8.3.5).
 //! - [`blocking_report`]: the §8.3.2 form — `file` row, `type` row when
 //!   the H1 kind survived, diagnostic rows, first line `error`.
 //! - [`dir_error`]: the §7.3.3 DIR preconditions.
@@ -41,10 +42,9 @@ use crate::ops::reason_report;
 use crate::report::{Report, Status};
 use crate::Time;
 
-/// Outcome of the shared single-file load.
-enum Loaded {
-    /// Read and parsed; structure diagnostics are on the document.
-    Doc(doc::Document),
+/// Failure half of the shared single-file load: every outcome that
+/// yields no document, business results and faults alike.
+enum LoadError {
     /// Path does not exist (§7.3.2: read commands never create).
     Missing,
     /// Lock wait expired — `E-LOCKED` / `E-INUSE`, exit 3 (§10.2, §11).
@@ -55,27 +55,31 @@ enum Loaded {
     /// Read or parse refused the bytes (`E-UTF8` / `E-TOO-LARGE`): there
     /// is no document, only diagnostics.
     Blocking(Vec<Diagnostic>),
+    /// A fault to propagate (`Fault::Io` for OS-level conditions,
+    /// §8.3.5).
+    Fault(Fault),
 }
 
-/// One shared-locked read plus parse (§10.2 read path). A missing path
-/// and a busy lock are business outcomes, not errors; OS-level
-/// conditions propagate as `Fault::Io`.
-fn load_file(path: &Path, now: Time, wait_ms: u64) -> Result<Loaded, Fault> {
+/// One shared-locked read plus parse (§10.2 read path). Success is the
+/// parsed document; a missing path, a busy lock and read/parse
+/// refusals are business outcomes folded into [`LoadError`], while
+/// OS-level conditions stay `Fault::Io` (mapped by the CLI per §8.3.5).
+fn load_file(path: &Path, now: Time, wait_ms: u64) -> Result<doc::Document, LoadError> {
     match std::fs::metadata(path) {
         Ok(_) => {}
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Loaded::Missing),
-        Err(e) => return Err(Fault::io("read", path.to_path_buf(), e)),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Err(LoadError::Missing),
+        Err(e) => return Err(LoadError::Fault(Fault::io("read", path.to_path_buf(), e))),
     }
     let bytes = match fsx::read(path, wait_ms, None) {
         Ok(bytes) => bytes,
-        Err(Fault::Reason { id, params }) => return Ok(Loaded::Busy { id, params }),
-        Err(Fault::Diagnostics(diags)) => return Ok(Loaded::Blocking(diags)),
-        Err(f) => return Err(f),
+        Err(Fault::Reason { id, params }) => return Err(LoadError::Busy { id, params }),
+        Err(Fault::Diagnostics(diags)) => return Err(LoadError::Blocking(diags)),
+        Err(f) => return Err(LoadError::Fault(f)),
     };
     match doc::parse(bytes, path, now) {
-        Ok(document) => Ok(Loaded::Doc(document)),
-        Err(Fault::Diagnostics(diags)) => Ok(Loaded::Blocking(diags)),
-        Err(f) => Err(f),
+        Ok(document) => Ok(document),
+        Err(Fault::Diagnostics(diags)) => Err(LoadError::Blocking(diags)),
+        Err(f) => Err(LoadError::Fault(f)),
     }
 }
 
@@ -153,10 +157,7 @@ fn dir_error(ctx: &Ctx, command: &'static str, dir: &Path) -> Result<Option<Repo
             command,
             &object,
             "E-DIR-MISSING",
-            vec![
-                ("dir", object.clone()),
-                ("parent", parent_display(&object)),
-            ],
+            vec![("dir", object.clone()), ("parent", parent_display(&object))],
         ))),
         Err(e) => Err(Fault::io("read", dir.to_path_buf(), e)),
     }

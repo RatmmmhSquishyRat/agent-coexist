@@ -30,10 +30,21 @@ use coexist_core::report::{Report, Row};
 /// Render `report` into `out` (spec §8). The first line and every row end
 /// with `\n`.
 pub fn render(report: &Report, dctx: &diag::Context, out: &mut dyn Write) -> std::io::Result<()> {
-    writeln!(out, "{}  {}  {}", report.status.as_str(), report.command, report.object)?;
+    writeln!(
+        out,
+        "{}  {}  {}",
+        report.status.as_str(),
+        report.command,
+        report.object
+    )?;
     for row in &report.rows {
         match row {
-            Row::Fields { key, values, indent, width } => {
+            Row::Fields {
+                key,
+                values,
+                indent,
+                width,
+            } => {
                 if values.is_empty() {
                     writeln!(out, "{}{}", " ".repeat(*indent), key)?;
                 } else {
@@ -51,7 +62,11 @@ pub fn render(report: &Report, dctx: &diag::Context, out: &mut dyn Write) -> std
                 }
             }
             Row::Diagnostic(diagnostic) => {
-                let level = if diag::is_error(diagnostic.id) { "error" } else { "warn" };
+                let level = if diag::is_error(diagnostic.id) {
+                    "error"
+                } else {
+                    "warn"
+                };
                 let rendered = diag::render(diagnostic, dctx);
                 writeln!(
                     out,

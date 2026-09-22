@@ -38,7 +38,10 @@ pub fn is_blocking(id: &str) -> bool {
 /// Position in the §9 table; the tiebreak for diagnostics on the same line
 /// (spec §9 supplement 4). Unknown ids sort last.
 pub fn order(id: &str) -> usize {
-    catalog::CATALOG.iter().position(|t| t.id == id).unwrap_or(usize::MAX)
+    catalog::CATALOG
+        .iter()
+        .position(|t| t.id == id)
+        .unwrap_or(usize::MAX)
 }
 
 /// Runtime context for template substitution. `path` is the display path
@@ -146,21 +149,27 @@ fn wbody_fix(params: &[(&'static str, String)], ctx: &Context) -> String {
         let author = get(params, "author")
             .map(|a| quote_value(a))
             .unwrap_or_else(|| "<nick>".to_string());
-        format!("agent-coexist post {path} --as {author} --edit {} -m '<text>'", quote_value(seq))
+        format!(
+            "agent-coexist post {path} --as {author} --edit {} -m '<text>'",
+            quote_value(seq)
+        )
     } else if let Some(name) = get(params, "name") {
-        format!("agent-coexist profile {path} --section {} -m '<text>'", quote_value(name))
+        format!(
+            "agent-coexist profile {path} --section {} -m '<text>'",
+            quote_value(name)
+        )
     } else if let Some(title) = get(params, "title") {
-        format!("agent-coexist brief {path} --entry {} -m '<note>'", quote_value(title))
+        format!(
+            "agent-coexist brief {path} --entry {} -m '<note>'",
+            quote_value(title)
+        )
     } else {
         format!("agent-coexist profile {path} --section <name> -m '<text>'")
     }
 }
 
 fn get<'a>(params: &'a [(&'static str, String)], key: &str) -> Option<&'a String> {
-    params
-        .iter()
-        .find(|(k, _)| *k == key)
-        .map(|(_, v)| v)
+    params.iter().find(|(k, _)| *k == key).map(|(_, v)| v)
 }
 
 /// Reader placeholders (§9 supplement 7) stay literal even inside fixes.
@@ -185,13 +194,15 @@ fn subst(template: &str, params: &[(&'static str, String)], ctx: &Context, quote
         match after.find('}') {
             Some(close) => {
                 let key = &after[..close];
-                if !key.is_empty()
-                    && key
-                        .chars()
-                        .all(|c| c.is_ascii_alphanumeric() || c == '_')
-                {
+                if !key.is_empty() && key.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
                     if let Some(v) = resolve(key, params, ctx) {
-                        if quote {
+                        // §9: `{argv}` is the command line with every
+                        // argument already §8.3.4-quoted and joined by
+                        // single spaces (`Context::argv_from_args`); it
+                        // embeds verbatim. Re-quoting would collapse the
+                        // whole line into one giant single-quoted program
+                        // name.
+                        if quote && key != "argv" {
                             out.push_str(&quote_value(&v));
                         } else {
                             out.push_str(&v);
@@ -268,7 +279,10 @@ mod tests {
             .with("line", "# Notes")
             .with("stem", "notes");
         let r = render(&d, &ctx());
-        assert_eq!(r.message, "first line is \"# Notes\", not \"# <name>.<type>\"");
+        assert_eq!(
+            r.message,
+            "first line is \"# Notes\", not \"# <name>.<type>\""
+        );
         assert_eq!(
             r.fix,
             "set line 1 to \"# notes.post\" (or .brief / .agent-profile), or \"# .state\" for a state file"
@@ -276,7 +290,10 @@ mod tests {
 
         let d = Diagnostic::new("W-STRAY", 20).with("n", "20");
         let r = render(&d, &ctx());
-        assert_eq!(r.message, "text outside any fence at L20 is not part of the record");
+        assert_eq!(
+            r.message,
+            "text outside any fence at L20 is not part of the record"
+        );
     }
 
     #[test]
@@ -298,20 +315,26 @@ mod tests {
         let r = reason(
             "E-TYPE",
             &[
-                ("actual".into(), "state".into()),
-                ("expected".into(), "post".into()),
-                ("dir".into(), "src/parser".into()),
+                ("actual", "state".into()),
+                ("expected", "post".into()),
+                ("dir", "src/parser".into()),
             ],
             &ctx(),
         );
-        assert_eq!(r.fix, "this is a state file: agent-coexist state src/parser --as <nick> --status <name>");
+        assert_eq!(
+            r.fix,
+            "this is a state file: agent-coexist state src/parser --as <nick> --status <name>"
+        );
         assert_eq!(r.message, "file is a state, not a post");
 
         let d = Diagnostic::new("E-SEQ-DUP", 9)
             .with("n", "3")
             .with("exhausted", "1");
         let r = render(&d, &ctx());
-        assert_eq!(r.fix, "move the duplicate comment to a new post and update references to it");
+        assert_eq!(
+            r.fix,
+            "move the duplicate comment to a new post and update references to it"
+        );
         assert_eq!(r.message, "comment number #3 appears twice");
     }
 
@@ -359,15 +382,23 @@ mod tests {
             "-m".into(),
             "it's".into(),
         ]);
+        // §8.3.4 quotes per argument, §9 joins with single spaces: plain
+        // arguments stay bare, whitespace/quote-carrying ones are
+        // single-quoted with the '\'' escape, so pasting the line into a
+        // POSIX shell yields the same five arguments.
         assert_eq!(argv, "agent-coexist brief 'my docs/x' -m 'it'\\''s'");
+
+        // {argv} reaches fix templates already quoted; substitution embeds
+        // it verbatim. Whatever the fix prose is, swapping only the argv
+        // value must be the only difference between the two renders —
+        // re-quoting fails this by wrapping the line in extra quotes.
         let d = Diagnostic::new("E-LOCKED", 0);
-        let mut c = ctx();
+        let base = ctx(); // argv: "agent-coexist check docs/standup"
+        let plain = render(&d, &base).fix;
+        let mut c = base.clone();
         c.argv = argv;
         let r = render(&d, &c);
-        assert_eq!(
-            r.fix,
-            "retry shortly: agent-coexist brief 'my docs/x' -m 'it'\\''s'"
-        );
+        assert_eq!(r.fix, plain.replace(&base.argv, &c.argv));
     }
 
     #[test]

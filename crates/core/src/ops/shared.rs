@@ -12,6 +12,7 @@
 //! cannot be fully incorporated carries an [`ScanIssue`] and the consumer
 //! renders the §10.5.6 `skipped` / `partial` rows.
 
+use std::cmp::Reverse;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -190,7 +191,10 @@ pub fn read_state_file(ctx: &mut Ctx, file: &Path) -> StateFileInfo {
                     .iter()
                     .find(|x| diag::is_error(x.id) && !diag::is_blocking(x.id))
                 {
-                    info.issue = Some(ScanIssue::Partial { id: first.id, line: first.line });
+                    info.issue = Some(ScanIssue::Partial {
+                        id: first.id,
+                        line: first.line,
+                    });
                 }
             }
         }
@@ -215,7 +219,7 @@ pub fn collect(ctx: &mut Ctx, dir: &Path, walk: &fsx::walk::Options) -> StateSco
     // Self + ancestors on the normalized path.
     let (root_norm, _root_ok, _failed) = normalize_dir(dir);
     for d in chain_dirs(&root_norm) {
-        match fsx::state_file(&d) {
+        match fsx::walk::state_file(&d) {
             Ok(Some(f)) => files.push(read_state_file(ctx, &f)),
             Ok(None) => {}
             Err(_) => push_uniq(&mut unreadable, display_of(&d)),
@@ -250,7 +254,7 @@ pub fn collect(ctx: &mut Ctx, dir: &Path, walk: &fsx::walk::Options) -> StateSco
         if parent.as_path() == dir {
             continue;
         }
-        match fsx::state_file(&parent) {
+        match fsx::walk::state_file(&parent) {
             Ok(Some(sf)) => files.push(read_state_file(ctx, &sf)),
             Ok(None) => {}
             Err(_) => push_uniq(&mut unreadable, display_of(&parent)),
@@ -311,12 +315,7 @@ pub fn assemble(dir: &Path, files: Vec<StateFileInfo>, unreadable_dirs: Vec<Stri
     }
 
     // Ancestors near → far (deepest first); descendants canonical-ascending.
-    ancestors.sort_by(|a, b| {
-        b.dir
-            .components()
-            .count()
-            .cmp(&a.dir.components().count())
-    });
+    ancestors.sort_by(|a, b| b.dir.components().count().cmp(&a.dir.components().count()));
     ancestors.dedup_by(|a, b| a.dir == b.dir);
     descendants.sort_by(|a, b| a.dir.cmp(&b.dir));
     descendants.dedup_by(|a, b| a.dir == b.dir);
@@ -347,7 +346,7 @@ pub fn functional_lock(ctx: &mut Ctx, target_file: &Path, as_nick: Option<&str>)
     let mut files: Vec<StateFileInfo> = Vec::new();
     let mut unreadable: Vec<String> = Vec::new();
     for d in chain_dirs(&root_norm) {
-        match fsx::state_file(&d) {
+        match fsx::walk::state_file(&d) {
             Ok(Some(f)) => files.push(read_state_file(ctx, &f)),
             Ok(None) => {}
             Err(_) => push_uniq(&mut unreadable, display_of(&d)),
@@ -399,7 +398,7 @@ pub fn conflicts_with(scope: &StateScope, now: Time, nick: &str) -> Vec<Conflict
         .map(|(i, _)| i)
         .collect();
     let mut out = Vec::new();
-    for (i, (rec, dir)) in all.iter().enumerate() {
+    for (rec, dir) in all.iter() {
         if rec.nick == nick {
             continue;
         }
@@ -527,7 +526,7 @@ fn chain_dirs(root: &Path) -> Vec<PathBuf> {
     }
     let depth = |p: &Path| p.components().count();
     let mut rest = out.split_off(1);
-    rest.sort_by(|a, b| depth(b).cmp(&depth(a)));
+    rest.sort_by_key(|p| Reverse(depth(p)));
     rest.dedup();
     out.extend(rest);
     out
@@ -541,7 +540,7 @@ fn parent_dir(p: &Path) -> PathBuf {
 }
 
 fn display_of(p: &Path) -> String {
-    names::fold(&fsx::display_path(&lexical_display_path(p)))
+    names::fold(&fsx::walk::display_path(&lexical_display_path(p)))
 }
 
 /// Strip the Windows verbatim prefix `fs::canonicalize` adds (`\\?\C:\…` →
