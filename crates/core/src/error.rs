@@ -1,0 +1,119 @@
+//! Fault and Diagnostic: the error currency of the whole core crate
+//! (spec §1 "阻断诊断", §8.3, §9).
+//!
+//! `Diagnostic` is one entry of the frozen §9 catalog, anchored at a 1-based
+//! line of the source file, carrying the substitution params for the catalog
+//! template. `Fault` is the single error enum returned by core entry points;
+//! ids outside the §9 table are never invented.
+
+use std::path::PathBuf;
+
+/// One catalog diagnostic anchored at a 1-based line of the parsed file.
+///
+/// `params` keys are the `{placeholder}` names of the §9 templates. Values
+/// taken from file content MUST already be folded per §10.9.4 (see
+/// [`crate::names::display_text`]) when the param is created; rendering never
+/// re-folds.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Diagnostic {
+    pub id: &'static str,
+    pub line: usize,
+    pub params: Vec<(&'static str, String)>,
+}
+
+impl Diagnostic {
+    pub fn new(id: &'static str, line: usize) -> Self {
+        Diagnostic {
+            id,
+            line,
+            params: Vec::new(),
+        }
+    }
+
+    /// Append a substitution param. For duplicate keys the first occurrence
+    /// wins at render time.
+    pub fn with(mut self, key: &'static str, value: impl Into<String>) -> Self {
+        self.params.push((key, value.into()));
+        self
+    }
+}
+
+/// The single core error type (spec §8.3 failure forms, §11 exit codes).
+#[derive(Debug)]
+pub enum Fault {
+    /// Usage error: one `error: ...` line on stderr, exit 2 (spec §7.1.7).
+    Usage(String),
+    /// File-level diagnostics that abort the operation (e.g. `E-UTF8`,
+    /// `E-TOO-LARGE`); rendered like `check` diagnostic rows, exit 1.
+    Diagnostics(Vec<Diagnostic>),
+    /// Reason-form failure: the §9 catalog row for `id` supplies the reason
+    /// and fix text; params carry the runtime values (spec §8.3.1).
+    Reason {
+        id: &'static str,
+        params: Vec<(&'static str, String)>,
+    },
+    /// Unclassified OS-level I/O failure (spec §8.3.5): the action verb,
+    /// the path involved and the original error are all preserved.
+    Io {
+        action: &'static str,
+        path: PathBuf,
+        source: std::io::Error,
+    },
+    /// Cooperative cancellation (wait commands): exit 130.
+    Cancelled,
+}
+
+impl Fault {
+    /// Start a reason-form fault for a §9 catalog id.
+    pub fn reason(id: &'static str) -> Self {
+        Fault::Reason {
+            id,
+            params: Vec::new(),
+        }
+    }
+
+    /// Append a substitution param to a reason-form fault. On other variants
+    /// this is a documented no-op (they carry no param list).
+    pub fn with(mut self, key: &'static str, value: impl Into<String>) -> Self {
+        if let Fault::Reason { params, .. } = &mut self {
+            params.push((key, value.into()));
+        }
+        self
+    }
+
+    /// Wrap an OS I/O error with the action verb and the path it happened on.
+    pub fn io(action: &'static str, path: PathBuf, error: std::io::Error) -> Self {
+        Fault::Io {
+            action,
+            path,
+            source: error,
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn diagnostic_with_appends_params() {
+        let d = Diagnostic::new("W-STATE-DUP", 7)
+            .with("nick", "alice")
+            .with("status", "locked");
+        assert_eq!(d.id, "W-STATE-DUP");
+        assert_eq!(d.line, 7);
+        assert_eq!(d.params.len(), 2);
+        assert_eq!(d.params[0].0, "nick");
+    }
+
+    #[test]
+    fn fault_with_only_touches_reason() {
+        let r = Fault::reason("E-FILE-MISSING").with("file", "docs/x");
+        match r {
+            Fault::Reason { params, .. } => assert_eq!(params.len(), 1),
+            other => panic!("unexpected variant: {other:?}"),
+        }
+        let u = Fault::Usage("x".into()).with("k", "v");
+        assert!(matches!(u, Fault::Usage(m) if m == "x"));
+    }
+}

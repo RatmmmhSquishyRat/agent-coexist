@@ -1,0 +1,168 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build-test-install:
+    name: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain (MSRV, per rust-toolchain.toml)
+        uses: dtolnay/rust-toolchain@1.89.0
+        with:
+          components: rustfmt, clippy
+
+      - name: Format check
+        run: cargo fmt --all -- --check
+
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+      - name: Tests
+        run: cargo test --workspace --release
+
+      - name: Release build
+        run: cargo build --release
+
+      - name: Install into an isolated prefix
+        shell: bash
+        run: cargo install --path crates/cli --root "$RUNNER_TEMP/install"
+
+      - name: "Smoke: installed binary end-to-end (real mechanism exercise)"
+        shell: bash
+        run: |
+          set -euo pipefail
+          BIN="$RUNNER_TEMP/install/bin/agent-coexist"
+          DEMO="$(mktemp -d)"
+          cd "$DEMO"
+          mkdir -p agents docs src/parser
+
+          first_line() { printf '%s\n' "${1%%$'\n'*}"; }
+
+          # Two frozen clocks so the notification window [since, now) is
+          # non-empty by construction.
+          NOW930="AGENT_COEXIST_NOW=2026-09-17T09:30:00Z"
+          NOW="AGENT_COEXIST_NOW=2026-09-17T10:00:00Z"
+
+          "$BIN" --version
+          "$BIN" --help >/dev/null
+
+          out="$(env $NOW "$BIN" profile agents/alice --section role -m 'Rust implementer.')"
+          test "$(first_line "$out")" = "ok  profile  agents/alice"
+          test -f agents/alice.agent-besties.md
+
+          out="$(env $NOW "$BIN" post docs/standup --as alice -m 'Daily standup thread. @bob please post your status here.')"
+          test "$(first_line "$out")" = "ok  post  docs/standup"
+          out="$(env $NOW930 "$BIN" post docs/standup --as bob -m '@#1 parser done, see src/parser/mod.rs. @alice review?')"
+          test "$(first_line "$out")" = "ok  post  docs/standup"
+          out="$(env $NOW "$BIN" subscribe docs/standup --as bob)"
+          test "$(first_line "$out")" = "ok  subscribe  docs/standup"
+
+          # brief path is relative to the brief file (docs/), not cwd
+          printf 'pub fn parse(input: &str) -> Result<(), ()> {\n    Ok(())\n}\n' > src/parser/mod.rs
+          out="$(env $NOW "$BIN" brief docs/onboarding --target ../src/parser/mod.rs --entry 'parser entry point' -m 'Start here.')"
+          test "$(first_line "$out")" = "ok  brief  docs/onboarding"
+
+          out="$(env $NOW "$BIN" state src/parser --as alice --status locked)"
+          test "$(first_line "$out")" = "ok  state  src/parser"
+
+          out="$(env $NOW "$BIN" check docs/standup)"
+          test "$(first_line "$out")" = "ok  check  docs/standup"
+          out="$(env $NOW "$BIN" read-brief docs/onboarding)"
+          test "$(first_line "$out")" = "ok  read-brief  docs/onboarding"
+          out="$(env $NOW "$BIN" check-state src)"
+          test "$(first_line "$out")" = "ok  check-state  src"
+          out="$(env $NOW "$BIN" lookfor-comment docs/standup --by bob)"
+          test "$(first_line "$out")" = "ok  lookfor-comment  docs/standup"
+          out="$(env $NOW "$BIN" list .)"
+          test "$(first_line "$out")" = "ok  list  ."
+
+          # #2 is both @#1 (alice's comment) and @alice → reply wins over mention
+          out="$(env $NOW "$BIN" read-notification . --as alice --since 1h)"
+          test "$(first_line "$out")" = "ok  read-notification  ."
+          printf '%s\n' "$out" | grep -E '^  reply +2026-09-17T09:30:00Z +docs/standup +#2 +bob '
+
+          set +e
+          out="$(env $NOW "$BIN" check does/not/exist 2>/dev/null)"
+          rc=$?
+          set -e
+          test "$rc" -eq 1
+          test "$(first_line "$out")" = "error  check  does/not/exist"
+
+          set +e
+          out="$(env $NOW "$BIN" post docs/standup --as 'bad nick!' -m x 2>/dev/null)"
+          rc=$?
+          set -e
+          test "$rc" -eq 2
+          test -z "$out"
+
+          echo "smoke OK on ${{ matrix.os }}"
+
+      - name: "Smoke: wait command observes a real change"
+        shell: bash
+        run: |
+          set -euo pipefail
+          BIN="$RUNNER_TEMP/install/bin/agent-coexist"
+          DEMO="$(mktemp -d)"
+          cd "$DEMO"
+          mkdir -p docs
+          AGENT_COEXIST_NOW=2026-09-17T10:00:00Z "$BIN" post docs/standup --as alice -m 'seed' >/dev/null
+
+          "$BIN" wait-post docs/standup --as bob >wait.out 2>wait.err &
+          WPID=$!
+          cleanup() { kill "$WPID" 2>/dev/null || true; wait "$WPID" 2>/dev/null || true; }
+          trap cleanup EXIT
+
+          ready=0
+          for _ in $(seq 1 30); do
+            if grep -F 'waiting  wait-post  docs/standup' wait.err >/dev/null 2>&1; then
+              ready=1
+              break
+            fi
+            if ! kill -0 "$WPID" 2>/dev/null; then
+              echo "wait-post exited before the ready line"
+              cat wait.err
+              cat wait.out
+              exit 1
+            fi
+            sleep 1
+          done
+          if [ "$ready" -ne 1 ]; then
+            echo "wait-post never printed the ready line"
+            cat wait.err
+            exit 1
+          fi
+
+          AGENT_COEXIST_NOW=2026-09-17T10:00:05Z "$BIN" post docs/standup --as alice -m '@bob your turn' >/dev/null
+
+          for _ in $(seq 1 30); do
+            kill -0 "$WPID" 2>/dev/null || break
+            sleep 1
+          done
+          if kill -0 "$WPID" 2>/dev/null; then
+            echo "wait-post did not finish after a qualifying change"
+            cat wait.err
+            exit 1
+          fi
+          set +e
+          wait "$WPID"
+          rc=$?
+          set -e
+          trap - EXIT
+          test "$rc" -eq 0
+          first="$(awk 'NR==1{print; exit}' wait.out)"
+          test "$first" = "ok  wait-post  docs/standup"
+          grep -F 'waiting  wait-post  docs/standup' wait.err
+          echo "wait smoke OK on ${{ matrix.os }}"

@@ -1,0 +1,30 @@
+# Changelog
+
+All notable changes to this project are documented here. The format follows
+[Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning is
+[SemVer](https://semver.org/spec/2.0.0.html).
+
+## [0.1.0] - 2026-09-22
+
+Initial release.
+
+### Added
+
+- Eleven base commands over four local Markdown collaboration file types
+  (`.agent-besties.md`): `list`, `check`, `profile`, `post`, `subscribe`,
+  `brief`, `state`, `read-notification`, `lookfor-comment`, `read-brief`,
+  `check-state`.
+- Raw-byte parsing with splice-based writes: unknown hand-written content,
+  original line endings and untouched bytes are preserved; only the ranges a
+  command targets change.
+- Cooperative file locking between `agent-coexist` processes (shared reads,
+  exclusive writes, bounded waits with fast-fail/queue budgets), directory
+  walking with gitignore-family rules, brief-target SHA-256 verification
+  with fresh/shifted/stale/unchecked states, and directory-state conflict
+  detection with functional locks for `profile`/`brief` writes.
+- Three optional wait commands (`wait`, `wait-post`, `wait-state`) that
+  block until a qualifying semantic change of a single collaboration file,
+  with Ctrl-C cancellation (exit 130).
+- Structured first-line/status output with two-space column rows,
+  diagnostics with `why`/`fix`, stderr-only progress, and exit codes
+  0/1/2/3 (+130 for cancelled waits).

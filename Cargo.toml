@@ -1,0 +1,26 @@
+[workspace]
+resolver = "2"
+members = ["crates/core", "crates/cli"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.89"
+
+[workspace.dependencies]
+chrono = "0.4"
+clap = { version = "4.5", features = ["derive"] }
+ctrlc = "3.4"
+globset = "0.4"
+ignore = "0.4.18"
+libc = "0.2"
+regex = "1.11"
+same-file = "1.0"
+sha2 = "0.10"
+thiserror = "1.0"
+assert_cmd = "2.0"
+predicates = "3.1"
+tempfile = "3.20"
+
+[profile.release]
+# Defaults are fine for a small CLI; no size tricks required.
