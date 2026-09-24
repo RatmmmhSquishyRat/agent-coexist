@@ -1,143 +1,123 @@
 # agent-coexist
 
-A small local CLI that lets software agents (and people) collaborate through
-plain Markdown files: introduce themselves, leave threaded comments, hand
-over pointers to source files, and declare directory state such as locks.
+[![License: MIT](https://img.shields.io/badge/License-MIT-informational.svg)](LICENSE) · [CI](https://github.com/RatmmmhSquishyRat/agent-coexist/actions/workflows/ci.yml)
 
-Everything lives in ordinary files ending in `.agent-besties.md` — no server,
-no database, no background service. Four file types, recognized by their
-first line:
+![Two agents wave hello from neighboring laptop screens.](docs/assets/cover.webp)
 
-| Type | First line | Holds |
-|---|---|---|
-| `post` | `# <name>.post` | Threaded comments (`## #<n> <nick> (<time>)` headings, fenced bodies) and a subscriber list |
-| `brief` | `# <name>.brief` | A description plus entries pointing at target files with SHA-256 hashes (and optional regexes) |
-| `agent-profile` | `# <name>.agent-profile` | Sections describing an agent (`role`, `scope`, `prefer`, …) |
-| `state` | `# .state` | Per-status declarations (`<nick> <start>..<until>`) describing the file's directory subtree |
+agent-coexist is a small local CLI that lets software agents — and the
+people working next to them — hold threaded conversations, hand over
+pointers to source files, and declare directory state, all through plain
+Markdown files that live next to the code. There is no server, no
+database, and no background service: everything is ordinary files you can
+read, diff, and edit yourself.
 
-Built files keep their unknown hand-written content, original line endings
-and byte layout: writes are splices, never full re-serializations.
+Because it is all files, the tools you already have understand it: git
+tracks the history, editors render the threads, and grep finds anything.
 
-## Build and install
+## Install
 
-Requires Rust 1.89 or newer (the repo pins 1.89.0 in `rust-toolchain.toml`).
+Requires Rust 1.89 or newer. The examples in this README assume a POSIX
+shell; on Windows, Git Bash works as-is.
 
 ```sh
-# from the repository root
-cargo build --release
-
-# install the `agent-coexist` binary from source
+git clone https://github.com/RatmmmhSquishyRat/agent-coexist.git
+cd agent-coexist
 cargo install --path crates/cli --locked
 agent-coexist --version
 ```
 
-Run `cargo test --workspace` for the mechanism tests.
+## Your first two-agent conversation
 
-## Commands
-
-`PATH` arguments may omit the `.agent-besties.md` suffix (it is appended
-automatically). `DIR` arguments default to the current directory; directory
-scans are recursive. Text bodies are always passed with `-m`; what `-m`
-means depends on the command (each command's `--help` says which).
-
-Eleven base commands:
-
-```text
-agent-coexist list [DIR] [--type <type>]... [--include <glob>]... [--exclude <glob>]... [--no-ignore]
-agent-coexist check <PATH>
-agent-coexist profile <PATH> [--as <nick>] [--section <name> (-m <content> | --remove)]
-agent-coexist post <PATH> --as <nick> -m <content> [--edit <n>]
-agent-coexist subscribe <PATH> --as <nick> [--cancel]
-agent-coexist brief <PATH> [--as <nick>]                                    # create skeleton / unchanged
-agent-coexist brief <PATH> [--as <nick>] -m <description>
-agent-coexist brief <PATH> [--as <nick>] --target <path> [--entry <title>] [--regex <pattern>] [-m <note>]
-agent-coexist brief <PATH> [--as <nick>] --entry <title> -m <note>
-agent-coexist brief <PATH> [--as <nick>] --entry <title> --remove
-agent-coexist brief <PATH> [--as <nick>] [--entry <title>] --refresh
-agent-coexist state [DIR] --as <nick> --status <name> [--for <duration>]
-agent-coexist state [DIR] --remove <nick> [--as <nick>] [--status <name>]
-agent-coexist read-notification [DIR] --as <nick> --since <time|duration> [--include <glob>]... [--exclude <glob>]... [--no-ignore]
-agent-coexist lookfor-comment <PATH> [--keyword <text>] [--by <nick>] [--mention <nick>] [--reply-to <n>] [--comment <n>]
-agent-coexist read-brief <PATH> [--entry <title>]
-agent-coexist check-state [DIR] [--include <glob>]... [--exclude <glob>]... [--no-ignore]
-```
-
-Three optional wait commands (extension; the base CLI works without them):
-
-```text
-agent-coexist wait <PATH>                       # any of the four types; exits on any content change
-agent-coexist wait-post <PATH> [--as <nick>]    # a post; filter: mentions/replies involving the nick
-agent-coexist wait-state [DIR] [--status <name>]  # exactly DIR/state.agent-besties.md; filter: status
-```
-
-Wait commands print a `waiting  <command>  <object>` line to stderr once
-the baseline snapshot is taken, then poll the single file once per second
-until a qualifying change, Ctrl-C (exit 130), or a real failure.
-
-## Example session
+Two agents — two terminal sessions, two AI coding helpers, or one of
+each — share one directory:
 
 ```sh
-mkdir -p /tmp/demo/agents /tmp/demo/docs /tmp/demo/src/parser
-cd /tmp/demo
-printf 'pub fn parse(_input: &str) -> Result<(), ()> { Ok(()) }\n' > src/parser/mod.rs
-
 # alice introduces herself
 agent-coexist profile agents/alice --section role -m 'Rust implementer.'
 
-# alice starts a standup thread and subscribes bob
-agent-coexist post docs/standup --as alice -m 'Daily standup thread. @bob please post your status here.'
-agent-coexist subscribe docs/standup --as bob
+# alice opens a thread and pings bob
+agent-coexist post docs/standup --as alice -m 'Daily standup. @bob please post your status here.'
 
-# bob replies (comment #2, mentioning alice)
-agent-coexist post docs/standup --as bob -m '@#1 parser done, see src/parser/mod.rs. @alice review?'
-
-# hand over a pointer to a source file (path is relative to the brief file)
-agent-coexist brief docs/onboarding --target ../src/parser/mod.rs --entry 'parser entry point' -m 'Start here.'
-
-# declare a two-hour lock on src/parser
-agent-coexist state src/parser --as alice --status locked
-
-# read things back
-agent-coexist check docs/standup
-agent-coexist read-brief docs/onboarding
-agent-coexist check-state src
-agent-coexist read-notification . --as alice --since 1h
-agent-coexist lookfor-comment docs/standup --by bob
-agent-coexist list .
+# bob replies to comment #1 and mentions alice
+agent-coexist post docs/standup --as bob -m '@#1 parser done. @alice review?'
 ```
 
-## Output conventions
+The whole conversation is one human-readable file,
+`docs/standup.agent-besties.md` (timestamps below are illustrative):
 
-* Every result's first line is `<status>  <command>  <object>` with status
-  `ok`, `warn` or `error`. All other lines are two-space-indented columns;
-  splitting any line on two or more spaces yields its columns.
-* List-style outputs end with a `total` row. Diagnostics carry a `why` and
-  an actionable `fix` line; `fix` commands target POSIX shells (Git Bash on
-  Windows).
-* Progress (`scanning N dirs, M files...`) appears on stderr only when
-  stderr is a TTY; stdout is always clean for redirection.
+````markdown
+# standup.post
 
-## Exit codes
+## #1 alice (2026-09-24T09:12:00Z)
 
-| Code | Meaning |
-|---|---|
-| 0 | First line `ok` or `warn` — note `warn` is also 0; detect conflicts by parsing the first line |
-| 1 | First line `error`: diagnostics, type mismatches, missing files/entries, I/O failures |
-| 2 | Usage error (one `error: ...` line on stderr, nothing on stdout) |
-| 3 | Retryable: file locked by another `agent-coexist` process, file held by another program, or a functional lock (`E-FLOCKED` — retry at the expiry time shown in `reason`, not at millisecond cadence) |
-| 130 | Wait command cancelled with Ctrl-C |
-
-Environment overrides used by the CLI: `AGENT_COEXIST_NOW` (fixed `now` for
-testing, strict `YYYY-MM-DDTHH:MM:SSZ`) and `AGENT_COEXIST_LOCK_WAIT_MS`
-(post/subscribe exclusive-lock wait budget).
-
-## Repository layout
-
-```text
-crates/core   coexist-core: raw-byte parsing, type views, splices, file
-              locking/lifecycle, walking, hashing, command logic (pure data)
-crates/cli    agent-coexist: argument grammar + validation, the single
-              renderer, stderr progress, exit codes, wait wiring
+```md
+Daily standup. @bob please post your status here.
 ```
 
-See `CHANGELOG.md` for release notes.
+## #2 bob (2026-09-24T09:20:00Z)
+
+```md
+@#1 parser done. @alice review?
+```
+````
+
+`agent-coexist check docs/standup` re-reads and validates the file, and
+`agent-coexist wait-post docs/standup --as bob` blocks until a comment
+relevant to bob appears — see
+[Waiting for changes](docs/usage.md#waiting-for-changes) in the usage
+guide.
+
+## The four file types
+
+Everything the tool manages is a Markdown file ending in
+`.agent-besties.md`. That suffix is simply how the tool recognizes its
+own files among all the others, and you can omit it when giving paths:
+`docs/standup` means `docs/standup.agent-besties.md`. The first line of
+the file then determines the type:
+
+| Type | First line | Holds |
+|---|---|---|
+| post | `# <name>.post` | Threaded comments (`## #<n> <nick> (<time>)`) and an optional subscriber list |
+| brief | `# <name>.brief` | A description plus entries pointing at target files, with SHA-256 hashes and optional regexes |
+| agent-profile | `# <name>.agent-profile` | Sections describing one agent (`role`, `scope`, …) |
+| state | `# .state` | Per-status declarations (`<nick> <start>..<until>`) about the file's directory subtree |
+
+Writes are byte-level splices: anything a command does not target is
+preserved verbatim, so hand-written notes, spacing, and line endings
+survive.
+
+## Limits worth knowing up front
+
+- **Cooperation, not security.** Short-lived file locks coordinate CLI
+  reads and writes. A `locked` state declaration additionally blocks other
+  nicks' `profile` and `brief` writes until expiry. Other programs can
+  ignore these conventions, and `--as <nick>` is a label, not
+  authentication. See [SECURITY.md](SECURITY.md).
+- **Shared files only.** Agents need access to the same files, on the same
+  machine or a share you arrange. agent-coexist does not sync machines,
+  run agents, or talk over a network, and locking on network filesystems
+  is not guaranteed.
+- **State is local, with default spans.** Declarations sit in each
+  directory's `state.agent-besties.md` — two hours by default for
+  `locked`, eight for other statuses — and expire automatically.
+- **`warn` is still success.** The first line of every result is `ok`,
+  `warn` or `error`, and `warn` exits 0 like `ok`; scripts should parse
+  the first line rather than trust the exit code alone.
+- **Brief entry paths are relative to the brief file**, not to your
+  current directory.
+- **Managed files are capped at 16 MiB.**
+
+## Documentation
+
+- [Usage guide](docs/usage.md) — every command, flag, exit code, and the
+  output format.
+- [File format reference](docs/file-format.md) — the four file types as a
+  human editor sees them.
+- [Contributing](CONTRIBUTING.md) · [Security policy](SECURITY.md) ·
+  [Changelog](CHANGELOG.md)
+
+## License
+
+Code and documentation are licensed under the [MIT License](LICENSE).
+The cover artwork under `docs/assets/` is not part of that grant and
+remains with its creator.

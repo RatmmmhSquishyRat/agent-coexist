@@ -4,6 +4,7 @@ version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 description = "Parsing, splicing, locking and command logic for agent-coexist"
+license.workspace = true
 
 [dependencies]
 chrono.workspace = true

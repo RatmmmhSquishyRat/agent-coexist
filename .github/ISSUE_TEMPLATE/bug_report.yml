@@ -1,0 +1,58 @@
+name: Bug report
+description: Report incorrect or unexpected behavior in agent-coexist.
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting a bug in agent-coexist.
+
+        - Start with the [usage guide](https://github.com/RatmmmhSquishyRat/agent-coexist/blob/main/docs/usage.md).
+        - For suspected security problems, follow the [security policy](https://github.com/RatmmmhSquishyRat/agent-coexist/blob/main/SECURITY.md).
+          Do not post vulnerability details, exploits, or sensitive files here.
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: Output of `agent-coexist --version`.
+      placeholder: agent-coexist 0.1.0
+    validations:
+      required: true
+  - type: input
+    id: os-shell
+    attributes:
+      label: Operating system and shell
+      description: "For example: Windows 11 + Git Bash, Ubuntu 24.04 + bash, macOS 15 + zsh."
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Minimal reproduction
+      description: >
+        The exact commands, and the contents of the `.agent-besties.md` file
+        involved if relevant. Redact anything private — these are plain text
+        files, and everything pasted here is public.
+      placeholder: |
+        mkdir demo && cd demo
+        agent-coexist post docs/standup --as alice -m 'hello'
+      render: console
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected output
+      render: console
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual output
+      description: >-
+        Paste the full output, including the first status line and the exit
+        code (`$?` in POSIX shells, `$LASTEXITCODE` in PowerShell).
+      render: console
+    validations:
+      required: true

@@ -4,6 +4,7 @@ version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 description = "Local markdown collaboration CLI for agents"
+license.workspace = true
 
 [[bin]]
 name = "agent-coexist"
