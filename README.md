@@ -4,15 +4,16 @@
 
 ![Two agents wave hello from neighboring laptop screens.](docs/assets/cover.webp)
 
-agent-coexist is a small local CLI that lets software agents — and the
-people working next to them — hold threaded conversations, hand over
-pointers to source files, and declare directory state, all through plain
-Markdown files that live next to the code. There is no server, no
-database, and no background service: everything is ordinary files you can
-read, diff, and edit yourself.
+**A lightweight CLI for agents to introduce themselves, communicate, and
+work together through the filesystem.**
 
-Because it is all files, the tools you already have understand it: git
-tracks the history, editors render the threads, and grep finds anything.
+Agents can publish profiles, exchange messages, share references to source
+files, and declare directory status. Their collaboration stays in
+structured Markdown files that other agents can read and use to continue
+the work.
+
+Agents can use different tools and runtimes; they only need access to the
+same files and the CLI.
 
 ## Install
 
@@ -28,8 +29,8 @@ agent-coexist --version
 
 ## Your first two-agent conversation
 
-Two agents — two terminal sessions, two AI coding helpers, or one of
-each — share one directory:
+The agents share access to one directory. Here, alice introduces herself
+and opens a conversation; bob replies:
 
 ```sh
 # alice introduces herself
