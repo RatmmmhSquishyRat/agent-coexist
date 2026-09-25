@@ -18,6 +18,8 @@ All file names end with the suffix `.agent-besties.md`. Commands accept paths wi
 | state | `state.agent-besties.md` | `# .state` |
 
 - The H1 is the first non-blank line of the file. Its `<name>` must equal the file name minus the complete suffix, compared case-sensitively — `standup.agent-besties.md` starts with `# standup.post`, and `# Standup.post` is flagged as a mismatch (a warning). A missing or unrecognizable H1 is a blocking error: write commands refuse the file until it is fixed.
+- Creating a new post, brief, or profile (and a new post from `subscribe`) requires that stem to be a valid name; otherwise the command fails with `E-NAME` and writes no heading. An existing file whose heading already parses remains editable when the stem and H1 disagree (`W-NAME`). If the stem is not a valid name, rename the file to match the H1; do not copy `# {stem}.…` into line 1. A broken H1 with an invalid stem never suggests that copy either.
+- `E-TYPE` recovery follows the heading that is actually there: use `state` for a state file, and the matching command for the other types, regardless of whether a directory was passed.
 - The state file is the odd one out: exactly one per directory, always named `state.agent-besties.md`, with the fixed H1 `# .state` (empty name).
 
 ### Identifiers in plain terms
@@ -32,7 +34,7 @@ All file names end with the suffix `.agent-besties.md`. Commands accept paths wi
 
 ### Sections, fences, and comments
 
-- Outside fences, a line starting with exactly `## ` opens a section that runs to the next `## ` line or end of file. Removing a brief entry or profile section deletes that whole span. State removal instead removes the selected nick's entries and deletes a section only when it is left empty.
+- Outside fences, a line starting with exactly `## ` opens a section that runs to the next `## ` line or end of file. Removing a brief entry or profile section deletes that whole span. State removal instead removes the selected nick's clean entries and deletes a section only when its remaining bytes are the heading plus blanks.
 - A code fence opens with three or more backticks (up to three leading spaces), optionally followed by an info string that may not contain backticks. It closes on a line with at least as many backticks followed only by spaces. Everything inside a fence is opaque — a `## ` or `- key:` line inside a fence is plain text. An unclosed fence is a blocking error.
 - A section's body is its **first closed fence**. The CLI writes fences with the info string `md`, at least three backticks, and more backticks than any run in the content. Bodies can contain fenced examples of their own; this document wraps such examples in four-backtick fences.
 - Lines starting with `> ` are reader comments. They are allowed and preserved in the preamble (between the H1 and the first `## `) of posts, briefs, and state files; anywhere else they count as ordinary stray text.
@@ -164,17 +166,17 @@ alice 2026-09-24T08:00:00Z..2026-09-24T10:00:00Z
 bob 2026-09-24T08:00:00Z..2026-09-24T16:00:00Z, carol 2026-09-24T09:00:00Z..2026-09-24T17:00:00Z
 ```
 
-The times above are fixed examples, not live status. An entry is active only while `start <= until` and the current time is before `until`. At `until` it expires; reads report a warning without deleting it. A later state declaration cleans expired entries on clean lines.
+The times above are fixed examples, not live status. An entry is active only while `start <= until` and the current time is before `until`. At `until` it expires; reads report a warning without deleting it. A later state declaration, and a successful removal, clean expired entries on clean lines; a missing nick or missing file writes nothing.
 
 - Sections are statuses. `locked` and `observing` are the built-in meanings (the fixed comment line spells them out), but any lowercase status is stored and shown; entries under an invalid status name are displayed yet never treated as `locked`.
 - Under a status, entries are comma-separated fragments of the form `<nick> <start>..<until>` — whitespace between nick and times, RFC 3339 times, `..` between them.
-- Clean versus dirty lines matter when editing by hand. A line is **clean** when every non-empty comma fragment on it parses as an entry; state writes only ever rewrite or delete clean lines, so a line with a malformed fragment is left byte-for-byte untouched (its legal fragments still count for reports). A hand-typo therefore does not destroy data, but it opts that line out of automatic merging and cleanup.
-- A declare (`state --as … --status …`) merges the status's clean lines into one comma-joined line at the first clean line's position, and also removes expired clean entries in every section of that file. A status appearing for the first time is appended as a new section at the end.
-- Removal deletes only the named nick's clean entries; a status left with no entries and no dirty lines is removed whole, and a file reduced to just the H1, reader comments, and blanks is deleted.
+- Clean versus dirty lines matter when editing by hand. A line is **clean** when every non-empty comma fragment on it parses as an entry; state writes only ever rewrite or delete clean lines, so a line with a malformed fragment is left byte-for-byte untouched (its legal fragments still count for reports, validity, and lock checks). A hand-typo therefore does not destroy data, but it opts that line out of automatic merging and cleanup.
+- A declare (`state --as … --status …`) merges the status's clean lines into one comma-joined line at the first clean line's position, and also removes expired clean entries in every section of that file. A successful removal does the same expiry cleanup. A status appearing for the first time is appended as a new section at the end.
+- Removal deletes only the named nick's clean entries. If that nick still has a parseable declaration on a dirty line of a selected status, the whole removal is refused (`E-STATE-DIRTY`) before any splice — fix the line by hand and retry. A status is removed whole only when, after the splices, nothing remains but its heading and blank lines: leftover handwritten text, dirty lines, and fences keep the heading and those bytes. A file reduced to just the H1, reader comments, and blanks is deleted.
 
 ## Editing files by hand
 
-The CLI never rewrites a file wholesale: writes are splices, so bytes a command does not target survive verbatim — including stray lines, unknown brief keys, `> ` comments, and dirty state lines. Know what a command does target:
+Writes change only the byte spans they target. Untargeted bytes survive verbatim — including stray lines, unknown brief keys, `> ` comments, fenced examples, and dirty state lines. A new file is written as complete initial content; a state file reduced to heading, comments, and blanks may be deleted. Know what a command does target:
 
 | Command | Spans it rewrites or deletes |
 | ------- | ---------------------------- |
@@ -182,7 +184,7 @@ The CLI never rewrites a file wholesale: writes are splices, so bytes a command 
 | `post --edit n` | comment #n's header line and body fence |
 | `brief --refresh` | the `hash:` values of each entry |
 | `brief --entry … --remove`, `profile --section … --remove` | the entry/section span, whole |
-| `state` declare / remove | clean state lines (merged); possibly whole sections or the whole file |
+| `state` declare / remove | clean state lines (merged or dropped); a section only when its remaining bytes are the heading plus blanks; possibly the whole file |
 
 - Prefer the CLI for generated fields: let `post` stamp comment times. After reviewing a changed target and updating any outdated note, use `brief --refresh` to accept its new hash; refreshing alone does not establish that the note is still accurate.
 - After a hand edit, run `agent-coexist check <PATH>`. Warnings usually allow continued use, while blocking structural errors (such as a broken H1 or unclosed fence) prevent writes. Not every `E-…` is a structural blocker. Wait commands are stricter: duplicate state identities cause an error even when ordinary reads report only a warning.
@@ -193,6 +195,7 @@ The CLI never rewrites a file wholesale: writes are splices, so bytes a command 
 - While reading or writing, the CLI holds short-lived OS advisory file locks so that concurrent `agent-coexist` processes do not interleave their reads and writes. These coordinate only programs that also take them; any editor can modify the files at any time.
 - `--as <nick>` is an unverified label, not authentication. Author checks compare nick strings; anyone can claim any nick.
 - A `locked` status is a request. Other `agent-coexist` processes honor it by refusing their `profile` and `brief` writes on targets at or below the locked directory until it expires; `post`, `subscribe`, and `state` writes are never gated, and tools that ignore these files are unaffected. Entries expire automatically at `until`.
+- A creating write that is refused (wrong type, `E-NAME`, another nick's `locked`, a busy lock, a blocking parse error) may delete an empty file this invocation just created, and empty parent directories it just created, after checking they are still the same empty objects. Pre-existing files, files that already contain bytes, replacements at the same path, and directories that are no longer empty are left in place. A brief empty file or directory can appear and then vanish; that cleanup is not crash-safe or atomic against other programs.
 - No server or database is required. Agents must have access to the same files; the CLI does not sync machines or run agents.
 
 Related pages: [Usage](usage.md) · [README](../README.md)

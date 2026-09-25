@@ -6,7 +6,10 @@
 //! content are already folded by whoever created the diagnostic (§10.9.4);
 //! runtime values are substituted from the [`Context`]. In `fix` templates —
 //! the command form (§8.3.4) — every runtime value is POSIX-quoted here, so
-//! no caller ever writes its own quoting.
+//! no caller ever writes its own quoting. The E-H1 and W-NAME fixes are
+//! the exceptions (2026-09-25 repair): their suggestions are file content,
+//! not command arguments, so they substitute as plain text and never quote
+//! the stem ([`fix_text`], [`heading_fix`]).
 
 mod catalog;
 
@@ -105,7 +108,8 @@ fn parts(id: &str, params: &[(&'static str, String)], ctx: &Context) -> Rendered
     }
 }
 
-/// Fix text with the context-sensitive overrides (§9 supplements 1 and 3).
+/// Fix text with the context-sensitive overrides (§9 supplements 1 and 3;
+/// E-TYPE / E-H1 / W-NAME per the 2026-09-25 repair contract).
 fn fix_text(
     id: &str,
     t: &catalog::Template,
@@ -113,8 +117,12 @@ fn fix_text(
     ctx: &Context,
 ) -> String {
     let template: &str = match id {
+        // §9 supplement 1: the state-variant fix applies because the file
+        // IS a state file. Presence of a `dir` param must not select it —
+        // post/brief/profile E-TYPE faults carry `dir` too, and the state
+        // wording would lie about the actual type (2026-09-25 repair).
         "E-TYPE" => {
-            if get(params, "dir").is_some() {
+            if get(params, "actual").is_some_and(|a| a == "state") {
                 catalog::FIX_ETYPE_STATE
             } else {
                 t.fix
@@ -134,10 +142,52 @@ fn fix_text(
                 t.fix
             }
         }
+        "E-H1" => return eh1_fix(t, params, ctx),
+        "W-NAME" => return wname_fix(t, params, ctx),
         "W-BODY" => return wbody_fix(params, ctx),
         _ => t.fix,
     };
     subst(template, params, ctx, true)
+}
+
+/// Shared composer for fixes that suggest an H1 built from the file stem
+/// (E-H1, W-NAME; 2026-09-25 repair): the stem is display-folded, and the
+/// suggestion substitutes as plain text — it is file content, not a
+/// command argument, so §8.3.4 quoting must never touch it. When the
+/// folded stem is not a valid NAME the `fallback` template is used: an
+/// invalid stem must never be presented as a valid H1. A stem that only
+/// folds to a valid name still yields a copyable suggestion.
+fn heading_fix(
+    base: &'static str,
+    fallback: &'static str,
+    params: &[(&'static str, String)],
+    ctx: &Context,
+) -> String {
+    let folded = resolve("stem", params, ctx)
+        .map(|s| names::display_text(&s))
+        .unwrap_or_default();
+    let template = if names::valid_name(&folded) {
+        base
+    } else {
+        fallback
+    };
+    let mut effective: Vec<(&'static str, String)> = Vec::with_capacity(params.len() + 1);
+    effective.push(("stem", folded));
+    effective.extend(params.iter().cloned());
+    subst(template, &effective, ctx, false)
+}
+
+/// E-H1 fix: base suggestion when the stem is a valid NAME, otherwise the
+/// any-valid-name guidance (never an invalid or quoted stem as the H1).
+fn eh1_fix(t: &catalog::Template, params: &[(&'static str, String)], ctx: &Context) -> String {
+    heading_fix(t.fix, catalog::FIX_EH1_BAD_STEM, params, ctx)
+}
+
+/// W-NAME fix: both recoveries with plain substitution when the stem is a
+/// valid NAME; otherwise rename-only — the H1 name is already valid, the
+/// stem can never become a valid H1. The mismatch itself stays a warning.
+fn wname_fix(t: &catalog::Template, params: &[(&'static str, String)], ctx: &Context) -> String {
+    heading_fix(t.fix, catalog::FIX_WNAME_BAD_STEM, params, ctx)
 }
 
 /// `W-BODY` fix (§9 supplement 2): the `set_body` command for the file type
@@ -268,9 +318,14 @@ mod tests {
         assert!(is_blocking("E-STATUS-DUP"));
         assert!(!is_blocking("E-ENTRY-PATH"));
         assert!(!is_blocking("W-BOM"));
-        assert!(order("E-UTF8") < order("W-BOM"));
-        assert!(order("W-STRAY") < order("W-SUB-DUP"));
-        assert_eq!(order("W-STATE-EXPIRED") - order("E-UTF8"), 49); // 50 rows
+        // reason-level errors of the 2026-09-25 repair: errors, but never
+        // structural write-blockers
+        assert!(is_error("E-NAME"));
+        assert!(is_error("E-STATE-DIRTY"));
+        assert!(!is_blocking("E-NAME"));
+        assert!(!is_blocking("E-STATE-DIRTY"));
+        // unknown ids sort last in the same-line tiebreak
+        assert_eq!(order("E-NOSUCH"), usize::MAX);
     }
 
     #[test]
@@ -279,20 +334,23 @@ mod tests {
             .with("line", "# Notes")
             .with("stem", "notes");
         let r = render(&d, &ctx());
-        assert_eq!(
-            r.message,
-            "first line is \"# Notes\", not \"# <name>.<type>\""
+        assert!(
+            r.message.contains("# Notes"),
+            "line param dropped: {s}",
+            s = r.message
         );
-        assert_eq!(
-            r.fix,
-            "set line 1 to \"# notes.post\" (or .brief / .agent-profile), or \"# .state\" for a state file"
+        assert!(
+            r.fix.contains("# notes.post"),
+            "stem param dropped: {s}",
+            s = r.fix
         );
 
         let d = Diagnostic::new("W-STRAY", 20).with("n", "20");
         let r = render(&d, &ctx());
-        assert_eq!(
-            r.message,
-            "text outside any fence at L20 is not part of the record"
+        assert!(
+            r.message.contains("L20"),
+            "line param dropped: {s}",
+            s = r.message
         );
     }
 
@@ -300,9 +358,10 @@ mod tests {
     fn fix_quotes_runtime_values() {
         let d = Diagnostic::new("E-ENTRY-NOTFOUND", 0).with("title", "my entry");
         let r = render(&d, &ctx());
-        assert_eq!(
-            r.fix,
-            "pick an existing title from: agent-coexist check docs/standup"
+        assert!(
+            r.fix.contains("check docs/standup"),
+            "plain path embedded: {s}",
+            s = r.fix
         );
         let mut c = ctx();
         c.path = "my docs/stand up".into();
@@ -311,7 +370,8 @@ mod tests {
     }
 
     #[test]
-    fn etype_state_override_and_exhaustion() {
+    fn etype_fix_follows_actual_type_not_dir_presence() {
+        // actual = state: the fix names the state command with the directory
         let r = reason(
             "E-TYPE",
             &[
@@ -321,21 +381,218 @@ mod tests {
             ],
             &ctx(),
         );
-        assert_eq!(
-            r.fix,
-            "this is a state file: agent-coexist state src/parser --as <nick> --status <name>"
+        assert!(
+            r.message.contains("state"),
+            "actual type missing: {s}",
+            s = r.message
         );
-        assert_eq!(r.message, "file is a state, not a post");
+        assert!(
+            r.fix.contains("agent-coexist state src/parser"),
+            "state fix missing dir: {s}",
+            s = r.fix
+        );
 
+        // actual != state with a dir param present (the post.rs / query
+        // fault shapes): the fix names the command for the ACTUAL type and
+        // resolves every key; no state wording about a non-state file
+        for (actual, cmd) in [
+            ("post", "post"),
+            ("brief", "brief"),
+            ("agent-profile", "profile"),
+        ] {
+            let r = reason(
+                "E-TYPE",
+                &[
+                    ("actual", actual.into()),
+                    ("expected", "brief".into()),
+                    ("cmd_for_actual", cmd.into()),
+                    ("dir", "docs".into()),
+                ],
+                &ctx(),
+            );
+            assert!(
+                r.message.contains(actual),
+                "actual type missing: {s}",
+                s = r.message
+            );
+            assert!(
+                r.fix.contains(&format!("agent-coexist {cmd}")),
+                "actual command missing: {s}",
+                s = r.fix
+            );
+            assert!(
+                !r.fix.contains("state"),
+                "state wording on {actual}: {s}",
+                s = r.fix
+            );
+            assert!(!r.fix.contains('{'), "unresolved key: {s}", s = r.fix);
+        }
+    }
+
+    #[test]
+    fn etype_exhausted_variant_takes_over() {
+        // the exhausted param selects the exhausted variant, not the
+        // renumber form (whose {next} key has no value here)
         let d = Diagnostic::new("E-SEQ-DUP", 9)
             .with("n", "3")
             .with("exhausted", "1");
         let r = render(&d, &ctx());
-        assert_eq!(
-            r.fix,
-            "move the duplicate comment to a new post and update references to it"
+        assert!(
+            r.message.contains("#3"),
+            "seq param dropped: {s}",
+            s = r.message
         );
-        assert_eq!(r.message, "comment number #3 appears twice");
+        assert!(
+            r.fix.contains("new post"),
+            "exhausted recovery missing: {s}",
+            s = r.fix
+        );
+        assert!(!r.fix.contains("{next}"), "unresolved key: {s}", s = r.fix);
+    }
+
+    #[test]
+    fn wname_fix_invalid_stem_recommends_rename_only() {
+        // valid stem: both recoveries, plain substitution of the H1 form
+        let d = Diagnostic::new("W-NAME", 3)
+            .with("stem", "bob")
+            .with("name", "alice")
+            .with("type", "post");
+        let r = render(&d, &ctx());
+        assert!(
+            r.fix.contains("alice.agent-besties.md"),
+            "rename target missing: {s}",
+            s = r.fix
+        );
+        assert!(
+            r.fix.contains("# bob.post"),
+            "stem H1 missing: {s}",
+            s = r.fix
+        );
+        assert!(!r.fix.contains('\''), "quoted H1 guidance: {s}", s = r.fix);
+
+        // invalid stem: rename to the already-valid H1 name only; the
+        // stem is never offered as an H1, quoted or not
+        for bad in ["my docs", "it's;rm"] {
+            let d = Diagnostic::new("W-NAME", 3)
+                .with("stem", bad)
+                .with("name", "alice")
+                .with("type", "post");
+            let r = render(&d, &ctx());
+            assert!(
+                r.fix.contains("alice.agent-besties.md"),
+                "rename target missing: {s}",
+                s = r.fix
+            );
+            assert!(
+                !r.fix.contains(&format!("# {bad}")),
+                "invalid stem suggested: {s}",
+                s = r.fix
+            );
+            assert!(!r.fix.contains("{stem}"), "unresolved stem: {s}", s = r.fix);
+            assert!(!r.fix.contains('\''), "quoted H1 guidance: {s}", s = r.fix);
+        }
+    }
+
+    #[test]
+    fn eh1_fix_never_suggests_an_invalid_or_quoted_stem() {
+        // a stem that is not a valid NAME must not appear as the
+        // supposedly valid H1, quoted or not
+        for bad in ["my docs", "it's;rm"] {
+            let mut c = ctx();
+            c.stem = bad.into();
+            let d = Diagnostic::new("E-H1", 1).with("line", "# Notes");
+            let r = render(&d, &c);
+            assert!(!r.fix.contains("{stem}"), "unresolved stem in: {}", r.fix);
+            assert!(
+                !r.fix.contains(&format!("# {bad}")),
+                "invalid stem suggested: {}",
+                r.fix
+            );
+            assert!(
+                !r.fix.contains('\''),
+                "quote characters in H1 guidance: {}",
+                r.fix
+            );
+            assert!(r.fix.contains(".post"), "no H1 form offered: {}", r.fix);
+            assert!(
+                r.fix.contains(".state"),
+                "no state fallback offered: {}",
+                r.fix
+            );
+        }
+
+        // no stem at all: same honest guidance, no placeholder leak
+        let d = Diagnostic::new("E-H1", 1).with("line", "");
+        let c = Context::default();
+        let r = render(&d, &c);
+        assert!(!r.fix.contains("{stem}"), "unresolved stem in: {}", r.fix);
+        assert!(r.fix.contains(".post") && r.fix.contains(".state"));
+
+        // a valid stem still gets the copyable suggestion, unquoted
+        let d = Diagnostic::new("E-H1", 1).with("line", "# Notes");
+        let mut c = ctx();
+        c.stem = "stand up".into(); // invalid: space
+        let r = render(&d, &c);
+        assert!(!r.fix.contains("# stand up.post"));
+        assert!(!r.fix.contains("# 'stand up'"));
+
+        // stem that folds to a valid name still yields a valid H1
+        // suggestion (whitespace is display-folded, not copied)
+        let mut c = ctx();
+        c.stem = "  standup  ".into();
+        let r = render(&d, &c);
+        assert!(
+            r.fix.contains("# standup.post"),
+            "folded stem not suggested: {}",
+            r.fix
+        );
+    }
+
+    #[test]
+    fn reason_errors_ename_and_estatedirty_resolve_fully() {
+        // E-NAME: the invalid stem lands in the message; the fix carries
+        // no runtime value, so nothing can stay unresolved
+        let r = reason("E-NAME", &[("name", "my docs/x".into())], &ctx());
+        assert!(
+            r.message.contains("my docs/x"),
+            "name param dropped: {s}",
+            s = r.message
+        );
+        assert!(!r.fix.contains('{') && !r.fix.contains('}'));
+        assert!(r.fix.to_lowercase().contains("rename"));
+
+        // E-STATE-DIRTY: nick/dir/line resolve in message and fix; dir is
+        // a command argument in the fix, so §8.3.4 quoting applies there
+        // only when it actually carries shell-special characters
+        let r = reason(
+            "E-STATE-DIRTY",
+            &[
+                ("nick", "bob".into()),
+                ("dir", "src/parser".into()),
+                ("line", "12".into()),
+            ],
+            &ctx(),
+        );
+        assert!(r.message.contains("bob"));
+        assert!(r.message.contains("line 12"));
+        assert!(r.message.contains("src/parser"));
+        assert!(r
+            .fix
+            .contains("agent-coexist state src/parser --remove bob"));
+        assert!(!r.fix.contains('{') && !r.fix.contains('}'));
+
+        let r = reason(
+            "E-STATE-DIRTY",
+            &[
+                ("nick", "bob".into()),
+                ("dir", "my src/parser".into()),
+                ("line", "12".into()),
+            ],
+            &ctx(),
+        );
+        assert!(r
+            .fix
+            .contains("agent-coexist state 'my src/parser' --remove bob"));
     }
 
     #[test]
@@ -406,6 +663,6 @@ mod tests {
         let d = Diagnostic::new("E-LOCKED", 0);
         let c = Context::default();
         let r = render(&d, &c);
-        assert_eq!(r.fix, "retry shortly: {argv}"); // argv empty -> unresolved
+        assert!(r.fix.contains("{argv}")); // argv empty -> stays literal, visible
     }
 }

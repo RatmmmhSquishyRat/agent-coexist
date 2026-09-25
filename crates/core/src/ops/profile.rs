@@ -18,8 +18,8 @@ use crate::text::{self, Splice};
 
 use super::post::{
     after_line_and_blank, checked_doc, fence_block, finish, flock_blocked, guarded_apply,
-    removed_lines_label, section_delete_splice, stash_flock, stem_of, unchanged_done, Applied,
-    Done, Early, FlockStash, Step,
+    removed_lines_label, require_valid_stem, section_delete_splice, stash_flock, unchanged_done,
+    Applied, Done, Early, FlockStash, Step,
 };
 use super::{ProfileAction, ProfileParams};
 
@@ -61,10 +61,11 @@ fn bare_step(
     created: bool,
 ) -> Result<(Mutation, Step), Fault> {
     if created {
+        let stem = require_valid_stem(&p.path)?;
         if stash_flock(stash, ctx, &p.path, p.as_nick.as_deref()) {
-            return flock_blocked(true);
+            return flock_blocked();
         }
-        let content = format!("# {}.agent-profile\n", stem_of(&p.path));
+        let content = format!("# {stem}.agent-profile\n");
         return Ok((
             Mutation::Write(content.into_bytes()),
             Step::Done(Done::empty()),
@@ -96,10 +97,11 @@ fn set_step(
     let mut done = Done::empty();
     done.kv("section", vec![name.to_string(), "set".to_string()]);
     if created {
+        let stem = require_valid_stem(&p.path)?;
         if stash_flock(stash, ctx, &p.path, p.as_nick.as_deref()) {
-            return flock_blocked(true);
+            return flock_blocked();
         }
-        let mut text = format!("# {}.agent-profile\n\n## {name}\n\n", stem_of(&p.path));
+        let mut text = format!("# {stem}.agent-profile\n\n## {name}\n\n");
         text.push_str(&fence_block(content));
         return Ok((Mutation::Write(text.into_bytes()), Step::Done(done)));
     }
@@ -144,7 +146,7 @@ fn set_step(
         }
     };
     if stash_flock(stash, ctx, &p.path, p.as_nick.as_deref()) {
-        return flock_blocked(false);
+        return flock_blocked();
     }
     match guarded_apply(&bytes, splices, kind)? {
         Applied::Bytes(new_bytes) => Ok((Mutation::Write(new_bytes), Step::Done(done))),
@@ -178,7 +180,7 @@ fn remove_step(
         }
     };
     if stash_flock(stash, ctx, &p.path, p.as_nick.as_deref()) {
-        return flock_blocked(false);
+        return flock_blocked();
     }
     let splice = section_delete_splice(&doc.source, &doc.sections[section_idx]);
     let label = removed_lines_label(&doc.source, splice.range.start, splice.range.end);
@@ -192,5 +194,308 @@ fn remove_step(
     )? {
         Applied::Bytes(new_bytes) => Ok((Mutation::Write(new_bytes), Step::Done(done))),
         Applied::Refused(step) => Ok((Mutation::Unchanged, step)),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ops::context::test_ctx;
+    use crate::report::{Row, Status};
+    use crate::time;
+    use std::path::{Path, PathBuf};
+
+    const NOW: &str = "2026-09-25T12:00:00Z";
+    const LOCKED_BY_OTHER: &str =
+        "# .state\n\n## locked\n\nother 2026-09-25T11:00:00Z..2026-09-25T13:00:00Z\n";
+    const DUP_LOCKED_SECTIONS: &str = "# .state\n\n## locked\n\nother 2026-09-25T11:00:00Z..2026-09-25T13:00:00Z\n\n## locked\n\nfriend 2026-09-25T11:30:00Z..2026-09-25T13:30:00Z\n";
+    const WRONG_KIND_STATE: &str =
+        "# state.post\n\n## #1 alice (2026-09-25T10:00:00Z)\n\n```\nhello\n```\n";
+
+    fn scratch(tag: &str) -> PathBuf {
+        let dir = std::env::temp_dir()
+            .join("coexist-profile-tests")
+            .join(format!(
+                "{}-{}-{}",
+                tag,
+                std::process::id(),
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.as_nanos())
+                    .unwrap_or(0)
+            ));
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    fn set_section(path: PathBuf) -> ProfileParams {
+        ProfileParams {
+            path,
+            as_nick: Some("me".to_string()),
+            section: Some("role".to_string()),
+            action: ProfileAction::SetBody("dev".to_string()),
+        }
+    }
+
+    fn row_values(report: &Report, key: &str) -> Vec<Vec<String>> {
+        report
+            .rows
+            .iter()
+            .filter_map(|r| match r {
+                Row::Fields { key: k, values, .. } if k == key => Some(values.clone()),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn flock_refusal_cleans_file_and_dirs_this_call_created() {
+        let dir = scratch("flock-clean");
+        std::fs::write(dir.join("state.agent-besties.md"), LOCKED_BY_OTHER).unwrap();
+        let target = dir.join("sub/notes.agent-besties.md");
+        let mut ctx = test_ctx(time::parse(NOW).unwrap());
+        let report = run(&mut ctx, &set_section(target.clone())).unwrap();
+        assert_eq!(report.status, Status::Error);
+        assert_eq!(report.exit, 3);
+        // The refusal runs the plan-Err rollback: no file, no directory.
+        assert!(!target.exists());
+        assert!(!dir.join("sub").exists());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn flock_refusal_keeps_preexisting_empty_target() {
+        let dir = scratch("flock-adopted");
+        std::fs::write(dir.join("state.agent-besties.md"), LOCKED_BY_OTHER).unwrap();
+        let target = dir.join("notes.agent-besties.md");
+        std::fs::write(&target, b"").unwrap();
+        let mut ctx = test_ctx(time::parse(NOW).unwrap());
+        let report = run(&mut ctx, &set_section(target.clone())).unwrap();
+        assert_eq!(report.status, Status::Error);
+        assert_eq!(report.exit, 3);
+        // Initial-content mode is not ownership: the adopted empty file
+        // survives the refusal byte-for-byte.
+        assert!(target.exists());
+        assert_eq!(std::fs::read(&target).unwrap(), Vec::<u8>::new());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn successful_write_warns_when_lock_scan_skipped_etype() {
+        let dir = scratch("scan-etype");
+        std::fs::write(dir.join("state.agent-besties.md"), WRONG_KIND_STATE).unwrap();
+        let target = dir.join("notes.agent-besties.md");
+        let mut ctx = test_ctx(time::parse(NOW).unwrap());
+        let report = run(&mut ctx, &set_section(target.clone())).unwrap();
+        // Best-effort: no recognizable holder, the write proceeds — but
+        // the unread portion stays visible and the first line is warn.
+        assert_eq!(report.status, Status::Warn);
+        assert_eq!(report.exit, 0);
+        let skipped = row_values(&report, "skipped");
+        assert_eq!(skipped.len(), 1, "rows: {:?}", report.rows);
+        assert_eq!(skipped[0][1], "E-TYPE");
+        assert!(target.exists());
+        let content = std::fs::read_to_string(&target).unwrap();
+        assert!(content.starts_with("# notes.agent-profile\n"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn flock_still_blocks_with_duplicate_state_sections() {
+        let dir = scratch("flock-dup");
+        std::fs::write(dir.join("state.agent-besties.md"), DUP_LOCKED_SECTIONS).unwrap();
+        let target = dir.join("sub/notes.agent-besties.md");
+        let mut ctx = test_ctx(time::parse(NOW).unwrap());
+        let report = run(&mut ctx, &set_section(target.clone())).unwrap();
+        assert_eq!(report.status, Status::Error);
+        assert_eq!(report.exit, 3);
+        // Parseable locks from the duplicate sections still refuse the
+        // write, and the incompleteness is reported as a partial row.
+        let partial = row_values(&report, "partial");
+        assert_eq!(partial.len(), 1, "rows: {:?}", report.rows);
+        assert_eq!(partial[0][1], "E-STATUS-DUP");
+        assert!(!target.exists());
+        assert!(!dir.join("sub").exists());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn create_rejects_invalid_stem_without_leaving_a_trace() {
+        let dir = scratch("ename");
+        let target = dir.join("bad stem.agent-besties.md");
+        let mut ctx = test_ctx(time::parse(NOW).unwrap());
+        let report = run(
+            &mut ctx,
+            &ProfileParams {
+                path: target.clone(),
+                as_nick: None,
+                section: None,
+                action: ProfileAction::None,
+            },
+        )
+        .unwrap();
+        assert_eq!(report.status, Status::Error);
+        assert_eq!(report.exit, 1);
+        assert!(!target.exists());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn existing_file_with_mismatched_h1_name_stays_writable() {
+        let dir = scratch("mismatch");
+        // Invalid raw stem (space): if NAME gating ever escaped the
+        // initial-content branch, this existing valid file would be refused.
+        let target = dir.join("hand renamed.agent-besties.md");
+        std::fs::write(
+            &target,
+            "# other.agent-profile\n\n## role\n\n```\nold\n```\n",
+        )
+        .unwrap();
+        let mut ctx = test_ctx(time::parse(NOW).unwrap());
+        let report = run(&mut ctx, &set_section(target.clone())).unwrap();
+        // A valid file whose H1 name differs from the stem is check's
+        // W-NAME, never a new write refusal.
+        assert_eq!(report.status, Status::Ok);
+        let content = std::fs::read_to_string(&target).unwrap();
+        assert!(content.starts_with("# other.agent-profile\n"));
+        let document = crate::doc::parse(content.into_bytes(), &target, ctx.now).unwrap();
+        assert_eq!(document.body(0), Some("dev"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Restore listing permission so fixture cleanup can remove the tree.
+    struct ListingDenial {
+        dir: PathBuf,
+        #[cfg(unix)]
+        orig_mode: u32,
+        #[cfg(windows)]
+        user: String,
+    }
+
+    impl Drop for ListingDenial {
+        fn drop(&mut self) {
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                let _ = std::fs::set_permissions(
+                    &self.dir,
+                    std::fs::Permissions::from_mode(self.orig_mode),
+                );
+            }
+            #[cfg(windows)]
+            {
+                let _ = std::process::Command::new("icacls")
+                    .arg(&self.dir)
+                    .arg("/remove:d")
+                    .arg(&self.user)
+                    .stdout(std::process::Stdio::null())
+                    .stderr(std::process::Stdio::null())
+                    .status();
+            }
+        }
+    }
+
+    /// Deny directory listing while keeping known-path create/open if the
+    /// platform actually honors that split. `None` when it does not.
+    fn deny_listing(dir: &Path) -> Option<ListingDenial> {
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let orig_mode = std::fs::metadata(dir).ok()?.permissions().mode();
+            let mut perms = std::fs::metadata(dir).ok()?.permissions();
+            perms.set_mode(0o300);
+            std::fs::set_permissions(dir, perms).ok()?;
+            let denial = ListingDenial {
+                dir: dir.to_path_buf(),
+                orig_mode,
+            };
+            if std::fs::read_dir(dir).is_ok() {
+                return None;
+            }
+            Some(denial)
+        }
+        #[cfg(windows)]
+        {
+            let user = {
+                let output = std::process::Command::new("whoami").output().ok()?;
+                let name = String::from_utf8(output.stdout).ok()?;
+                let name = name.trim().to_string();
+                if name.is_empty() {
+                    return None;
+                }
+                name
+            };
+            let ok = std::process::Command::new("icacls")
+                .arg(dir)
+                .arg("/deny")
+                .arg(format!("{user}:(RD)"))
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .status()
+                .ok()?
+                .success();
+            if !ok {
+                return None;
+            }
+            let denial = ListingDenial {
+                dir: dir.to_path_buf(),
+                user,
+            };
+            if std::fs::read_dir(dir).is_ok() {
+                return None;
+            }
+            Some(denial)
+        }
+        #[cfg(not(any(unix, windows)))]
+        {
+            let _ = dir;
+            None
+        }
+    }
+
+    #[test]
+    fn successful_write_warns_when_lock_scan_dir_is_unreadable() {
+        let dir = scratch("scan-unreadable");
+        let target = dir.join("notes.agent-besties.md");
+        std::fs::write(
+            &target,
+            "# notes.agent-profile\n\n## role\n\n```\nold\n```\n",
+        )
+        .unwrap();
+        let Some(_denial) = deny_listing(&dir) else {
+            let _ = std::fs::remove_dir_all(&dir);
+            return;
+        };
+        // Listing must be denied without also denying the known-path write;
+        // otherwise this is not the unreadable-directory scan case.
+        if std::fs::OpenOptions::new()
+            .write(true)
+            .open(&target)
+            .is_err()
+        {
+            drop(_denial);
+            let _ = std::fs::remove_dir_all(&dir);
+            return;
+        }
+        let mut ctx = test_ctx(time::parse(NOW).unwrap());
+        let report = run(&mut ctx, &set_section(target.clone())).unwrap();
+        // Best-effort: no recognizable holder, so the write proceeds — but
+        // an uninspected directory must not look like a clean ok.
+        assert_eq!(report.status, Status::Warn);
+        assert_eq!(report.exit, 0);
+        let skipped = row_values(&report, "skipped");
+        assert!(
+            skipped
+                .iter()
+                .any(|row| row.get(1).map(String::as_str) == Some("unreadable")),
+            "unreadable skip missing: {:?}",
+            report.rows
+        );
+        let content = std::fs::read_to_string(&target).unwrap();
+        assert!(content.starts_with("# notes.agent-profile\n"));
+        let document = crate::doc::parse(content.into_bytes(), &target, ctx.now).unwrap();
+        assert_eq!(document.body(0), Some("dev"));
+        drop(_denial);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

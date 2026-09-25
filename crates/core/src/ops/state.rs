@@ -193,6 +193,7 @@ fn declare(ctx: &mut Ctx, p: &super::StateDeclare) -> Result<Report, Fault> {
     Ok(report)
 }
 
+#[derive(Debug)]
 struct CleanedEntry {
     status: String,
     nick: String,
@@ -384,6 +385,7 @@ fn remove(ctx: &mut Ctx, p: &super::StateRemove) -> Result<Report, Fault> {
                 RemovePlan::Write {
                     bytes: new_bytes,
                     rows,
+                    cleaned,
                     delete_file,
                 } => {
                     let mutation = if delete_file {
@@ -391,8 +393,9 @@ fn remove(ctx: &mut Ctx, p: &super::StateRemove) -> Result<Report, Fault> {
                     } else {
                         fsx::Mutation::Write(new_bytes)
                     };
-                    (mutation, RemoveOut::Done { rows })
+                    (mutation, RemoveOut::Done { rows, cleaned })
                 }
+                RemovePlan::Dirty { line } => (fsx::Mutation::Unchanged, RemoveOut::Dirty { line }),
                 RemovePlan::Refused(r) => (fsx::Mutation::Unchanged, RemoveOut::Refused(r)),
                 RemovePlan::NotFound => (fsx::Mutation::Unchanged, RemoveOut::NotFound),
             })
@@ -417,13 +420,41 @@ fn remove(ctx: &mut Ctx, p: &super::StateRemove) -> Result<Report, Fault> {
     let mut report = Report::new("state", object.clone());
     match result.value {
         RemoveOut::NotFound => return Ok(state_notfound(&dctx, &object, &p.nick)),
+        RemoveOut::Dirty { line } => {
+            // The nick still has a parseable declaration on a dirty line
+            // of a selected section: point at the actual line for manual
+            // repair (§6.2.6 — writes never touch dirty lines) instead
+            // of claiming the nick is absent or partially removing it.
+            return Ok(reason_report(
+                &dctx,
+                "state",
+                &object,
+                "E-STATE-DIRTY",
+                vec![
+                    ("nick", p.nick.clone()),
+                    ("dir", object.clone()),
+                    ("line", line.to_string()),
+                ],
+            ));
+        }
         RemoveOut::Refused(r) => {
             if let Some(actual) = r.e_type {
                 return Ok(e_type_report(&dctx, &object, actual));
             }
             return Ok(refusal_report(&object, &target, r.kind, r.diagnostics));
         }
-        RemoveOut::Done { rows } => {
+        RemoveOut::Done { rows, cleaned } => {
+            // §6.4.4 row order: cleaned before removed.
+            for c in cleaned {
+                report.kv(
+                    "cleaned",
+                    vec![
+                        c.status,
+                        c.nick,
+                        format!("{}..{}", time::format(c.start), time::format(c.until)),
+                    ],
+                );
+            }
             for row in rows {
                 report.kv("removed", vec![row.status, p.nick.clone()]);
                 if let Some((a, b)) = row.removed_lines {
@@ -444,31 +475,55 @@ fn remove(ctx: &mut Ctx, p: &super::StateRemove) -> Result<Report, Fault> {
     Ok(report)
 }
 
+#[derive(Debug)]
 struct SectionRows {
     status: String,
     removed_lines: Option<(usize, usize)>,
 }
 
+#[derive(Debug)]
 enum RemovePlan {
     Write {
         bytes: Vec<u8>,
         rows: Vec<SectionRows>,
+        cleaned: Vec<CleanedEntry>,
         delete_file: bool,
+    },
+    Dirty {
+        line: usize,
     },
     Refused(Refusal),
     NotFound,
 }
 
+#[derive(Debug)]
 enum RemoveOut {
-    Done { rows: Vec<SectionRows> },
+    Done {
+        rows: Vec<SectionRows>,
+        cleaned: Vec<CleanedEntry>,
+    },
+    Dirty {
+        line: usize,
+    },
     Refused(Refusal),
     NotFound,
 }
 
 /// Compute the remove-form splice plan. Only clean-line entries are
-/// removable (§6.2.6); a section left with no entries at all is deleted
-/// whole (§6.4.2, §10.3.5) and reported via `removed-lines`; a file reduced
-/// to H1 + comment lines + blanks is deleted on the held lock.
+/// removable (§6.2.6): when the nick still has a parseable declaration
+/// on a dirty line of a selected section, the whole removal is refused
+/// before any splice (`E-STATE-DIRTY`) — a write must not claim
+/// success while a declaration it cannot touch remains, and must not
+/// report the nick as absent. A successful removal also runs the
+/// §6.3.3 expiry cleanup over every section's clean lines, exactly as
+/// the declare form does. A section whose content after the removal
+/// and cleanup reduces to its H2 head plus blank lines is deleted
+/// whole (§6.4.2, §10.3.5) and reported via `removed-lines` — decided
+/// on the residual line classes, never on parsed-entry flags, so
+/// pure-garbage lines, dirty entry lines and fences (which create no
+/// `Declaration`) always keep the H2 and their bytes. A file reduced
+/// to H1 + comment lines + blanks is deleted on the held lock. A
+/// missing target changes nothing at all (§6.4.2).
 fn plan_remove(
     source: &[u8],
     file: &Path,
@@ -497,31 +552,72 @@ fn plan_remove(
         }
     }
 
-    let mut splices: Vec<Splice> = Vec::new();
-    let mut rows: Vec<SectionRows> = Vec::new();
-
+    // The nick's own parseable declaration on a dirty line of a selected
+    // section: dirty lines never participate in writes (§6.2.6), so
+    // splicing the clean-line entries would still leave that declaration
+    // in place. Refuse the entire removal before any splice, pointing at
+    // the actual line for manual repair.
     for sec in d.state.iter() {
         if let Some(sf) = status_filter {
             if sec.status != sf {
                 continue;
             }
         }
-        if !sec.entries.iter().any(|e| e.clean && e.nick == nick) {
-            continue; // nothing removable here (dirty-line-only entries stay)
+        if let Some(hit) = sec.entries.iter().find(|e| !e.clean && e.nick == nick) {
+            return Ok(RemovePlan::Dirty { line: hit.line });
         }
-        let has_dirty = sec.entries.iter().any(|e| !e.clean);
-        let survivors: Vec<(String, Time, Time)> = merge_dupes(
-            sec.entries
-                .iter()
-                .filter(|e| e.clean && e.nick != nick)
-                .map(|e| (e.nick.clone(), e.start, e.until))
-                .collect(),
-        );
+    }
 
-        if !has_dirty && survivors.is_empty() {
-            // Whole-section deletion: doc's section span already runs from
-            // the H2 line start to the byte before the next H2 (or EOF).
-            let span = d.sections[sec.section].span.clone();
+    let mut splices: Vec<Splice> = Vec::new();
+    let mut rows: Vec<SectionRows> = Vec::new();
+    let mut cleaned: Vec<CleanedEntry> = Vec::new();
+
+    for sec in d.state.iter() {
+        let in_selection = status_filter.is_none_or(|sf| sec.status == sf);
+        let has_target = in_selection && sec.entries.iter().any(|e| e.clean && e.nick == nick);
+        // §6.3.3 cleanup reaches a section only when some clean entry is
+        // expired; otherwise untouched sections keep their bytes (§2.7.2).
+        let has_expired_clean = sec.entries.iter().any(|e| e.clean && !e.valid(now));
+        if (!in_selection || !has_target) && !has_expired_clean {
+            continue;
+        }
+        let mut survivors: Vec<(String, Time, Time)> = Vec::new();
+        for e in sec.entries.iter().filter(|e| e.clean) {
+            if has_target && e.nick == nick {
+                continue; // the removal itself
+            }
+            if !e.valid(now) {
+                cleaned.push(CleanedEntry {
+                    status: sec.status.clone(),
+                    nick: e.nick.clone(),
+                    start: e.start,
+                    until: e.until,
+                });
+                continue;
+            }
+            survivors.push((e.nick.clone(), e.start, e.until));
+        }
+        let merged = merge_dupes(survivors);
+
+        let mut line_spans: Vec<Span> = sec
+            .clean_lines
+            .iter()
+            .map(|s| norm_span(source, s))
+            .collect();
+        line_spans.sort_by_key(|s| s.start);
+
+        // Whole-section deletion (§6.4.2's "变空") only when nothing but
+        // the H2 head and blank lines survives the entry splices: lines
+        // that create no Declaration — pure-garbage fragments, dirty
+        // entry lines, fenced lines — carry no clean-line span, so their
+        // presence keeps the section and every unknown byte.
+        let section = &d.sections[sec.section];
+        let head_end = past_terminator(source, &section.head);
+        if has_target
+            && merged.is_empty()
+            && section_reduces_to_head(source, &line_spans, &section.span, head_end)
+        {
+            let span = section.span.clone();
             let a = d.line_at(span.start);
             let b = d.line_at(span.end.saturating_sub(1));
             let mut replacement = Vec::new();
@@ -536,36 +632,32 @@ fn plan_remove(
                 status: sec.status.clone(),
                 removed_lines: Some((a, b)),
             });
-        } else {
-            let mut spans: Vec<Span> = sec
-                .clean_lines
-                .iter()
-                .map(|s| norm_span(source, s))
-                .collect();
-            spans.sort_by_key(|s| s.start);
-            if !spans.is_empty() {
-                let first = spans[0].clone();
-                for s in &spans[1..] {
-                    splices.push(Splice {
-                        range: s.clone(),
-                        replacement: Vec::new(),
-                    });
-                }
+        } else if !line_spans.is_empty() {
+            let first = line_spans[0].clone();
+            for s in &line_spans[1..] {
                 splices.push(Splice {
-                    range: first,
-                    replacement: serialize_line(&survivors),
+                    range: s.clone(),
+                    replacement: Vec::new(),
                 });
+            }
+            splices.push(Splice {
+                range: first,
+                replacement: serialize_line(&merged),
+            });
+            if has_target {
                 rows.push(SectionRows {
                     status: sec.status.clone(),
                     removed_lines: None,
                 });
             }
-            // Degenerate parse (clean entries without clean lines): claim
-            // nothing; the bytes stay and no `removed` row is printed.
+            // A degenerate parse (clean entries without clean-line
+            // spans) claims nothing: the bytes stay, no `removed` row.
         }
     }
 
     if rows.is_empty() {
+        // No selected section held a removable clean entry: nothing is
+        // written, and §6.3.3 cleanup never runs without a removal.
         return Ok(RemovePlan::NotFound);
     }
     let bytes = text::apply(source, splices)?;
@@ -573,8 +665,33 @@ fn plan_remove(
     Ok(RemovePlan::Write {
         bytes,
         rows,
+        cleaned,
         delete_file,
     })
+}
+
+/// Whether the lines of a section span past its H2 head reduce, once the
+/// `clean` full-line spans are spliced away, to blank lines only: every
+/// non-blank line must be one of the clean lines. Pure-garbage lines,
+/// dirty entry lines and fenced lines produce no clean-line span, so
+/// they answer `false` and an "emptied" section keeps its H2 and bytes
+/// (§2.7.2 — a removal never sweeps unknown hand-written content).
+fn section_reduces_to_head(source: &[u8], clean: &[Span], span: &Span, head_end: usize) -> bool {
+    let mut i = head_end.min(span.end);
+    while i < span.end {
+        let content_end = line_content_end(source, i);
+        if !is_blank_content(&source[i..content_end])
+            && !clean.iter().any(|s| s.start <= i && content_end <= s.end)
+        {
+            return false;
+        }
+        i = if content_end < source.len() {
+            content_end + 1
+        } else {
+            content_end
+        };
+    }
+    true
 }
 
 // ---------------------------------------------------------------------------
@@ -583,6 +700,7 @@ fn plan_remove(
 
 /// A write refusal computed under the lock: rendered by the caller as
 /// either an E-TYPE reason report or a check-shaped diagnostic report.
+#[derive(Debug)]
 struct Refusal {
     kind: Option<&'static str>,
     diagnostics: Vec<Diagnostic>,
@@ -640,8 +758,10 @@ fn refusal_report(
     report
 }
 
-/// E-TYPE reason report. No `dir` param: the actual type is never `state`
-/// here, so the state-variant fix (§9 supplement 1) must not trigger.
+/// E-TYPE reason report. The §9-supplement-1 state fix variant is chosen
+/// by the actual type in the shared renderer (A1 repair), not by a `dir`
+/// param's presence; the actual type is never `state` here, so the
+/// plain fix applies.
 fn e_type_report(dctx: &diag::Context, object: &str, actual: &'static str) -> Report {
     reason_report(
         dctx,
@@ -891,4 +1011,267 @@ fn trim_blank(line: &[u8]) -> &[u8] {
         end -= 1;
     }
     &line[start..end]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const NOW: &str = "2026-09-17T10:00:00Z";
+
+    fn now() -> Time {
+        crate::time::parse(NOW).unwrap()
+    }
+
+    fn plan(src: &str, nick: &str, filter: Option<&str>) -> Result<RemovePlan, Fault> {
+        plan_remove(
+            src.as_bytes(),
+            Path::new("state.agent-besties.md"),
+            now(),
+            nick,
+            filter,
+        )
+    }
+
+    fn written(plan: RemovePlan) -> (Vec<u8>, Vec<SectionRows>, Vec<CleanedEntry>) {
+        match plan {
+            RemovePlan::Write {
+                bytes,
+                rows,
+                cleaned,
+                delete_file,
+            } => {
+                assert!(!delete_file);
+                (bytes, rows, cleaned)
+            }
+            other => panic!("expected a write plan, got {other:?}"),
+        }
+    }
+
+    fn cleaned_pairs(cleaned: &[CleanedEntry]) -> Vec<(&str, &str)> {
+        cleaned
+            .iter()
+            .map(|c| (c.status.as_str(), c.nick.as_str()))
+            .collect()
+    }
+
+    // -- E-STATE-DIRTY: honest refusal before any splice --
+
+    #[test]
+    fn remove_refuses_when_the_targets_only_declaration_is_dirty() {
+        // alice shares her line with an unparseable fragment: the line is
+        // dirty (§6.2.6) and no clean entry exists. The refusal points
+        // at the actual line instead of claiming the nick is absent.
+        let src = concat!(
+            "# .state\n",
+            "\n",
+            "## locked\n",
+            "\n",
+            "alice 2026-09-17T09:00:00Z..2026-09-17T12:00:00Z, broken fragment\n",
+        );
+        match plan(src, "alice", None).unwrap() {
+            RemovePlan::Dirty { line } => assert_eq!(line, 5),
+            other => panic!("expected a dirty refusal, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn remove_refuses_whole_command_when_clean_and_dirty_declarations_mix() {
+        // alice is on a clean line AND on a dirty line: splicing the
+        // clean one would report `removed` while her dirty declaration
+        // stays. The entire removal refuses before any splice.
+        let src = concat!(
+            "# .state\n",
+            "\n",
+            "## locked\n",
+            "\n",
+            "alice 2026-09-17T09:00:00Z..2026-09-17T12:00:00Z\n",
+            "alice 2026-09-17T08:00:00Z..2026-09-17T13:00:00Z, junk\n",
+        );
+        match plan(src, "alice", None).unwrap() {
+            RemovePlan::Dirty { line } => assert_eq!(line, 6),
+            other => panic!("expected a dirty refusal, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn remove_dirty_declaration_outside_the_status_selection_does_not_refuse() {
+        // carol's dirty declaration lives under `observing`; the removal
+        // targets `locked` only. It proceeds, and the untouched observing
+        // bytes — dirty line included — survive verbatim.
+        let src = concat!(
+            "# .state\n",
+            "\n",
+            "## locked\n",
+            "\n",
+            "alice 2026-09-17T09:00:00Z..2026-09-17T12:00:00Z\n",
+            "\n",
+            "## observing\n",
+            "\n",
+            "carol 2026-09-17T09:00:00Z..2026-09-17T13:00:00Z, junk\n",
+        );
+        let (bytes, rows, cleaned) = written(plan(src, "alice", Some("locked")).unwrap());
+        assert!(cleaned.is_empty());
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].status, "locked");
+        // locked reduces to its head: whole-section delete with
+        // removed-lines (H2 at L3 through the blank before the next H2).
+        assert_eq!(rows[0].removed_lines, Some((3, 6)));
+        assert_eq!(
+            String::from_utf8(bytes).unwrap(),
+            concat!(
+                "# .state\n",
+                "\n",
+                "## observing\n",
+                "\n",
+                "carol 2026-09-17T09:00:00Z..2026-09-17T13:00:00Z, junk\n",
+            )
+        );
+    }
+
+    // -- expiry cleanup on success, declare-consistent (§6.3.3) --
+
+    #[test]
+    fn remove_cleans_expired_clean_entries_across_sections() {
+        let src = concat!(
+            "# .state\n",
+            "\n",
+            "## locked\n",
+            "\n",
+            "alice 2026-09-17T09:00:00Z..2026-09-17T12:00:00Z, bob 2026-09-17T08:00:00Z..2026-09-17T09:30:00Z\n",
+            "\n",
+            "## observing\n",
+            "\n",
+            "carol 2026-09-17T07:00:00Z..2026-09-17T08:00:00Z\n",
+        );
+        let (bytes, rows, cleaned) = written(plan(src, "alice", None).unwrap());
+        // alice removed; bob and carol's expired clean entries cleaned;
+        // locked (emptied by removal + cleanup) goes whole, observing
+        // keeps its H2 (cleanup geometry, not a removal).
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].status, "locked");
+        assert!(rows[0].removed_lines.is_some());
+        assert_eq!(
+            cleaned_pairs(&cleaned),
+            vec![("locked", "bob"), ("observing", "carol")]
+        );
+        assert_eq!(
+            String::from_utf8(bytes).unwrap(),
+            concat!("# .state\n", "\n", "## observing\n", "\n")
+        );
+    }
+
+    #[test]
+    fn remove_missing_target_writes_nothing_despite_expired_entries() {
+        // bob's expired entry must not be swept by a removal that has no
+        // target: a missing nick refuses without any cleanup write.
+        let src = concat!(
+            "# .state\n",
+            "\n",
+            "## locked\n",
+            "\n",
+            "bob 2026-09-17T08:00:00Z..2026-09-17T09:30:00Z\n",
+        );
+        match plan(src, "alice", None).unwrap() {
+            RemovePlan::NotFound => {}
+            other => panic!("expected not-found, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn remove_deletes_section_and_skeleton_file_when_only_entries_remain() {
+        let src = concat!(
+            "# .state\n",
+            "\n",
+            "> locked = please do not change this directory or its subdirectories until the end time; observing = I am watching, changes are welcome.\n",
+            "\n",
+            "## locked\n",
+            "\n",
+            "alice 2026-09-17T09:00:00Z..2026-09-17T12:00:00Z, bob 2026-09-17T08:00:00Z..2026-09-17T09:30:00Z\n",
+        );
+        match plan(src, "alice", None).unwrap() {
+            RemovePlan::Write {
+                bytes,
+                rows,
+                cleaned,
+                delete_file,
+            } => {
+                assert!(delete_file); // H1 + comment + blanks only
+                assert_eq!(rows.len(), 1);
+                assert_eq!(rows[0].removed_lines, Some((5, 7)));
+                assert_eq!(cleaned_pairs(&cleaned), vec![("locked", "bob")]);
+                assert_eq!(
+                    bytes,
+                    b"# .state\n\n> locked = please do not change this directory or its subdirectories until the end time; observing = I am watching, changes are welcome.\n\n"
+                );
+            }
+            other => panic!("expected a write plan, got {other:?}"),
+        }
+    }
+
+    // -- unknown hand-written content survives a removal --
+
+    #[test]
+    fn remove_keeps_unknown_text_and_fences_when_last_clean_nick_goes() {
+        // Pure-garbage lines and fences create no Declaration, so an
+        // entries-based emptiness test never saw them; removing alice
+        // must keep the H2 and every unknown byte, not delete the
+        // section span under them.
+        let src = concat!(
+            "# .state\n",
+            "\n",
+            "## locked\n",
+            "\n",
+            "alice 2026-09-17T09:00:00Z..2026-09-17T12:00:00Z\n",
+            "hand-written note: do not remove\n",
+            "```\n",
+            "fenced preserved text\n",
+            "```\n",
+        );
+        let (bytes, rows, cleaned) = written(plan(src, "alice", None).unwrap());
+        assert!(cleaned.is_empty());
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].status, "locked");
+        assert_eq!(rows[0].removed_lines, None); // section kept — not emptied
+        assert_eq!(
+            String::from_utf8(bytes).unwrap(),
+            concat!(
+                "# .state\n",
+                "\n",
+                "## locked\n",
+                "\n",
+                "hand-written note: do not remove\n",
+                "```\n",
+                "fenced preserved text\n",
+                "```\n",
+            )
+        );
+    }
+
+    #[test]
+    fn remove_keeps_dirty_entry_line_when_other_nicks_stay() {
+        // A dirty line with parseable declarations of OTHER nicks keeps
+        // the section alive too: only the clean lines are rewritten.
+        let src = concat!(
+            "# .state\n",
+            "\n",
+            "## locked\n",
+            "\n",
+            "alice 2026-09-17T09:00:00Z..2026-09-17T12:00:00Z\n",
+            "bob 2026-09-17T09:00:00Z..2026-09-17T13:00:00Z, junk\n",
+        );
+        let (bytes, rows, _cleaned) = written(plan(src, "alice", None).unwrap());
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].removed_lines, None);
+        assert_eq!(
+            String::from_utf8(bytes).unwrap(),
+            concat!(
+                "# .state\n",
+                "\n",
+                "## locked\n",
+                "\n",
+                "bob 2026-09-17T09:00:00Z..2026-09-17T13:00:00Z, junk\n",
+            )
+        );
+    }
 }

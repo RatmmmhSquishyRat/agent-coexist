@@ -17,7 +17,6 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use crate::consts;
-use crate::diag;
 use crate::doc;
 use crate::error::{Diagnostic, Fault};
 use crate::fsx;
@@ -61,6 +60,19 @@ pub enum ScanIssue {
     /// <dir> <E-ID> L<n>`.
     Partial { id: &'static str, line: usize },
 }
+
+/// Diagnostics that keep a state file out of a scan entirely (§10.6.4):
+/// the structure is undecidable, so no declaration can be trusted.
+const SKIP_CLASS: [&str; 4] = ["E-UTF8", "E-TOO-LARGE", "E-H1", "E-FENCE"];
+/// Diagnostics whose parseable remainder still participates (§10.6.4):
+/// entries are kept and the file is reported `partial`. `E-STATUS-DUP`
+/// remains write-blocking (`diag::is_blocking` gates every write), but a
+/// duplicate-section state file's declarations are exactly what a lock
+/// scan must not lose; `W-STATE-ENTRY` marks declaration text that could
+/// not be incorporated at all — losing it silently would turn an
+/// unreadable lock into a clean `ok`. Other formatting warnings carry no
+/// declaration loss and stay non-partial.
+const PARTIAL_CLASS: [&str; 4] = ["E-HEAD", "E-SEQ-DUP", "E-STATUS-DUP", "W-STATE-ENTRY"];
 
 /// One scanned state file: its identity and every parseable declaration.
 #[derive(Debug, Clone)]
@@ -132,8 +144,13 @@ pub struct FlockHolder {
 /// its parseable declarations (spec §10.5.6).
 ///
 /// `ctx.file_read()` advances the managed-file counter whether the read
-/// succeeds or fails (§8.4.1). Busy and blocking failures leave `entries`
-/// empty; `E-STATUS-DUP`-class errors keep the parseable entries.
+/// succeeds or fails (§8.4.1). Classification follows §10.6.4: skip-class
+/// diagnostics (undecidable structure) leave `entries` empty; partial-class
+/// errors — notably `E-STATUS-DUP`, still write-blocking — keep the
+/// parseable entries. A reserved state-file name whose parseable content is
+/// another kind is never "no state file": it is skipped as `E-TYPE` so its
+/// directory stays visible in the scan instead of silently losing every
+/// declaration it might have carried.
 pub fn read_state_file(ctx: &mut Ctx, file: &Path) -> StateFileInfo {
     let dir = parent_dir(file);
     let mut info = StateFileInfo {
@@ -171,8 +188,14 @@ pub fn read_state_file(ctx: &mut Ctx, file: &Path) -> StateFileInfo {
     ctx.file_read();
     match doc::parse(bytes, file, ctx.now) {
         Ok(d) => {
-            if let Some(first) = d.blocking().first() {
+            if let Some(first) = d.diagnostics.iter().find(|x| SKIP_CLASS.contains(&x.id)) {
+                // Undecidable structure: no declaration can be trusted.
                 info.issue = Some(ScanIssue::Blocking(first.id));
+            } else if d.kind != Some(doc::Kind::State) {
+                // Reserved name, parseable, but not a state file: report
+                // the wrong kind instead of pretending the directory has
+                // no state file.
+                info.issue = Some(ScanIssue::Blocking("E-TYPE"));
             } else {
                 for sec in &d.state {
                     for e in &sec.entries {
@@ -184,13 +207,9 @@ pub fn read_state_file(ctx: &mut Ctx, file: &Path) -> StateFileInfo {
                         });
                     }
                 }
-                // Only error-class, non-blocking diagnostics make a file
-                // partial (§10.5.6, §10.6.4); warnings never do.
-                if let Some(first) = d
-                    .diagnostics
-                    .iter()
-                    .find(|x| diag::is_error(x.id) && !diag::is_blocking(x.id))
-                {
+                // Partial-class diagnostics keep the entries (§10.5.6,
+                // §10.6.4); other warnings carry no declaration loss.
+                if let Some(first) = d.diagnostics.iter().find(|x| PARTIAL_CLASS.contains(&x.id)) {
                     info.issue = Some(ScanIssue::Partial {
                         id: first.id,
                         line: first.line,
@@ -436,7 +455,7 @@ pub fn conflicts_all(scope: &StateScope, now: Time) -> Vec<ConflictRec> {
 
 fn classify_diag_issue(ds: &[Diagnostic]) -> Option<ScanIssue> {
     let first = ds.first()?;
-    Some(if diag::is_blocking(first.id) {
+    Some(if SKIP_CLASS.contains(&first.id) {
         ScanIssue::Blocking(first.id)
     } else {
         ScanIssue::Partial {
@@ -561,5 +580,155 @@ fn lexical_display_path(p: &Path) -> PathBuf {
 fn push_uniq(v: &mut Vec<String>, s: String) {
     if !v.contains(&s) {
         v.push(s);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ops::context::test_ctx;
+    use crate::time;
+    use std::fs::OpenOptions;
+    use std::path::PathBuf;
+
+    /// `now` sits inside both fixture declarations' windows.
+    const NOW: &str = "2026-09-25T12:00:00Z";
+
+    fn scratch(tag: &str) -> PathBuf {
+        let dir = std::env::temp_dir()
+            .join("coexist-shared-tests")
+            .join(format!(
+                "{}-{}-{}",
+                tag,
+                std::process::id(),
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.as_nanos())
+                    .unwrap_or(0)
+            ));
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    fn read_state(dir: &Path, content: &str) -> StateFileInfo {
+        let file = dir.join("state.agent-besties.md");
+        std::fs::write(&file, content).unwrap();
+        let mut ctx = test_ctx(time::parse(NOW).unwrap());
+        read_state_file(&mut ctx, &file)
+    }
+
+    #[test]
+    fn valid_state_file_yields_entries_without_issue() {
+        let dir = scratch("valid");
+        let info = read_state(
+            &dir,
+            "# .state\n\n## locked\n\nalice 2026-09-25T11:00:00Z..2026-09-25T13:00:00Z\n",
+        );
+        assert_eq!(info.entries.len(), 1);
+        assert_eq!(info.entries[0].nick, "alice");
+        assert_eq!(info.entries[0].status, "locked");
+        assert!(info.entries[0].valid(time::parse(NOW).unwrap()));
+        assert!(info.issue.is_none());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn duplicate_status_sections_keep_entries_and_report_partial() {
+        let dir = scratch("dup-sections");
+        let info = read_state(
+            &dir,
+            "# .state\n\n## locked\n\nother 2026-09-25T11:00:00Z..2026-09-25T13:00:00Z\n\n## locked\n\nfriend 2026-09-25T11:30:00Z..2026-09-25T13:30:00Z\n",
+        );
+        // Both sections' declarations participate (file order, duplicates
+        // included): a duplicate-section file still exposes every
+        // parseable lock.
+        assert_eq!(info.entries.len(), 2);
+        assert_eq!(info.entries[0].nick, "other");
+        assert_eq!(info.entries[1].nick, "friend");
+        match info.issue {
+            Some(ScanIssue::Partial { id, line }) => {
+                assert_eq!(id, "E-STATUS-DUP");
+                assert_eq!(line, 7);
+            }
+            other => panic!("expected E-STATUS-DUP partial, got {other:?}"),
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn malformed_declaration_reports_partial_not_clean_ok() {
+        let dir = scratch("w-state-entry");
+        let info = read_state(
+            &dir,
+            "# .state\n\n## locked\n\nalice 2026-09-25T11:00:00Z..2026-09-25T13:00:00Z, bob not-a-time\n",
+        );
+        // The parseable declaration still participates; the lost fragment
+        // must downgrade the scan to partial instead of a clean ok.
+        assert_eq!(info.entries.len(), 1);
+        assert_eq!(info.entries[0].nick, "alice");
+        match info.issue {
+            Some(ScanIssue::Partial { id, line }) => {
+                assert_eq!(id, "W-STATE-ENTRY");
+                assert_eq!(line, 5);
+            }
+            other => panic!("expected W-STATE-ENTRY partial, got {other:?}"),
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn wrong_kind_reserved_state_file_is_skipped_as_etype() {
+        let dir = scratch("wrong-kind");
+        let info = read_state(
+            &dir,
+            "# state.post\n\n## #1 alice (2026-09-25T10:00:00Z)\n\n```\nhello\n```\n",
+        );
+        // A parseable non-state file at the reserved name is not "no state
+        // file": its directory must stay visible in the scan.
+        assert!(info.entries.is_empty());
+        match info.issue {
+            Some(ScanIssue::Blocking(id)) => assert_eq!(id, "E-TYPE"),
+            other => panic!("expected E-TYPE blocking, got {other:?}"),
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn undecidable_structure_still_skips_whole_file() {
+        let dir = scratch("skip-class");
+        let info = read_state(
+            &dir,
+            "# .state\n\n## locked\n\n```\nalice 2026-09-25T11:00:00Z..2026-09-25T13:00:00Z\n",
+        );
+        assert!(info.entries.is_empty());
+        match info.issue {
+            Some(ScanIssue::Blocking(id)) => assert_eq!(id, "E-FENCE"),
+            other => panic!("expected E-FENCE blocking, got {other:?}"),
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn busy_state_file_reports_busy() {
+        let dir = scratch("busy");
+        let file = dir.join("state.agent-besties.md");
+        std::fs::write(
+            &file,
+            "# .state\n\n## locked\n\nalice 2026-09-25T11:00:00Z..2026-09-25T13:00:00Z\n",
+        )
+        .unwrap();
+        // A second handle's exclusive lock blocks the shared scan read.
+        let holder = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(&file)
+            .unwrap();
+        holder.try_lock().unwrap();
+        let mut ctx = test_ctx(time::parse(NOW).unwrap());
+        let info = read_state_file(&mut ctx, &file);
+        holder.unlock().unwrap();
+        assert!(matches!(info.issue, Some(ScanIssue::Busy)));
+        assert!(info.entries.is_empty());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

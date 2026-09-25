@@ -22,8 +22,7 @@ use crate::types;
 use crate::Time;
 
 use super::{
-    blocking_report, body_excerpt, file_missing_report, load_file, parent_display,
-    sort_diagnostics, LoadError,
+    blocking_report, body_excerpt, file_missing_report, load_file, sort_diagnostics, LoadError,
 };
 
 pub fn check(ctx: &mut Ctx, p: &CheckParams) -> Result<Report, Fault> {
@@ -105,9 +104,11 @@ fn report_for(
             flags
         }
         doc::Kind::State => {
-            let mut diags = document.diagnostics.clone();
-            let (count, rows) = state_preview(ctx.now, object, &document, &mut diags);
-            let flags = push_diagnostics(&mut report, diags);
+            // The scan already derived expiry / conflict diagnostics once
+            // over the selected declarations (§6.2.5, §6.2.7); the
+            // preview only renders the §8.1.11 marks for the same set.
+            let (count, rows) = state_preview(ctx.now, &document);
+            let flags = push_diagnostics(&mut report, document.diagnostics.clone());
             report.kv("entries", vec![count.to_string()]);
             for (status, values) in rows {
                 report.record(status, values, 2, consts::KEY_WIDTH);
@@ -255,16 +256,13 @@ fn profile_rows(report: &mut Report, document: &Document) {
 
 /// Same-file state preview (§6.2.7, §8.2 check state): display uses
 /// [`crate::types::state::selected`] per section (all parseable
-/// declarations stay candidates, dirty-line fragments included), the
-/// derived diagnostics anchor on the later / expiring declaration.
+/// declarations stay candidates, dirty-line fragments included) and
+/// renders the §8.1.11 `conflict` / `expired` marks for that same
+/// selected set. Expiry and conflict *diagnostics* are not derived
+/// here — the type scan owns the single derivation, so `check` never
+/// prints a parse-time set plus a preview-time duplicate.
 #[allow(clippy::type_complexity)]
-fn state_preview(
-    now: Time,
-    object: &str,
-    document: &Document,
-    derived: &mut Vec<Diagnostic>,
-) -> (usize, Vec<(String, Vec<String>)>) {
-    let dir_display = parent_display(object);
+fn state_preview(now: Time, document: &Document) -> (usize, Vec<(String, Vec<String>)>) {
     let flat: Vec<(&types::state::StateSection, &types::state::Declaration)> = document
         .state
         .iter()
@@ -276,20 +274,13 @@ fn state_preview(
         .collect();
     let mut conflict = vec![false; flat.len()];
     let mut expired = vec![false; flat.len()];
-    for (i, (section, decl)) in flat.iter().enumerate() {
+    for (i, (_, decl)) in flat.iter().enumerate() {
         if !decl.valid(now) {
             expired[i] = true;
-            derived.push(
-                Diagnostic::new("W-STATE-EXPIRED", decl.line)
-                    .with("nick", decl.nick.as_str())
-                    .with("status", section.status.as_str())
-                    .with("until", time::format(decl.until))
-                    .with("dir", dir_display.clone()),
-            );
         }
     }
-    // §9 补充6: {a} is the earlier declaration's nick, {b} the later
-    // one's; the diagnostic anchors on the later declaration's line.
+    // §10.5.3 pairwise relation restricted to this file; the matching
+    // W-STATE-CONFLICT diagnostics anchor on the later declaration.
     for x in 0..flat.len() {
         for y in (x + 1)..flat.len() {
             let (section_x, decl_x) = flat[x];
@@ -302,12 +293,6 @@ fn state_preview(
             {
                 conflict[x] = true;
                 conflict[y] = true;
-                derived.push(
-                    Diagnostic::new("W-STATE-CONFLICT", decl_y.line)
-                        .with("a", decl_x.nick.as_str())
-                        .with("b", decl_y.nick.as_str())
-                        .with("dir", dir_display.clone()),
-                );
             }
         }
     }
@@ -328,4 +313,104 @@ fn state_preview(
         })
         .collect();
     (flat.len(), rows)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::doc;
+    use std::path::Path;
+
+    fn state_doc(src: &str, now: &str) -> Document {
+        doc::parse(
+            src.as_bytes().to_vec(),
+            Path::new("state.agent-besties.md"),
+            crate::time::parse(now).unwrap(),
+        )
+        .expect("parses")
+    }
+
+    fn ids(document: &Document) -> Vec<(&'static str, usize)> {
+        sort_diagnostics(document.diagnostics.clone())
+            .into_iter()
+            .map(|d| (d.id, d.line))
+            .collect()
+    }
+
+    #[test]
+    fn state_expiry_and_conflict_reported_once_per_selected_declaration() {
+        // alice's expired earlier declaration is superseded by the L5
+        // renewal; bob (L6) is expired and selected; dave (L7) conflicts
+        // with the selected alice.
+        let document = state_doc(
+            concat!(
+                "# .state\n",
+                "\n",
+                "## locked\n",
+                "alice 2026-09-17T08:00:00Z..2026-09-17T09:00:00Z\n",
+                "alice 2026-09-17T09:00:00Z..2026-09-17T12:00:00Z\n",
+                "bob 2026-09-17T08:00:00Z..2026-09-17T09:30:00Z\n",
+                "dave 2026-09-17T09:00:00Z..2026-09-17T12:00:00Z\n",
+            ),
+            "2026-09-17T10:00:00Z",
+        );
+        let now = crate::time::parse("2026-09-17T10:00:00Z").unwrap();
+        // What `check` composes: the scan's diagnostics plus the
+        // preview marks over the same selected set.
+        let (count, rows) = state_preview(now, &document);
+        let all = ids(&document);
+
+        // exactly one W-STATE-EXPIRED (bob L6), none for the
+        // superseded alice declaration (L4)
+        let expired: Vec<_> = all
+            .iter()
+            .filter(|(id, _)| *id == "W-STATE-EXPIRED")
+            .copied()
+            .collect();
+        assert_eq!(expired, vec![("W-STATE-EXPIRED", 6)]);
+
+        // exactly one W-STATE-CONFLICT: the selected alice vs dave,
+        // anchored on the later declaration
+        let conflict: Vec<_> = all
+            .iter()
+            .filter(|(id, _)| *id == "W-STATE-CONFLICT")
+            .copied()
+            .collect();
+        assert_eq!(conflict, vec![("W-STATE-CONFLICT", 7)]);
+
+        // marks on the preview rows match the same derivation
+        assert_eq!(count, 3);
+        let marks: Vec<(&str, Option<&str>)> = rows
+            .iter()
+            .map(|(status, values)| (status.as_str(), values.get(2).map(|s| s.as_str())))
+            .collect();
+        assert_eq!(
+            marks,
+            vec![
+                ("locked", Some("conflict")), // alice (the L5 renewal)
+                ("locked", Some("expired")),  // bob
+                ("locked", Some("conflict")), // dave
+            ]
+        );
+    }
+
+    #[test]
+    fn state_reversed_range_marks_expired_without_a_second_warning() {
+        // §6.2.5: start > until counts as expired — the row is marked,
+        // but the only diagnostic is the per-entry W-STATE-RANGE.
+        let document = state_doc(
+            concat!(
+                "# .state\n",
+                "\n",
+                "## locked\n",
+                "fred 2026-09-17T14:00:00Z..2026-09-17T13:00:00Z\n",
+            ),
+            "2026-09-17T10:00:00Z",
+        );
+        let now = crate::time::parse("2026-09-17T10:00:00Z").unwrap();
+        let (count, rows) = state_preview(now, &document);
+        assert_eq!(ids(&document), vec![("W-STATE-RANGE", 4)]);
+        assert_eq!(count, 1);
+        assert_eq!(rows[0].1[2], "expired");
+    }
 }

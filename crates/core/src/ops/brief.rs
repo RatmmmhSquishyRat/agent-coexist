@@ -28,8 +28,8 @@ use crate::Time;
 
 use super::post::{
     after_line_and_blank, checked_doc, fence_block, finish, flock_blocked, guarded_apply, is_blank,
-    line_end, removed_lines_label, section_delete_splice, stash_flock, stem_of, strip_term,
-    unchanged_done, Applied, Done, Early, FlockStash, Step,
+    line_end, removed_lines_label, require_valid_stem, section_delete_splice, stash_flock,
+    strip_term, unchanged_done, Applied, Done, Early, FlockStash, Step,
 };
 use super::{reason_report, BriefForm, BriefParams, BriefTarget, RegexOpt};
 
@@ -117,11 +117,12 @@ fn bare_step(
     created: bool,
 ) -> Result<(Mutation, Step), Fault> {
     if created {
+        let stem = require_valid_stem(&p.path)?;
         if stash_flock(stash, ctx, &p.path, p.as_nick.as_deref()) {
-            return flock_blocked(true);
+            return flock_blocked();
         }
         return Ok((
-            Mutation::Write(skeleton(&p.path).into_bytes()),
+            Mutation::Write(skeleton(&stem).into_bytes()),
             Step::Done(Done::empty()),
         ));
     }
@@ -145,10 +146,11 @@ fn description_step(
     let mut done = Done::empty();
     done.kv("description", vec!["set".to_string()]);
     if created {
+        let stem = require_valid_stem(&p.path)?;
         if stash_flock(stash, ctx, &p.path, p.as_nick.as_deref()) {
-            return flock_blocked(true);
+            return flock_blocked();
         }
-        let mut content = skeleton(&p.path);
+        let mut content = skeleton(&stem);
         content.push('\n');
         content.push_str(&fence_block(description));
         return Ok((Mutation::Write(content.into_bytes()), Step::Done(done)));
@@ -177,7 +179,7 @@ fn description_step(
         }
     };
     if stash_flock(stash, ctx, &p.path, p.as_nick.as_deref()) {
-        return flock_blocked(false);
+        return flock_blocked();
     }
     match guarded_apply(&bytes, splices, doc.kind.as_ref().map(doc::Kind::as_str))? {
         Applied::Bytes(new_bytes) => {
@@ -214,10 +216,11 @@ fn target_step(
         done.kv("note", vec!["set".to_string()]);
     }
     if created {
+        let stem = require_valid_stem(&p.path)?;
         if stash_flock(stash, ctx, &p.path, p.as_nick.as_deref()) {
-            return flock_blocked(true);
+            return flock_blocked();
         }
-        let mut content = skeleton(&p.path);
+        let mut content = skeleton(&stem);
         content.push('\n');
         content.push_str(&entry_block(&info.title, t, &info.sha));
         return Ok((Mutation::Write(content.into_bytes()), Step::Done(done)));
@@ -236,7 +239,7 @@ fn target_step(
                 replacement: tail.into_bytes(),
             }];
             if stash_flock(stash, ctx, &p.path, p.as_nick.as_deref()) {
-                return flock_blocked(false);
+                return flock_blocked();
             }
             match guarded_apply(&bytes, splices, doc.kind.as_ref().map(doc::Kind::as_str))? {
                 Applied::Bytes(new_bytes) => {
@@ -272,7 +275,7 @@ fn target_step(
                 }
             }
             if stash_flock(stash, ctx, &p.path, p.as_nick.as_deref()) {
-                return flock_blocked(false);
+                return flock_blocked();
             }
             let splices = target_update_splices(&doc, entry, t, &info.sha);
             let mut done = Done::empty();
@@ -318,7 +321,7 @@ fn note_step(
         None => return Err(entry_notfound(entry_title, &p.path)),
     };
     if stash_flock(stash, ctx, &p.path, p.as_nick.as_deref()) {
-        return flock_blocked(false);
+        return flock_blocked();
     }
     let entry = &doc.brief.entries[idx];
     let splices = match &doc.sections[entry.section].body {
@@ -366,7 +369,7 @@ fn remove_entry_step(
         None => return Err(entry_notfound(entry_title, &p.path)),
     };
     if stash_flock(stash, ctx, &p.path, p.as_nick.as_deref()) {
-        return flock_blocked(false);
+        return flock_blocked();
     }
     let entry = &doc.brief.entries[idx];
     let splice = section_delete_splice(&doc.source, &doc.sections[entry.section]);
@@ -410,7 +413,7 @@ fn refresh_step(
         None => (0..doc.brief.entries.len()).collect(),
     };
     if stash_flock(stash, ctx, &p.path, p.as_nick.as_deref()) {
-        return flock_blocked(false);
+        return flock_blocked();
     }
     let mut done = Done::empty();
     let mut splices: Vec<Splice> = Vec::new();
@@ -652,10 +655,9 @@ fn entry_notfound(title: &str, path: &Path) -> Fault {
 
 /// Skeleton written by the three creation forms (§4.5.1): H1, blank line,
 /// and the fixed reader hint (comment line, §2.6.2).
-fn skeleton(path: &Path) -> String {
+fn skeleton(stem: &str) -> String {
     format!(
-        "# {}.brief\n\n> paths below are relative to this file's directory; hashes are SHA-256 of the target's bytes.\n",
-        stem_of(path)
+        "# {stem}.brief\n\n> paths below are relative to this file's directory; hashes are SHA-256 of the target's bytes.\n"
     )
 }
 
@@ -691,4 +693,71 @@ fn default_title(resolved: &Path, target: &str) -> String {
 /// columns are `/`-separated with folded whitespace (§8.1.9, §10.4.3).
 fn display_stored_path(value: &str) -> String {
     names::fold(&value.replace('\\', "/"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ops::context::test_ctx;
+    use crate::report::Status;
+    use crate::time;
+    use std::path::PathBuf;
+
+    const NOW: &str = "2026-09-25T12:00:00Z";
+    const LOCKED_BY_OTHER: &str =
+        "# .state\n\n## locked\n\nother 2026-09-25T11:00:00Z..2026-09-25T13:00:00Z\n";
+
+    fn scratch(tag: &str) -> PathBuf {
+        let dir = std::env::temp_dir()
+            .join("coexist-brief-tests")
+            .join(format!(
+                "{}-{}-{}",
+                tag,
+                std::process::id(),
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.as_nanos())
+                    .unwrap_or(0)
+            ));
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    fn create_rejects_invalid_stem_without_leaving_a_trace() {
+        let dir = scratch("ename");
+        let target = dir.join("bad/stem!.agent-besties.md");
+        let p = BriefParams {
+            path: target.clone(),
+            as_nick: None,
+            form: BriefForm::Bare,
+        };
+        let mut ctx = test_ctx(time::parse(NOW).unwrap());
+        let report = run(&mut ctx, &p).unwrap();
+        assert_eq!(report.status, Status::Error);
+        assert_eq!(report.exit, 1);
+        // Neither the file nor the parent this call created survives.
+        assert!(!target.exists());
+        assert!(!dir.join("bad").exists());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn flock_refusal_cleans_brief_creation() {
+        let dir = scratch("flock-clean");
+        std::fs::write(dir.join("state.agent-besties.md"), LOCKED_BY_OTHER).unwrap();
+        let target = dir.join("sub/plan.agent-besties.md");
+        let p = BriefParams {
+            path: target.clone(),
+            as_nick: Some("me".to_string()),
+            form: BriefForm::SetDescription("the plan".to_string()),
+        };
+        let mut ctx = test_ctx(time::parse(NOW).unwrap());
+        let report = run(&mut ctx, &p).unwrap();
+        assert_eq!(report.status, Status::Error);
+        assert_eq!(report.exit, 3);
+        assert!(!target.exists());
+        assert!(!dir.join("sub").exists());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }

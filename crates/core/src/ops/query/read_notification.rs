@@ -27,8 +27,16 @@ use crate::Time;
 
 /// Diagnostics that keep a file out of the result entirely (§10.6.4).
 const SKIP_CLASS: [&str; 4] = ["E-UTF8", "E-TOO-LARGE", "E-H1", "E-FENCE"];
-/// Diagnostics whose parseable remainder still participates (§10.6.4).
-const PARTIAL_CLASS: [&str; 3] = ["E-HEAD", "E-SEQ-DUP", "E-STATUS-DUP"];
+/// Diagnostics whose parseable remainder still participates (§10.6.4),
+/// mirroring `shared`'s classes so the walk and the ancestor pass (which
+/// reads through `shared::read_state_file`) classify one file the same
+/// way: `E-STATUS-DUP` sections still parse, and `W-STATE-ENTRY` marks
+/// declaration text that could not be incorporated — losing it silently
+/// would turn an unreadable lock into a clean `ok`. A file found by the
+/// state-file name whose H1 names another type is not rejected here as
+/// a post/brief/profile: its H1 kind governs the walk (`shared` reports
+/// `E-TYPE` for it on the state-scope reader only).
+const PARTIAL_CLASS: [&str; 4] = ["E-HEAD", "E-SEQ-DUP", "E-STATUS-DUP", "W-STATE-ENTRY"];
 
 /// One notification record before ordering.
 struct Event {
@@ -68,31 +76,58 @@ pub fn read_notification(ctx: &mut Ctx, p: &ReadNotificationParams) -> Result<Re
     let mut tie: u64 = 0;
     let mut state_infos: Vec<StateFileInfo> = Vec::new();
     let mut seen_state: Vec<PathBuf> = Vec::new();
+    // DIR's own reserved state file, found by name. The ancestor chain
+    // includes DIR itself; only a walk outcome that completed the
+    // *state-metadata* check (State kind, undecidable H1, or a read/
+    // parse skip) accounts for it. A walk that treated the reserved
+    // name as a post/brief/profile did not: the ancestor pass still
+    // reports exactly one E-TYPE skip while those walk events stand.
+    let root = std::fs::canonicalize(&p.dir).unwrap_or_else(|_| p.dir.clone());
+    let root_state = fsx::walk::state_file(&root).ok().flatten();
+    let mut root_state_accounted = false;
 
     for file in &scanned.files {
         ctx.file_read();
         let path_key = context::object_of_path(file);
+        let is_root_state = root_state.as_ref().is_some_and(|rs| {
+            file.file_name() == rs.file_name() && canonical_of(file) == canonical_of(rs)
+        });
         match fsx::read(file, consts::SCAN_READ_WAIT_MS, None) {
             Err(Fault::Reason { .. }) => {
                 aux.push((path_key, "skipped", vec!["busy".to_string()]));
+                if is_root_state {
+                    root_state_accounted = true;
+                }
             }
             Err(Fault::Diagnostics(diags)) => {
                 let id = blocking_id(&diags).unwrap_or("E-TOO-LARGE");
                 aux.push((path_key, "skipped", vec![id.to_string()]));
+                if is_root_state {
+                    root_state_accounted = true;
+                }
             }
             Err(_) => {
                 aux.push((path_key, "skipped", vec!["unreadable".to_string()]));
+                if is_root_state {
+                    root_state_accounted = true;
+                }
             }
             Ok(bytes) => match doc::parse(bytes, file, now) {
                 Err(Fault::Diagnostics(diags)) => {
                     let id = blocking_id(&diags).unwrap_or("E-UTF8");
                     aux.push((path_key, "skipped", vec![id.to_string()]));
+                    if is_root_state {
+                        root_state_accounted = true;
+                    }
                 }
                 Err(f) => return Err(f),
                 Ok(parsed) => match parsed.kind {
                     None => {
                         let id = blocking_id(&parsed.diagnostics).unwrap_or("E-H1");
                         aux.push((path_key, "skipped", vec![id.to_string()]));
+                        if is_root_state {
+                            root_state_accounted = true;
+                        }
                     }
                     Some(doc::Kind::Post) => {
                         if let Some(d) = first_diag(&parsed.diagnostics, &SKIP_CLASS) {
@@ -121,8 +156,10 @@ pub fn read_notification(ctx: &mut Ctx, p: &ReadNotificationParams) -> Result<Re
                             }
                             let info = build_state_info(file, &parsed);
                             state_events(&info, &p.nick, since, now, &mut events, &mut tie);
-                            seen_state.push(canonical_of(file));
                             state_infos.push(info);
+                        }
+                        if is_root_state {
+                            root_state_accounted = true;
                         }
                     }
                     // brief / agent-profile: not notification candidates.
@@ -132,9 +169,15 @@ pub fn read_notification(ctx: &mut Ctx, p: &ReadNotificationParams) -> Result<Re
         }
     }
 
-    // §10.6.2: ancestor state files. Ancestor enumeration runs on the
-    // canonicalized path (§10.5.2; lexical fallback per §13 Q4).
-    let root = std::fs::canonicalize(&p.dir).unwrap_or_else(|_| p.dir.clone());
+    // A completed state-metadata walk of DIR's reserved file is
+    // authoritative; the ancestor pass must not re-read it. A walk that
+    // only saw a post/brief/profile at that name is not: shared's
+    // state-scope reader still emits the E-TYPE skip.
+    if root_state_accounted {
+        if let Some(rs) = &root_state {
+            seen_state.push(canonical_of(rs));
+        }
+    }
     for ancestor in fsx::walk::ancestors(&root) {
         let state_file = match fsx::walk::state_file(&ancestor) {
             Ok(Some(file)) => file,
@@ -292,8 +335,7 @@ pub fn read_notification(ctx: &mut Ctx, p: &ReadNotificationParams) -> Result<Re
     }
     let record_count = events.len();
 
-    aux.sort_by(|a, b| a.0.cmp(&b.0));
-    aux.dedup_by(|a, b| a.0 == b.0);
+    dedup_aux(&mut aux);
     let aux_count = aux.len();
     for (path, key, causes) in aux {
         let mut values = vec![path];
@@ -491,4 +533,153 @@ fn blocking_id(diags: &[Diagnostic]) -> Option<&'static str> {
         .into_iter()
         .find(|d| SKIP_CLASS.contains(&d.id))
         .map(|d| d.id)
+}
+
+/// Sort the auxiliary rows (path-major, §10.6.5 tail order) and drop
+/// exact duplicates only: the same path with a different row kind or
+/// cause is real information and stays (§10.1.5 — an unreadable
+/// directory and a busy file can share a display path).
+fn dedup_aux(aux: &mut Vec<(String, &'static str, Vec<String>)>) {
+    aux.sort();
+    aux.dedup();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ops::context::Ctx;
+    use crate::ops::ReadNotificationParams;
+    use crate::report::Row;
+
+    fn scratch(tag: &str) -> PathBuf {
+        let dir = std::env::temp_dir()
+            .join("coexist-read-notification-tests")
+            .join(format!(
+                "{}-{}-{}",
+                tag,
+                std::process::id(),
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.as_nanos())
+                    .unwrap_or(0)
+            ));
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    fn params(dir: &Path, ctx: &Ctx) -> ReadNotificationParams {
+        ReadNotificationParams {
+            dir: dir.to_path_buf(),
+            nick: "alice".to_string(),
+            since: ctx.now - chrono::Duration::hours(1),
+            walk: fsx::walk::Options::default(),
+        }
+    }
+
+    fn value_rows(report: &Report, key: &str) -> Vec<Vec<String>> {
+        report
+            .rows
+            .iter()
+            .filter_map(|row| match row {
+                Row::Fields { key: k, values, .. } if k == key => Some(values.clone()),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn root_state_file_is_reported_skipped_once() {
+        // A root state file with an undecidable H1 is skipped by the
+        // subtree walk; the ancestor pass (which starts at DIR itself)
+        // used to re-read it and print a second skipped row under the
+        // directory's display name.
+        let dir = scratch("root-state-skip-once");
+        std::fs::write(dir.join("state.agent-besties.md"), b"# not a managed H1\n").unwrap();
+        let mut ctx = Ctx::new("agent-coexist read-notification".to_string(), None).unwrap();
+        let p = params(&dir, &ctx);
+        let report = read_notification(&mut ctx, &p).unwrap();
+        let skipped = value_rows(&report, "skipped");
+        assert_eq!(skipped.len(), 1, "rows: {skipped:?}");
+        assert_eq!(skipped[0][1], "E-H1");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn root_state_file_entries_are_counted_once() {
+        // The suppression must not over-reach: a readable root state
+        // file still contributes its declarations exactly once.
+        let dir = scratch("root-state-once");
+        let now = crate::time::now().unwrap();
+        let start = crate::time::format(now - chrono::Duration::minutes(30));
+        let until = crate::time::format(now + chrono::Duration::hours(2));
+        std::fs::write(
+            dir.join("state.agent-besties.md"),
+            format!("# .state\n\n## locked\nbob {start}..{until}\n").as_bytes(),
+        )
+        .unwrap();
+        let mut ctx = Ctx::new("agent-coexist read-notification".to_string(), None).unwrap();
+        let p = params(&dir, &ctx);
+        let report = read_notification(&mut ctx, &p).unwrap();
+        let state_rows = value_rows(&report, "state");
+        assert_eq!(state_rows.len(), 1, "rows: {state_rows:?}");
+        assert_eq!(state_rows[0][3], "bob");
+        assert!(value_rows(&report, "skipped").is_empty());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn reserved_name_post_keeps_mention_and_one_etype_skip() {
+        // A valid post at the reserved state-file name is walked as a
+        // post (its mention is a real notification) but is not a
+        // completed state-metadata check: the ancestor pass reports
+        // exactly one E-TYPE skip for the reserved name.
+        let dir = scratch("reserved-name-post-etype");
+        let now = crate::time::now().unwrap();
+        let when = crate::time::format(now - chrono::Duration::minutes(30));
+        std::fs::write(
+            dir.join("state.agent-besties.md"),
+            format!("# state.post\n\n## #1 bob ({when})\n\n```md\n@alice hello\n```\n").as_bytes(),
+        )
+        .unwrap();
+        let mut ctx = Ctx::new("agent-coexist read-notification".to_string(), None).unwrap();
+        let p = params(&dir, &ctx);
+        let report = read_notification(&mut ctx, &p).unwrap();
+        let mentions = value_rows(&report, "mention");
+        assert_eq!(mentions.len(), 1, "mentions: {mentions:?}");
+        assert_eq!(mentions[0][2], "bob");
+        let skipped = value_rows(&report, "skipped");
+        assert_eq!(skipped.len(), 1, "skipped: {skipped:?}");
+        assert_eq!(skipped[0][1], "E-TYPE");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn aux_dedup_keeps_distinct_causes_for_the_same_path() {
+        let mut aux = vec![
+            ("notes".to_string(), "skipped", vec!["busy".to_string()]),
+            (
+                "notes".to_string(),
+                "skipped",
+                vec!["unreadable".to_string()],
+            ),
+            (
+                "notes".to_string(),
+                "partial",
+                vec!["E-STATUS-DUP L3".to_string()],
+            ),
+            (
+                "notes".to_string(),
+                "skipped",
+                vec!["unreadable".to_string()],
+            ),
+        ];
+        dedup_aux(&mut aux);
+        // only the exact duplicate is dropped; the distinct causes for
+        // the same path all stay visible
+        assert_eq!(aux.len(), 3);
+        assert_eq!(aux[0].1, "partial");
+        assert_eq!(aux[0].2, vec!["E-STATUS-DUP L3".to_string()]);
+        assert_eq!(aux[1].2, vec!["busy".to_string()]);
+        assert_eq!(aux[2].2, vec!["unreadable".to_string()]);
+    }
 }

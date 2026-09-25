@@ -67,7 +67,8 @@ fn step(
 
 /// §3.5.1 create form: `# <stem>.post` + blank + comment #1.
 fn create_step(p: &PostParams, now: &str) -> Result<(Mutation, Step), Fault> {
-    let prefix = format!("# {}.post\n\n", stem_of(&p.path));
+    let stem = require_valid_stem(&p.path)?;
+    let prefix = format!("# {stem}.post\n\n");
     let mut content = prefix.clone();
     content.push_str("## #1 ");
     content.push_str(&p.nick);
@@ -305,6 +306,7 @@ pub(super) enum Applied {
 pub(super) struct FlockStash {
     holders: Vec<shared::FlockHolder>,
     issues: Vec<(String, shared::ScanIssue)>,
+    unreadable_dirs: Vec<String>,
     canonicalize_failed: Vec<String>,
 }
 
@@ -369,8 +371,12 @@ pub(super) fn guarded_apply(
 }
 
 /// Run the functional-lock verdict (§10.8) inside the closure of a
-/// byte-writing `profile` / `brief` form. Returns `true` when the write
-/// must not proceed; the outcome data is stashed for the report.
+/// byte-writing `profile` / `brief` form. The outcome data is always
+/// stashed — a later successful write must still surface an incomplete
+/// scan (`skipped` / `partial` / unreadable-directory / `canonicalize`
+/// rows with a `warn` first line, §10.5.6). Returns `true` when an
+/// actual other-party lock means the write must not proceed; the stashed
+/// verdict becomes the `E-FLOCKED` report in [`finish`].
 pub(super) fn stash_flock(
     stash: &mut Option<FlockStash>,
     ctx: &mut Ctx,
@@ -378,33 +384,37 @@ pub(super) fn stash_flock(
     as_nick: Option<&str>,
 ) -> bool {
     let outcome = shared::functional_lock(ctx, path, as_nick);
-    if outcome.holders.is_empty() {
-        return false;
-    }
+    let blocked = !outcome.holders.is_empty();
     *stash = Some(FlockStash {
         holders: outcome.holders,
         issues: outcome.scope.issues,
+        unreadable_dirs: outcome.scope.unreadable_dirs,
         canonicalize_failed: outcome.scope.canonicalize_failed,
     });
-    true
+    blocked
 }
 
-/// Exit for a failed functional-lock verdict inside the closure: a target
-/// created by this invocation is deleted under the lock (fsx also removes
-/// the directories it created; no `created` rows are emitted, §10.8.3); an
-/// existing target fails with `E-FLOCKED`.
-pub(super) fn flock_blocked(created: bool) -> Result<(Mutation, Step), Fault> {
-    if created {
-        Ok((Mutation::Delete, Step::Done(Done::empty())))
-    } else {
-        Err(Fault::reason("E-FLOCKED"))
-    }
+/// Exit for a failed functional-lock verdict inside the closure: always
+/// `Err(E-FLOCKED)`, never a successful mutation. The refusal therefore
+/// runs fsx's plan-failure cleanup (§10.8.3): a file this invocation just
+/// `create_new`d is deleted (still empty) together with the directories
+/// this invocation created (still empty), while a pre-existing empty file
+/// taken over at the deadline survives — initial-content mode is never
+/// confused with ownership of the file.
+pub(super) fn flock_blocked() -> Result<(Mutation, Step), Fault> {
+    Err(Fault::reason("E-FLOCKED"))
 }
 
 /// Common report assembly after `fsx::mutate`: success rows (with `created`
 /// rows first), check-shaped refusals, and `reason`-form translation of
 /// `Fault::Reason` failures (including fsx's `E-FILE-MISSING` / `E-LOCKED`
 /// / `E-INUSE` / `E-FLOCKED`).
+///
+/// A completed write whose functional-lock scan was incomplete keeps the
+/// scan visible: `skipped` / `partial` / unreadable-directory /
+/// `canonicalize` rows are appended and the report is promoted to `warn`
+/// (best-effort semantics — no recognizable holder may write, the unread
+/// portion is never hidden).
 pub(super) fn finish(
     ctx: &mut Ctx,
     command: &'static str,
@@ -414,27 +424,25 @@ pub(super) fn finish(
 ) -> Result<Report, Fault> {
     let object = context::object_of_path(path);
     match result {
-        Ok(wr) => {
-            if let Some(stash) = stash {
-                return Ok(flocked_report(ctx, command, &object, path, stash));
-            }
-            match wr.value {
-                Step::Done(done) => {
-                    let mut report = Report::new(command, &object);
-                    if wr.created {
-                        created_rows(&mut report, &wr.created_dirs, path);
-                    }
-                    report.rows.extend(done.rows);
-                    if done.warn {
+        Ok(wr) => match wr.value {
+            Step::Done(done) => {
+                let mut report = Report::new(command, &object);
+                if wr.created {
+                    created_rows(&mut report, &wr.created_dirs, path);
+                }
+                report.rows.extend(done.rows);
+                if done.warn {
+                    report.warn();
+                }
+                if let Some(stash) = &stash {
+                    if append_scan_rows(&mut report, stash) {
                         report.warn();
                     }
-                    Ok(report)
                 }
-                Step::Refused { kind, diags } => {
-                    Ok(refuse_report(command, &object, path, kind, diags))
-                }
+                Ok(report)
             }
-        }
+            Step::Refused { kind, diags } => Ok(refuse_report(command, &object, path, kind, diags)),
+        },
         Err(Fault::Reason { id, params }) => {
             if id == "E-FLOCKED" {
                 if let Some(stash) = stash {
@@ -457,8 +465,8 @@ pub(super) fn finish(
 /// `E-FLOCKED` report (§8.3.1): `reason` / `fix` from the latest-until
 /// holder, then `also-locked` (until descending, nick ascending — the
 /// order `shared::functional_lock` already returns), then the skipped /
-/// partial rows for state files the verdict could not read (§10.5.6), then
-/// canonicalize-failure rows.
+/// partial / unreadable-directory rows for state the verdict could not
+/// read (§10.5.6), then canonicalize-failure rows.
 fn flocked_report(
     ctx: &mut Ctx,
     command: &'static str,
@@ -488,6 +496,18 @@ fn flocked_report(
             ],
         );
     }
+    append_scan_rows(&mut report, &stash);
+    report
+}
+
+/// Append the stashed scan-incompleteness rows (§10.5.6 order):
+/// `skipped <dir> busy|<E-ID>` for every state file the verdict could not
+/// incorporate, `skipped <dir> unreadable` for directories that could not
+/// be listed, then `canonicalize <dir> failed` rows. Returns whether
+/// anything was appended, so a successful report can promote itself to
+/// `warn`.
+fn append_scan_rows(report: &mut Report, stash: &FlockStash) -> bool {
+    let mut any = false;
     for (dir, issue) in &stash.issues {
         match issue {
             shared::ScanIssue::Busy => {
@@ -503,11 +523,17 @@ fn flocked_report(
                 );
             }
         }
+        any = true;
+    }
+    for dir in &stash.unreadable_dirs {
+        report.kv("skipped", vec![dir.clone(), "unreadable".to_string()]);
+        any = true;
     }
     for dir in &stash.canonicalize_failed {
         report.kv("canonicalize", vec![dir.clone(), "failed".to_string()]);
+        any = true;
     }
-    report
+    any
 }
 
 /// `created  <dir>/` rows (fsx reports them outer→inner), then
@@ -702,6 +728,22 @@ pub(super) fn preamble_anchor(doc: &doc::Document) -> usize {
     anchor
 }
 
+/// Creation gate shared by every H1-building form (§2.2.2): the H1's name
+/// is the target's file-name stem, so a stem outside the NAME grammar
+/// cannot produce valid content. Fails `E-NAME` (param `name`) before any
+/// content byte is built; fsx's plan-failure cleanup then removes what this
+/// invocation created. Existing files are never judged here — a valid file
+/// whose H1 name differs from the stem is check's `W-NAME`, not a new
+/// write refusal.
+pub(super) fn require_valid_stem(path: &Path) -> Result<String, Fault> {
+    let stem = stem_of(path);
+    if names::valid_name(&stem) {
+        Ok(stem)
+    } else {
+        Err(Fault::reason("E-NAME").with("name", names::display_text(&stem)))
+    }
+}
+
 /// Stem of a managed file path (file name without the
 /// `.agent-besties.md` suffix) for H1 creation.
 pub(super) fn stem_of(path: &Path) -> String {
@@ -712,5 +754,62 @@ pub(super) fn stem_of(path: &Path) -> String {
     match name.strip_suffix(consts::SUFFIX) {
         Some(stem) => stem.to_string(),
         None => name,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ops::context::test_ctx;
+    use crate::time;
+    use std::path::PathBuf;
+
+    fn scratch(tag: &str) -> PathBuf {
+        let dir = std::env::temp_dir()
+            .join("coexist-post-tests")
+            .join(format!(
+                "{}-{}-{}",
+                tag,
+                std::process::id(),
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.as_nanos())
+                    .unwrap_or(0)
+            ));
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    fn invalid_stem_fails_ename_with_the_actual_name() {
+        let target = PathBuf::from("has space.agent-besties.md");
+        match require_valid_stem(&target) {
+            Ok(stem) => panic!("invalid stem accepted: {stem}"),
+            Err(Fault::Reason { id, params }) => {
+                assert_eq!(id, "E-NAME");
+                assert_eq!(params, vec![("name", "has space".to_string())]);
+            }
+            Err(other) => panic!("unexpected fault: {other:?}"),
+        }
+        // The raw stem is judged, not a folded or truncated surrogate.
+        assert!(require_valid_stem(&PathBuf::from("ok.agent-besties.md")).is_ok());
+    }
+
+    #[test]
+    fn create_rejects_invalid_stem_without_leaving_a_file() {
+        let dir = scratch("ename");
+        let target = dir.join("bad stem.agent-besties.md");
+        let p = PostParams {
+            path: target.clone(),
+            nick: "me".to_string(),
+            body: "hello".to_string(),
+            edit: None,
+        };
+        let mut ctx = test_ctx(time::parse("2026-09-25T12:00:00Z").unwrap());
+        let report = run(&mut ctx, &p).unwrap();
+        assert_eq!(report.status, crate::report::Status::Error);
+        assert_eq!(report.exit, 1);
+        assert!(!target.exists());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

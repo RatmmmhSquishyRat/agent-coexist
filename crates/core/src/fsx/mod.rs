@@ -8,10 +8,11 @@
 //!   `MAX_MANAGED_FILE_BYTES`) → release. Never reads without holding the
 //!   lock.
 //! * writes: open (read+write) or `create_new` → exclusive lock → same-file
-//!   identity re-check → read all bytes → run the caller's plan → `seek(0)` →
-//!   `write_all` → `set_len` (write before truncate) → `flush` → `sync_data` →
-//!   release. Deletion (`Mutation::Delete`) happens on the held lock via
-//!   `remove_file`, never via truncation.
+//!   identity re-check → read all bytes → run the caller's plan → identity
+//!   re-check → `seek(0)` → `write_all` → `set_len` (write before truncate) →
+//!   `flush` → `sync_data` → release. Deletion (`Mutation::Delete`) also
+//!   rechecks identity and happens on the held lock via `remove_file`,
+//!   never via truncation.
 //!
 //! Error signalling (consumed by `ops`):
 //!
@@ -274,6 +275,18 @@ pub struct WriteResult<T> {
     pub deleted: bool,
 }
 
+/// Only successful exclusive-lock acquisition constructs this wrapper.
+/// Merely opening or creating a file never authorizes rollback deletion.
+#[derive(Debug)]
+struct LockedFile(File);
+
+/// Retain the native identity handle until cleanup or successful reporting.
+/// A pathname alone is not evidence that a directory is still ours.
+struct CreatedDir {
+    path: PathBuf,
+    identity: same_file::Handle,
+}
+
 /// Run `plan` under an exclusive lock on the real target file.
 ///
 /// `plan(bytes, initial)` receives the file's current bytes (empty in
@@ -291,13 +304,19 @@ pub struct WriteResult<T> {
 ///   deadline, creating forms take over (`created = true`), non-creating
 ///   forms get `Diagnostics([E-H1])`;
 /// * same-file identity re-check after locking, with bounded reopen
-///   (`OPEN_RETRIES`, only identity changes count);
+///   (`OPEN_RETRIES`, only identity changes count), and again after a
+///   successful plan before Write/Delete; a changed path then gets E-LOCKED;
 /// * held-lock deletion for `Mutation::Delete`;
-/// * creation-failure cleanup: if `plan` fails on a file this call just
-///   `create_new`-created and that is still empty, the file is deleted on
-///   the held lock and the directories created by this call (still empty)
-///   are removed inner→outer, so a rejected `profile`/`brief` leaves no
-///   trace (§10.8.3);
+/// * creation rollback on pre-write and zero-byte write failures only when
+///   this call holds the exclusive lock, the created file still matches
+///   `path`, and it is still empty. Nonempty/unknown content and contested
+///   creations are preserved, together with their directories;
+/// * directory rollback is inner→outer, only for still-empty directories
+///   matching retained identity handles. Failed identity capture never
+///   falls back to path-only deletion. Portable directory creation and
+///   identity capture are separate operations, as are the final identity
+///   checks and unlink calls; these short windows against non-cooperating
+///   replacements are not claimed as atomic ownership guarantees;
 /// * write before `set_len`, then `flush` and `sync_data`.
 pub fn mutate<T>(
     path: &Path,
@@ -306,51 +325,78 @@ pub fn mutate<T>(
 ) -> Result<WriteResult<T>, Fault> {
     let deadline = Deadline::new(policy.wait_ms);
     let mut identity_reopens = 0usize;
-    let mut created_dirs: Vec<PathBuf> = Vec::new();
+    let mut created_dirs = Vec::new();
     let mut parents_ensured = false;
-    // True only while the file on disk is one this call created via
-    // `create_new` and nobody has written to it yet.
-    let mut created_by_us = false;
 
     loop {
         match OpenOptions::new().read(true).write(true).open(path) {
             Ok(file) => {
-                lock_exclusive_until(&file, path, &deadline)?;
-                if !same_file_identity(&file, path)? {
-                    // Deleted or replaced under us: back to the create dispatch.
-                    drop(file);
-                    created_by_us = false;
-                    identity_reopens += 1;
-                    if identity_reopens > consts::OPEN_RETRIES {
-                        return Err(Fault::reason("E-LOCKED"));
+                // Without this lock an adopter may still be preparing its
+                // first byte. Preserve the file and all created directories.
+                let file = lock_exclusive_until(file, path, &deadline)?;
+                match same_file_identity(&file.0, path) {
+                    Ok(true) => {}
+                    Ok(false) => {
+                        drop(file);
+                        identity_reopens += 1;
+                        if identity_reopens > consts::OPEN_RETRIES {
+                            return Err(fail_with_rollback(
+                                Fault::reason("E-LOCKED"),
+                                None,
+                                path,
+                                false,
+                                created_dirs,
+                            ));
+                        }
+                        continue;
                     }
-                    continue;
+                    Err(fault) => {
+                        return Err(fail_with_rollback(
+                            fault,
+                            Some(file),
+                            path,
+                            false,
+                            created_dirs,
+                        ));
+                    }
                 }
-                let bytes = read_all_bounded(&file).map_err(|e| read_fault(path, e))?;
+                let bytes = match read_all_bounded(&file.0) {
+                    Ok(bytes) => bytes,
+                    Err(e) => {
+                        return Err(fail_with_rollback(
+                            read_fault(path, e),
+                            Some(file),
+                            path,
+                            false,
+                            created_dirs,
+                        ));
+                    }
+                };
                 if bytes.is_empty() {
                     if deadline.expired() {
                         if policy.create {
-                            // Abandoned creation: we hold the lock, write the
-                            // complete initial content now (§10.2.3). A file not
-                            // created by us is never deleted on later failure.
+                            // Adopted zero-byte files are never ours to
+                            // unlink, even when we supply initial content.
                             return run_plan(
                                 file,
                                 path,
                                 Vec::new(),
                                 true,
-                                created_by_us,
+                                false,
                                 created_dirs,
                                 &mut plan,
                             );
                         }
-                        return Err(Fault::Diagnostics(vec![
-                            Diagnostic::new("E-H1", 1).with("line", "")
-                        ]));
+                        return Err(fail_with_rollback(
+                            Fault::Diagnostics(vec![Diagnostic::new("E-H1", 1).with("line", "")]),
+                            Some(file),
+                            path,
+                            false,
+                            created_dirs,
+                        ));
                     }
-                    // Release the lock, wait one poll, reopen; zero-byte retries
-                    // do not consume the identity-reopen budget.
+                    // Zero-byte retries do not consume the reopen budget.
                     drop(file);
-                    created_by_us = false;
                     sleep_one_poll(&deadline);
                     continue;
                 }
@@ -358,13 +404,19 @@ pub fn mutate<T>(
             }
             Err(e) if e.kind() == io::ErrorKind::NotFound => {
                 if !policy.create {
-                    // §10.1.9/§10.9: displayed paths fold whitespace runs;
-                    // display_text also keeps the value single-line safe.
-                    return Err(Fault::reason("E-FILE-MISSING")
-                        .with("file", names::display_text(&walk::display_path(path))));
+                    return Err(fail_with_rollback(
+                        Fault::reason("E-FILE-MISSING")
+                            .with("file", names::display_text(&walk::display_path(path))),
+                        None,
+                        path,
+                        false,
+                        created_dirs,
+                    ));
                 }
                 if policy.create_parents && !parents_ensured {
-                    ensure_parents(path, &mut created_dirs)?;
+                    if let Err(fault) = ensure_parents(path, &mut created_dirs) {
+                        return Err(fail_with_rollback(fault, None, path, false, created_dirs));
+                    }
                     parents_ensured = true;
                 }
                 match OpenOptions::new()
@@ -374,68 +426,120 @@ pub fn mutate<T>(
                     .open(path)
                 {
                     Ok(file) => {
-                        lock_exclusive_until(&file, path, &deadline)?;
-                        // Our freshly created file can already have been
-                        // deleted and recreated by someone else before we
-                        // locked it; mutating our handle would then write an
-                        // unlinked file nobody ever sees. Same identity rule
-                        // as the existing path (§10.2.6).
-                        if !same_file_identity(&file, path)? {
-                            drop(file);
-                            created_by_us = false;
-                            identity_reopens += 1;
-                            if identity_reopens > consts::OPEN_RETRIES {
-                                return Err(Fault::reason("E-LOCKED"));
+                        // Creation proves neither exclusive ownership nor
+                        // that another writer has not adopted this file.
+                        // On lock failure do not unlink or clean directories.
+                        let file = lock_exclusive_until(file, path, &deadline)?;
+                        match same_file_identity(&file.0, path) {
+                            Ok(true) => {}
+                            Ok(false) => {
+                                drop(file);
+                                identity_reopens += 1;
+                                if identity_reopens > consts::OPEN_RETRIES {
+                                    return Err(fail_with_rollback(
+                                        Fault::reason("E-LOCKED"),
+                                        None,
+                                        path,
+                                        false,
+                                        created_dirs,
+                                    ));
+                                }
+                                continue;
                             }
-                            continue;
+                            Err(fault) => {
+                                return Err(fail_with_rollback(
+                                    fault,
+                                    Some(file),
+                                    path,
+                                    true,
+                                    created_dirs,
+                                ));
+                            }
                         }
-                        // Mandatory re-read: a non-empty file means another
-                        // writer took over our creation.
-                        let bytes = read_all_bounded(&file).map_err(|e| read_fault(path, e))?;
-                        if bytes.is_empty() {
-                            return run_plan(
-                                file,
-                                path,
-                                Vec::new(),
-                                true,
-                                true,
-                                created_dirs,
-                                &mut plan,
-                            );
-                        }
-                        return run_plan(file, path, bytes, false, false, Vec::new(), &mut plan);
+                        // Mandatory re-read: another writer may already
+                        // have supplied content through our creation.
+                        let bytes = match read_all_bounded(&file.0) {
+                            Ok(bytes) => bytes,
+                            Err(e) => {
+                                return Err(fail_with_rollback(
+                                    read_fault(path, e),
+                                    Some(file),
+                                    path,
+                                    true,
+                                    created_dirs,
+                                ));
+                            }
+                        };
+                        let initial = bytes.is_empty();
+                        return run_plan(
+                            file,
+                            path,
+                            bytes,
+                            initial,
+                            initial,
+                            created_dirs,
+                            &mut plan,
+                        );
                     }
-                    Err(e2) if e2.kind() == io::ErrorKind::AlreadyExists => {
-                        // Concurrent creation: fall through to the existing path.
-                        continue;
-                    }
+                    Err(e2) if e2.kind() == io::ErrorKind::AlreadyExists => continue,
                     Err(e2) if cfg!(windows) && is_win_error(&e2, WIN_ERROR_ACCESS_DENIED) => {
                         // Possible pending delete: bounded retry (§10.2.6).
                         identity_reopens += 1;
                         if identity_reopens > consts::OPEN_RETRIES {
-                            return Err(Fault::io("create", path.to_path_buf(), e2));
+                            return Err(fail_with_rollback(
+                                Fault::io("create", path.to_path_buf(), e2),
+                                None,
+                                path,
+                                false,
+                                created_dirs,
+                            ));
                         }
                         sleep_one_poll(&deadline);
                         continue;
                     }
                     Err(e2) if is_win_error(&e2, WIN_ERROR_SHARING_VIOLATION) => {
+                        // The inaccessible target may have been adopted;
+                        // preserve its containing directories as well.
                         return Err(Fault::reason("E-INUSE"));
                     }
-                    Err(e2) => return Err(Fault::io("create", path.to_path_buf(), e2)),
+                    Err(e2) => {
+                        return Err(fail_with_rollback(
+                            Fault::io("create", path.to_path_buf(), e2),
+                            None,
+                            path,
+                            false,
+                            created_dirs,
+                        ));
+                    }
                 }
             }
             Err(e) if cfg!(windows) && is_win_error(&e, WIN_ERROR_ACCESS_DENIED) => {
                 identity_reopens += 1;
                 if identity_reopens > consts::OPEN_RETRIES {
-                    return Err(Fault::io("open", path.to_path_buf(), e));
+                    return Err(fail_with_rollback(
+                        Fault::io("open", path.to_path_buf(), e),
+                        None,
+                        path,
+                        false,
+                        created_dirs,
+                    ));
                 }
                 sleep_one_poll(&deadline);
                 continue;
             }
             Err(e) if is_win_error(&e, WIN_ERROR_SHARING_VIOLATION) => {
+                // No ownership proof for this contested target.
                 return Err(Fault::reason("E-INUSE"));
             }
-            Err(e) => return Err(Fault::io("open", path.to_path_buf(), e)),
+            Err(e) => {
+                return Err(fail_with_rollback(
+                    Fault::io("open", path.to_path_buf(), e),
+                    None,
+                    path,
+                    false,
+                    created_dirs,
+                ));
+            }
         }
     }
 }
@@ -443,108 +547,182 @@ pub fn mutate<T>(
 /// Apply the plan's mutation to a locked file handle.
 ///
 /// `initial` is the create/takeover flag passed to `plan`; `created_by_us`
-/// drives the creation-failure cleanup. `created_dirs` is reported on
-/// success and used for cleanup on failure.
+/// drives the creation rollback ([`fail_with_rollback`]). `created_dirs` is
+/// reported on success and rolled back on failure.
 fn run_plan<T>(
-    mut file: File,
+    mut file: LockedFile,
     path: &Path,
     bytes: Vec<u8>,
     initial: bool,
     created_by_us: bool,
-    created_dirs: Vec<PathBuf>,
+    created_dirs: Vec<CreatedDir>,
     plan: &mut dyn FnMut(Vec<u8>, bool) -> Result<(Mutation, T), Fault>,
 ) -> Result<WriteResult<T>, Fault> {
-    let outcome = plan(bytes, initial);
-    let (mutation, value) = match outcome {
-        Ok(ok) => ok,
-        Err(fault) => {
-            // Creation-failure cleanup (§10.8.3): remove only what this
-            // call created — a still-empty file we just `create_new`d
-            // (deleted on the held lock), then the directories we created,
-            // but only once the handle is released: a Windows pending-delete
-            // handle keeps the directory entry alive and would make
-            // `remove_dir` fail. Real cleanup failures surface as
-            // `Fault::Io` instead of hiding behind the caller's fault; an
-            // adopted pre-existing zero-byte file is never deleted.
-            if created_by_us {
-                let file_was_empty = match file.metadata() {
-                    Ok(md) => md.len() == 0,
-                    Err(e) => return Err(Fault::io("delete", path.to_path_buf(), e)),
-                };
-                if file_was_empty {
-                    if let Err(e) = std::fs::remove_file(path) {
-                        return Err(Fault::io("delete", path.to_path_buf(), e));
-                    }
-                }
-                drop(file);
-                for dir in created_dirs.iter().rev() {
-                    match std::fs::read_dir(dir) {
-                        Ok(mut entries) => match entries.next() {
-                            // Owned-directory cleanup: only a directory this
-                            // call created, and only while it is still empty.
-                            None => {
-                                if let Err(e) = std::fs::remove_dir(dir) {
-                                    return Err(Fault::io("delete", dir.clone(), e));
-                                }
-                            }
-                            // A real directory-entry error is a cleanup
-                            // failure, not an occupied directory.
-                            Some(Err(e)) => return Err(Fault::io("delete", dir.clone(), e)),
-                            Some(Ok(_)) => {}
-                        },
-                        Err(e) => return Err(Fault::io("delete", dir.clone(), e)),
-                    }
-                }
-            }
-            return Err(fault);
+    let outcome = (|| {
+        let (mutation, value) = plan(bytes, initial)?;
+        if matches!(&mutation, Mutation::Write(_) | Mutation::Delete)
+            && !same_file_identity(&file.0, path)?
+        {
+            // Planning may have taken arbitrarily long. Never apply its
+            // result to a replacement path or report a detached write as
+            // success. The final check→mutation window is not atomic.
+            return Err(Fault::reason("E-LOCKED"));
         }
-    };
-    match mutation {
-        Mutation::Write(new_bytes) => {
-            if new_bytes.len() > consts::MAX_MANAGED_FILE_BYTES {
-                // Rejected before any byte is touched (§10.2.2).
-                return Err(too_large_fault());
+        match mutation {
+            Mutation::Write(new_bytes) => {
+                if new_bytes.len() > consts::MAX_MANAGED_FILE_BYTES {
+                    return Err(too_large_fault());
+                }
+                let new_len = new_bytes.len() as u64;
+                write_step(path, || file.0.seek(SeekFrom::Start(0)).map(|_| ()))?;
+                // Write before truncate: partial bytes survive any failure.
+                write_step(path, || file.0.write_all(&new_bytes))?;
+                write_step(path, || file.0.set_len(new_len))?;
+                write_step(path, || file.0.flush())?;
+                write_step(path, || file.0.sync_data())?;
+                Ok((value, initial, false))
             }
-            let new_len = new_bytes.len() as u64;
-            write_step(path, || file.seek(SeekFrom::Start(0)).map(|_| ()))?;
-            // Write before truncate: a crash leaves "new content + old tail"
-            // instead of wiping old comments (§10.2.2, §13 Q12).
-            write_step(path, || file.write_all(&new_bytes))?;
-            write_step(path, || file.set_len(new_len))?;
-            write_step(path, || file.flush())?;
-            write_step(path, || file.sync_data())?;
-            Ok(WriteResult {
-                value,
-                created: initial,
-                created_dirs,
-                deleted: false,
-            })
+            Mutation::Unchanged => Ok((value, initial, false)),
+            Mutation::Delete => {
+                // Held lock and fresh identity check, never truncation.
+                std::fs::remove_file(path).map_err(|e| {
+                    if is_write_stage_busy(&e) {
+                        Fault::reason("E-LOCKED")
+                    } else {
+                        Fault::io("delete", path.to_path_buf(), e)
+                    }
+                })?;
+                Ok((value, false, true))
+            }
         }
-        Mutation::Unchanged => Ok(WriteResult {
-            value,
-            created: initial,
+    })();
+    match outcome {
+        Err(fault) => Err(fail_with_rollback(
+            fault,
+            Some(file),
+            path,
+            created_by_us,
             created_dirs,
-            deleted: false,
-        }),
-        Mutation::Delete => {
-            // Delete on the held lock; never truncate first (§10.2.7). Our
-            // handle was opened with FILE_SHARE_DELETE on Windows.
-            std::fs::remove_file(path).map_err(|e| {
-                if is_write_stage_busy(&e) {
-                    Fault::reason("E-LOCKED")
-                } else {
-                    Fault::io("delete", path.to_path_buf(), e)
-                }
-            })?;
+        )),
+        Ok((value, created, deleted)) => {
             drop(file);
             Ok(WriteResult {
                 value,
-                created: false,
-                created_dirs,
-                deleted: true,
+                created,
+                created_dirs: created_dirs.into_iter().map(|dir| dir.path).collect(),
+                deleted,
             })
         }
     }
+}
+
+// ---------------------------------------------------------------------------
+// creation rollback (§10.8.3)
+// ---------------------------------------------------------------------------
+
+/// Fail with `fault`, removing only a locked, verified, empty creation and
+/// then verified empty directories. An unlocked handle cannot enter this
+/// function. Existing/adopted files, nonempty partial writes and unknown
+/// identities retain their directories as well. Real cleanup failures
+/// surface as `Fault::Io` instead of hiding behind `fault`.
+///
+/// File handles are closed before directory cleanup; directory identity
+/// handles are closed inner→outer so Windows pending deletion completes
+/// before the containing directory is considered. Identity checks and
+/// path-based removals are not atomic against non-cooperating replacements.
+fn fail_with_rollback(
+    fault: Fault,
+    file: Option<LockedFile>,
+    path: &Path,
+    created_by_us: bool,
+    created_dirs: Vec<CreatedDir>,
+) -> Fault {
+    if let Some(file) = file {
+        match rollback_created_file(file, path, created_by_us) {
+            Ok(true) => {}
+            Ok(false) => return fault,
+            Err(cleanup) => return cleanup,
+        }
+    }
+    match remove_empty_created_dirs(created_dirs) {
+        Err(cleanup) => cleanup,
+        Ok(()) => fault,
+    }
+}
+
+/// Return whether directory cleanup is safe after releasing this lock.
+/// Only an empty creation belonging to this call may be unlinked.
+fn rollback_created_file(
+    file: LockedFile,
+    path: &Path,
+    created_by_us: bool,
+) -> Result<bool, Fault> {
+    if !created_by_us {
+        return Ok(false);
+    }
+    // Check content first: even a detached partial write must retain all
+    // its directories. Failure to inspect the bytes is not proof of empty.
+    let metadata = file
+        .0
+        .metadata()
+        .map_err(|e| Fault::io("delete", path.to_path_buf(), e))?;
+    if metadata.len() != 0 {
+        return Ok(false);
+    }
+    if !same_file_identity(&file.0, path)? {
+        // Do not touch a missing or foreign pathname. Independently verified
+        // empty directories may still be cleaned up.
+        return Ok(true);
+    }
+    std::fs::remove_file(path).map_err(|e| Fault::io("delete", path.to_path_buf(), e))?;
+    Ok(true)
+}
+
+/// Consume retained directory handles inner→outer. Only an ordinary,
+/// still-empty directory matching its creation identity may be removed.
+fn remove_empty_created_dirs(created_dirs: Vec<CreatedDir>) -> Result<(), Fault> {
+    for dir in created_dirs.into_iter().rev() {
+        if !is_current_created_dir(&dir)? {
+            continue;
+        }
+        let empty = {
+            let mut entries = std::fs::read_dir(&dir.path)
+                .map_err(|e| Fault::io("delete", dir.path.clone(), e))?;
+            match entries.next() {
+                None => true,
+                Some(Ok(_)) => false,
+                Some(Err(e)) => return Err(Fault::io("delete", dir.path, e)),
+            }
+        };
+        // Drop the read_dir iterator before removal, and recheck both
+        // identity and directory kind after enumeration.
+        if empty && is_current_created_dir(&dir)? {
+            std::fs::remove_dir(&dir.path).map_err(|e| Fault::io("delete", dir.path.clone(), e))?;
+        }
+        // `dir.identity` closes here, before considering the parent.
+    }
+    Ok(())
+}
+
+fn is_current_created_dir(dir: &CreatedDir) -> Result<bool, Fault> {
+    let metadata = match std::fs::symlink_metadata(&dir.path) {
+        Ok(metadata) => metadata,
+        Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(false),
+        Err(e) => return Err(Fault::io("delete", dir.path.clone(), e)),
+    };
+    if !metadata.is_dir() || metadata.file_type().is_symlink() {
+        return Ok(false);
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::MetadataExt;
+        // Junctions and other reparse points also name foreign objects.
+        const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x400;
+        if metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
+            return Ok(false);
+        }
+    }
+    same_file_identity(dir.identity.as_file(), &dir.path)
 }
 
 // ---------------------------------------------------------------------------
@@ -563,11 +741,11 @@ fn write_step(path: &Path, step: impl FnOnce() -> io::Result<()>) -> Result<(), 
     })
 }
 
-/// Poll `try_lock` until `deadline` (exclusive).
-fn lock_exclusive_until(file: &File, path: &Path, deadline: &Deadline) -> Result<(), Fault> {
+/// Consume a handle, returning proof of exclusive locking only on success.
+fn lock_exclusive_until(file: File, path: &Path, deadline: &Deadline) -> Result<LockedFile, Fault> {
     loop {
         match file.try_lock() {
-            Ok(()) => return Ok(()),
+            Ok(()) => return Ok(LockedFile(file)),
             Err(TryLockError::WouldBlock) => {}
             Err(TryLockError::Error(e)) if is_win_error(&e, WIN_ERROR_LOCK_VIOLATION) => {}
             Err(TryLockError::Error(e)) => return Err(Fault::io("lock", path.to_path_buf(), e)),
@@ -723,10 +901,11 @@ fn parent_is_valid_dir(path: &Path) -> Result<bool, Fault> {
     }
 }
 
-/// Create the missing parent chain of `path`, outer→inner, recording what
-/// this call created. A directory that appears concurrently is fine (not
-/// recorded); real failures surface as `Fault::Io`.
-fn ensure_parents(path: &Path, created: &mut Vec<PathBuf>) -> Result<(), Fault> {
+/// Create missing parents outer→inner and retain native identity handles.
+/// If capture fails, the uncaptured directory is preserved and the error
+/// surfaces; it is never entered into a path-only cleanup list. Portable
+/// mkdir and identity capture are not atomic against outside replacement.
+fn ensure_parents(path: &Path, created: &mut Vec<CreatedDir>) -> Result<(), Fault> {
     let mut missing = Vec::new();
     let mut cur = path.parent();
     while let Some(dir) = cur {
@@ -738,7 +917,14 @@ fn ensure_parents(path: &Path, created: &mut Vec<PathBuf>) -> Result<(), Fault> 
     // `missing` is inner→outer; create outer first.
     for dir in missing.into_iter().rev() {
         match std::fs::create_dir(&dir) {
-            Ok(()) => created.push(dir),
+            Ok(()) => {
+                let identity = same_file::Handle::from_path(&dir)
+                    .map_err(|e| Fault::io("open", dir.clone(), e))?;
+                created.push(CreatedDir {
+                    path: dir,
+                    identity,
+                });
+            }
             Err(e) if e.kind() == io::ErrorKind::AlreadyExists => {}
             Err(e) => return Err(Fault::io("create", dir, e)),
         }
@@ -830,7 +1016,7 @@ mod tests {
     }
 
     #[test]
-    fn mutate_shorter_write_truncates_after_writing() {
+    fn mutate_shorter_write_removes_old_tail() {
         let dir = scratch("shorter");
         let target = dir.join("x.agent-besties.md");
         std::fs::write(&target, b"0123456789").unwrap();
@@ -838,7 +1024,7 @@ mod tests {
             Ok((Mutation::Write(b"abc".to_vec()), ()))
         })
         .unwrap();
-        // The write-then-set_len order must leave exactly the new bytes.
+        // Final content contains only the replacement, with no old tail.
         assert_eq!(std::fs::read(&target).unwrap(), b"abc");
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -960,6 +1146,247 @@ mod tests {
     }
 
     #[test]
+    fn mutate_plan_failure_never_deletes_replacement_file() {
+        let dir = scratch("rollback-replaced");
+        let target = dir.join("x.agent-besties.md");
+        let err = mutate::<()>(&target, policy(200, true, false), |_, _| {
+            // A non-cooperating writer replaces the path while we hold
+            // the lock on the original: rename foreign content over the
+            // target, so the path no longer names our handle's file.
+            let staging = dir.join("staging.tmp");
+            std::fs::write(&staging, b"# foreign.post\n").unwrap();
+            std::fs::rename(&staging, &target).unwrap();
+            Err(Fault::reason("E-FLOCKED"))
+        })
+        .unwrap_err();
+        match &err {
+            Fault::Reason { id, .. } => assert_eq!(*id, "E-FLOCKED"),
+            other => panic!("unexpected fault: {other:?}"),
+        }
+        // The rollback re-verifies identity on the held handle: a path
+        // that names someone else's file is never unlinked.
+        assert_eq!(std::fs::read(&target).unwrap(), b"# foreign.post\n");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn successful_plan_refuses_replacement_before_write_or_delete() {
+        for delete in [false, true] {
+            let dir = scratch("successful-plan-replaced");
+            let target = dir.join("x.agent-besties.md");
+            let detached = dir.join("detached.tmp");
+            std::fs::write(&target, b"original").unwrap();
+            let err = mutate(&target, policy(0, false, false), |_, _| {
+                std::fs::rename(&target, &detached).unwrap();
+                std::fs::write(&target, b"foreign").unwrap();
+                let mutation = if delete {
+                    Mutation::Delete
+                } else {
+                    Mutation::Write(b"planned replacement".to_vec())
+                };
+                Ok((mutation, ()))
+            })
+            .unwrap_err();
+            assert!(matches!(err, Fault::Reason { id: "E-LOCKED", .. }));
+            assert_eq!(std::fs::read(&target).unwrap(), b"foreign");
+            assert_eq!(std::fs::read(&detached).unwrap(), b"original");
+            std::fs::remove_dir_all(&dir).unwrap();
+        }
+    }
+
+    #[test]
+    fn successful_plan_refuses_missing_path_before_write() {
+        let dir = scratch("successful-plan-missing");
+        let target = dir.join("x.agent-besties.md");
+        let detached = dir.join("detached.tmp");
+        std::fs::write(&target, b"original").unwrap();
+        let err = mutate(&target, policy(0, false, false), |_, _| {
+            std::fs::rename(&target, &detached).unwrap();
+            Ok((Mutation::Write(b"planned replacement".to_vec()), ()))
+        })
+        .unwrap_err();
+        assert!(matches!(err, Fault::Reason { id: "E-LOCKED", .. }));
+        assert!(!target.exists());
+        assert_eq!(std::fs::read(&detached).unwrap(), b"original");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn failed_creation_lock_preserves_adopted_empty_file_and_directories() {
+        let dir = scratch("contested-creation");
+        let target = dir.join("a/b/x.agent-besties.md");
+        let mut created_dirs = Vec::new();
+        ensure_parents(&target, &mut created_dirs).unwrap();
+        let creator = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create_new(true)
+            .open(&target)
+            .unwrap();
+        // Another writer adopts the empty creation before its creator
+        // acquires a lock, then pauses before supplying initial content.
+        let mut adopter = lock_exclusive_until(
+            OpenOptions::new()
+                .read(true)
+                .write(true)
+                .open(&target)
+                .unwrap(),
+            &target,
+            &Deadline::new(0),
+        )
+        .unwrap();
+        let err = lock_exclusive_until(creator, &target, &Deadline::new(0)).unwrap_err();
+        assert!(matches!(err, Fault::Reason { id: "E-LOCKED", .. }));
+        // This is the consuming lock-failure path used by mutate: it
+        // cannot produce a LockedFile that could authorize rollback.
+        drop(created_dirs);
+        assert!(target.exists());
+        assert!(dir.join("a/b").is_dir());
+        adopter.0.write_all(b"adopted").unwrap();
+        drop(adopter);
+        assert_eq!(std::fs::read(&target).unwrap(), b"adopted");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn mutate_plan_failure_keeps_occupied_created_dir() {
+        let dir = scratch("rollback-occupied");
+        let target = dir.join("a/b/x.agent-besties.md");
+        let err = mutate::<()>(&target, policy(200, true, true), |_, _| {
+            // Foreign content lands in a directory this call created:
+            // cleanup must keep the directory — only still-empty
+            // creations are removed.
+            std::fs::create_dir_all(dir.join("a/b")).unwrap();
+            std::fs::write(dir.join("a/b/keep.txt"), b"kept").unwrap();
+            Err(Fault::reason("E-FLOCKED"))
+        })
+        .unwrap_err();
+        match &err {
+            Fault::Reason { id, .. } => assert_eq!(*id, "E-FLOCKED"),
+            other => panic!("unexpected fault: {other:?}"),
+        }
+        assert!(!target.exists());
+        assert_eq!(std::fs::read(dir.join("a/b/keep.txt")).unwrap(), b"kept");
+        assert!(dir.join("a/b").exists());
+        assert!(dir.join("a").exists());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn directory_cleanup_preserves_foreign_empty_replacement() {
+        let dir = scratch("rollback-replaced-dir");
+        let target = dir.join("a/x.agent-besties.md");
+        let mut created_dirs = Vec::new();
+        ensure_parents(&target, &mut created_dirs).unwrap();
+        std::fs::rename(dir.join("a"), dir.join("moved")).unwrap();
+        std::fs::create_dir(dir.join("a")).unwrap();
+        remove_empty_created_dirs(created_dirs).unwrap();
+        assert!(dir.join("a").is_dir());
+        assert!(dir.join("moved").is_dir());
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn first_write_failure_cleans_verified_empty_creation() {
+        let dir = scratch("rollback-first-write");
+        let target = dir.join("a/b/x.agent-besties.md");
+        let mut created_dirs = Vec::new();
+        ensure_parents(&target, &mut created_dirs).unwrap();
+        let creator = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&target)
+            .unwrap();
+        // A read-only handle gives a real, deterministic first-write error
+        // without process-global quotas, permission assumptions or hooks.
+        let readonly = File::open(&target).unwrap();
+        drop(creator);
+        let file = lock_exclusive_until(readonly, &target, &Deadline::new(0)).unwrap();
+        let err = run_plan(
+            file,
+            &target,
+            Vec::new(),
+            true,
+            true,
+            created_dirs,
+            &mut |_, _| Ok((Mutation::Write(b"content".to_vec()), ())),
+        )
+        .unwrap_err();
+        assert!(matches!(
+            err,
+            Fault::Io {
+                action: "write",
+                ..
+            }
+        ));
+        assert!(!target.exists());
+        assert!(!dir.join("a").exists());
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn failed_write_cleanup_preserves_partial_bytes_and_directories() {
+        let dir = scratch("rollback-partial-write");
+        let target = dir.join("a/b/x.agent-besties.md");
+        let mut created_dirs = Vec::new();
+        ensure_parents(&target, &mut created_dirs).unwrap();
+        let creator = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create_new(true)
+            .open(&target)
+            .unwrap();
+        let mut file = lock_exclusive_until(creator, &target, &Deadline::new(0)).unwrap();
+        file.0.write_all(b"partial").unwrap();
+        // Exercise cleanup with genuine partial bytes and a real failing
+        // write. A mandatory lock may reject the second handle before its
+        // read-only access does; neither failure may discard the prefix.
+        let mut readonly = File::open(&target).unwrap();
+        let fault = write_step(&target, || readonly.write_all(b"unwritten")).unwrap_err();
+        drop(readonly);
+        let err = fail_with_rollback(fault, Some(file), &target, true, created_dirs);
+        assert!(matches!(
+            err,
+            Fault::Io {
+                action: "write",
+                ..
+            } | Fault::Reason { id: "E-LOCKED", .. }
+        ));
+        assert_eq!(std::fs::read(&target).unwrap(), b"partial");
+        assert!(dir.join("a/b").is_dir());
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn mutate_oversize_result_rolls_back_creation() {
+        let dir = scratch("rollback-toolarge");
+        let target = dir.join("a/b/x.agent-besties.md");
+        let err = mutate(
+            &target,
+            policy(200, true, true),
+            |_, _| -> Result<(Mutation, ()), Fault> {
+                Ok((
+                    Mutation::Write(vec![0u8; consts::MAX_MANAGED_FILE_BYTES + 1]),
+                    (),
+                ))
+            },
+        )
+        .unwrap_err();
+        match &err {
+            Fault::Diagnostics(ds) => {
+                assert_eq!(ds.len(), 1);
+                assert_eq!(ds[0].id, "E-TOO-LARGE");
+            }
+            other => panic!("unexpected fault: {other:?}"),
+        }
+        // Refused before any byte: the creation leaves no trace.
+        assert!(!target.exists());
+        assert!(!dir.join("a/b").exists());
+        assert!(!dir.join("a").exists());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn read_stable_optional_distinguishes_absent_zero_and_present() {
         let dir = scratch("stable");
         let target = dir.join("x.agent-besties.md");
@@ -1018,33 +1445,45 @@ mod tests {
         use std::os::unix::fs::PermissionsExt;
         let dir = scratch("cleanup-visible");
         let target = dir.join("x.agent-besties.md");
-        let err = mutate(
+        let original_perms = std::fs::metadata(&dir).unwrap().permissions();
+        let mut readonly_perms = original_perms.clone();
+        readonly_perms.set_mode(0o500);
+        let probe = dir.join("unlink-probe");
+        std::fs::write(&probe, b"probe").unwrap();
+        std::fs::set_permissions(&dir, readonly_perms.clone()).unwrap();
+        let precondition = std::fs::remove_file(&probe);
+        std::fs::set_permissions(&dir, original_perms.clone()).unwrap();
+        match precondition {
+            Ok(()) => {
+                // Root/capabilities may bypass mode bits. This fixture can
+                // prove cleanup errors only when the OS actually denies unlink.
+                std::fs::remove_dir_all(&dir).unwrap();
+                return;
+            }
+            Err(e) if e.kind() == io::ErrorKind::PermissionDenied => {
+                std::fs::remove_file(&probe).unwrap();
+            }
+            Err(e) => panic!("unexpected unlink precondition failure: {e}"),
+        }
+        let outcome = mutate(
             &target,
             policy(200, true, false),
             |_, _| -> Result<(Mutation, ()), Fault> {
-                // Flip the parent to read-only inside the plan (after
-                // create_new, under the held lock) so the mandated cleanup
-                // cannot unlink the freshly created empty file.
-                let mut perms = std::fs::metadata(&dir).unwrap().permissions();
-                perms.set_mode(0o500);
-                std::fs::set_permissions(&dir, perms).unwrap();
+                std::fs::set_permissions(&dir, readonly_perms.clone()).unwrap();
                 Err(Fault::reason("E-FLOCKED"))
             },
-        )
-        .unwrap_err();
-        match err {
-            // The plan fault is E-FLOCKED, but the mandated cleanup could
-            // not complete: the real I/O failure wins instead of hiding
-            // behind the caller's fault.
+        );
+        // Restore access before asserting, including on an unexpected outcome.
+        std::fs::set_permissions(&dir, original_perms).unwrap();
+        match outcome.unwrap_err() {
+            // The real cleanup failure must win over the caller's E-FLOCKED.
             Fault::Io { action, source, .. } => {
                 assert_eq!(action, "delete");
                 assert_eq!(source.kind(), io::ErrorKind::PermissionDenied);
             }
             other => panic!("unexpected fault: {other:?}"),
         }
-        let mut perms = std::fs::metadata(&dir).unwrap().permissions();
-        perms.set_mode(0o700);
-        std::fs::set_permissions(&dir, perms).unwrap();
-        let _ = std::fs::remove_dir_all(&dir);
+        assert!(target.exists());
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 }

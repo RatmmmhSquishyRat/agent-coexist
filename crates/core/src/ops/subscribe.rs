@@ -15,8 +15,8 @@ use crate::report::Report;
 use crate::text::Splice;
 
 use super::post::{
-    after_line_and_blank, checked_doc, finish, guarded_apply, line_end, preamble_anchor, stem_of,
-    Applied, Done, Early, Step,
+    after_line_and_blank, checked_doc, finish, guarded_apply, line_end, preamble_anchor,
+    require_valid_stem, Applied, Done, Early, Step,
 };
 use super::SubscribeParams;
 
@@ -39,7 +39,8 @@ fn step(
     created: bool,
 ) -> Result<(Mutation, Step), Fault> {
     if created {
-        let mut content = format!("# {}.post\n\n", stem_of(&p.path));
+        let stem = require_valid_stem(&p.path)?;
+        let mut content = format!("# {stem}.post\n\n");
         content.push_str("- subscribers: ");
         content.push_str(&p.nick);
         content.push('\n');
@@ -211,5 +212,46 @@ fn subs_value(subs: &[String]) -> Vec<String> {
         vec!["none".to_string()]
     } else {
         vec![subs.join(", ")]
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ops::context::test_ctx;
+    use crate::time;
+    use std::path::PathBuf;
+
+    fn scratch(tag: &str) -> PathBuf {
+        let dir = std::env::temp_dir()
+            .join("coexist-subscribe-tests")
+            .join(format!(
+                "{}-{}-{}",
+                tag,
+                std::process::id(),
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.as_nanos())
+                    .unwrap_or(0)
+            ));
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    fn create_rejects_invalid_stem_without_leaving_a_file() {
+        let dir = scratch("ename");
+        let target = dir.join("bad stem.agent-besties.md");
+        let p = SubscribeParams {
+            path: target.clone(),
+            nick: "me".to_string(),
+            cancel: false,
+        };
+        let mut ctx = test_ctx(time::parse("2026-09-25T12:00:00Z").unwrap());
+        let report = run(&mut ctx, &p).unwrap();
+        assert_eq!(report.status, crate::report::Status::Error);
+        assert_eq!(report.exit, 1);
+        assert!(!target.exists());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

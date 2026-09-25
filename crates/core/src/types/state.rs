@@ -1,6 +1,9 @@
 //! The `state` type view (spec §6): status sections, comma-split entry
-//! declarations with clean/dirty line classification, expiry, in-file
-//! `locked` conflicts, and the per-nick selection used by read commands.
+//! declarations with clean/dirty line classification, the per-nick
+//! selection used by read commands, and the expiry / in-file `locked`
+//! conflict diagnostics — both derived once, here, over the selected
+//! declarations (§6.2.5, §6.2.7), so no consumer re-derives or
+//! duplicates them.
 
 use std::collections::HashMap;
 
@@ -123,10 +126,13 @@ fn parse_entry(frag: &str) -> Option<(&str, DateTime<Utc>, DateTime<Utc>)> {
 }
 
 /// Scan a state file (spec §6.2): per section the status name checks,
-/// the entry lines, the per-`(status, nick)` duplicates and the expiry
-/// diagnostics; after all sections the in-file `locked` conflict report
-/// (§6.2.7). Diagnostics are pushed through `ctx`; `doc::parse` sorts
-/// them once at the end.
+/// the entry lines and the per-(status, nick) duplicates and reversed
+/// ranges — per-entry facts. Time expiry (§6.2.5) and the in-file
+/// `locked` conflicts (§6.2.7) are derived once, over each section's
+/// selected declarations (§6.2.4), and pushed here as well: every
+/// consumer of `Document::diagnostics` sees one coherent derivation,
+/// never a parse-time set plus a preview-time duplicate. Diagnostics
+/// are pushed through `ctx`; `doc::parse` sorts them once at the end.
 pub(crate) fn scan(ctx: &mut ScanCtx, sections: &[Section]) -> Vec<StateSection> {
     let now = ctx.now();
     let mut out: Vec<StateSection> = Vec::with_capacity(sections.len());
@@ -228,7 +234,9 @@ pub(crate) fn scan(ctx: &mut ScanCtx, sections: &[Section]) -> Vec<StateSection>
             }
         }
 
-        // per-(status, nick) duplicates and expiry (§6.2.4, §6.2.5)
+        // per-(status, nick) duplicates and reversed ranges (§6.2.4,
+        // §6.2.5): per-entry facts, reported for every declaration
+        // alike, selected or not.
         for d in &entries {
             if nicks.iter().any(|n| n == &d.nick) {
                 ctx.push(
@@ -240,51 +248,58 @@ pub(crate) fn scan(ctx: &mut ScanCtx, sections: &[Section]) -> Vec<StateSection>
                 nicks.push(d.nick.clone());
             }
             if d.start > d.until {
-                // W-STATE-RANGE and never also W-STATE-EXPIRED
+                // W-STATE-RANGE and never also W-STATE-EXPIRED (§6.2.5)
                 ctx.push(
                     Diagnostic::new("W-STATE-RANGE", d.line)
                         .with("nick", d.nick.clone())
                         .with("status", status.clone()),
                 );
-            } else if now >= d.until {
-                ctx.push(
-                    Diagnostic::new("W-STATE-EXPIRED", d.line)
-                        .with("nick", d.nick.clone())
-                        .with("status", status.clone())
-                        .with("until", crate::time::format(d.until)),
-                );
             }
         }
 
-        out.push(StateSection {
+        let section = StateSection {
             status,
             section: si,
             valid_name,
             entries,
             clean_lines,
-        });
+        };
+        // Time expiry over the selected declarations only (§6.2.4's
+        // per-nick latest-`until` view, §6.2.5/§6.3.2): a superseded
+        // earlier declaration of the same nick is not reported — the
+        // merged view is the valid one — and a reversed range keeps the
+        // per-entry W-STATE-RANGE above, never an expiry on top.
+        for d in selected(&section) {
+            if d.start <= d.until && now >= d.until {
+                ctx.push(
+                    Diagnostic::new("W-STATE-EXPIRED", d.line)
+                        .with("nick", d.nick.clone())
+                        .with("status", section.status.clone())
+                        .with("until", crate::time::format(d.until)),
+                );
+            }
+        }
+        out.push(section);
     }
 
-    // in-file conflict (§6.2.7): every valid `locked` declaration whose
-    // nick differs from the first one's, in file order
-    let mut first: Option<&Declaration> = None;
-    for sec in &out {
-        if sec.status == "locked" && sec.valid_name {
-            for d in &sec.entries {
-                if d.valid(now) {
-                    match first {
-                        None => first = Some(d),
-                        Some(f) => {
-                            if d.nick != f.nick {
-                                ctx.push(
-                                    Diagnostic::new("W-STATE-CONFLICT", d.line)
-                                        .with("a", f.nick.clone())
-                                        .with("b", d.nick.clone()),
-                                );
-                            }
-                        }
-                    }
-                }
+    // In-file conflict (§6.2.7), derived once over the selected
+    // declarations of every valid `locked` section: each pair of valid
+    // declarations with different nicks, `{a}` the earlier one, `{b}`
+    // the later, anchored on the later declaration's line (§9
+    // supplement 6).
+    let flat: Vec<&Declaration> = out
+        .iter()
+        .filter(|sec| sec.status == "locked" && sec.valid_name)
+        .flat_map(selected)
+        .collect();
+    for x in 0..flat.len() {
+        for y in (x + 1)..flat.len() {
+            if flat[x].nick != flat[y].nick && flat[x].valid(now) && flat[y].valid(now) {
+                ctx.push(
+                    Diagnostic::new("W-STATE-CONFLICT", flat[y].line)
+                        .with("a", flat[x].nick.clone())
+                        .with("b", flat[y].nick.clone()),
+                );
             }
         }
     }
@@ -451,19 +466,25 @@ mod tests {
             .collect();
         assert_eq!(rows, vec![("bob", 6), ("alice", 7), ("carol", 9)]);
 
+        // Diagnostics: exactly one derivation over the selected
+        // declarations — no parse-time + preview duplicates. The
+        // selected alice under locked is the L7 renewal, so bob's
+        // conflict anchors on L7 (§9 supplement 6), and gina conflicts
+        // with both bob and the selected alice.
         let rows: Vec<(&str, usize)> = doc.diagnostics.iter().map(|d| (d.id, d.line)).collect();
         assert_eq!(
             rows,
             vec![
-                ("W-STATE-CONFLICT", 6), // bob vs the first valid locked (alice)
                 ("W-STATE-DUP", 7),      // alice again under locked
+                ("W-STATE-CONFLICT", 7), // bob vs the selected alice (L7 renewal)
                 ("W-STATE-ENTRY", 8),    // broken entry
-                ("W-STATE-EXPIRED", 9),  // carol: now == until
+                ("W-STATE-EXPIRED", 9),  // carol: now == until (selected)
                 ("W-STATE-ENTRY", 10),   // lone \r: folded fragment
                 ("W-STATUS-NAME", 12),
                 ("W-STATE-RANGE", 14), // fred: starts after it ends
                 ("E-STATUS-DUP", 16),
-                ("W-STATE-CONFLICT", 17), // gina vs alice
+                ("W-STATE-CONFLICT", 17), // bob vs gina
+                ("W-STATE-CONFLICT", 17), // the selected alice vs gina
             ]
         );
         let expired = doc
@@ -491,5 +512,57 @@ mod tests {
             "fragment",
             "dave 2026-09-17T09:00:00Z..2026-09-17T12:00:00Z note".to_string()
         )));
+    }
+
+    #[test]
+    fn scan_expires_selected_view_not_superseded_declarations() {
+        // alice's earlier declaration is expired but superseded by the
+        // L5 renewal (latest until, §6.2.4): the merged view is valid,
+        // so no W-STATE-EXPIRED; bob's only declaration is expired and
+        // selected — exactly one warning.
+        let src = concat!(
+            "# .state\n",
+            "\n",
+            "## locked\n",
+            "alice 2026-09-17T08:00:00Z..2026-09-17T09:00:00Z\n",
+            "alice 2026-09-17T09:00:00Z..2026-09-17T12:00:00Z\n",
+            "bob 2026-09-17T08:00:00Z..2026-09-17T09:30:00Z\n",
+        );
+        let now = crate::time::parse("2026-09-17T10:00:00Z").unwrap();
+        let doc = crate::doc::parse(
+            src.as_bytes().to_vec(),
+            std::path::Path::new("state.agent-besties.md"),
+            now,
+        )
+        .expect("parses");
+        let rows: Vec<(&str, usize)> = doc.diagnostics.iter().map(|d| (d.id, d.line)).collect();
+        assert_eq!(
+            rows,
+            vec![
+                ("W-STATE-DUP", 5),     // alice again under locked
+                ("W-STATE-EXPIRED", 6), // bob only — the superseded alice (L4) is not reported
+            ]
+        );
+    }
+
+    #[test]
+    fn scan_reports_reversed_range_without_expiry_duplicate() {
+        // §6.2.5: start > until counts as expired but is reported as
+        // W-STATE-RANGE only — never also W-STATE-EXPIRED.
+        let src = concat!(
+            "# .state\n",
+            "\n",
+            "## locked\n",
+            "fred 2026-09-17T14:00:00Z..2026-09-17T13:00:00Z\n",
+        );
+        let now = crate::time::parse("2026-09-17T10:00:00Z").unwrap();
+        let doc = crate::doc::parse(
+            src.as_bytes().to_vec(),
+            std::path::Path::new("state.agent-besties.md"),
+            now,
+        )
+        .expect("parses");
+        let rows: Vec<(&str, usize)> = doc.diagnostics.iter().map(|d| (d.id, d.line)).collect();
+        assert_eq!(rows, vec![("W-STATE-RANGE", 4)]);
     }
 }

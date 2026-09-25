@@ -75,6 +75,20 @@ impl Ctx {
     }
 }
 
+/// Deterministic construction for in-crate tests: one explicit clock, no
+/// environment reads. Integration tests keep going through [`Ctx::new`].
+#[cfg(test)]
+pub(crate) fn test_ctx(now: Time) -> Ctx {
+    Ctx {
+        now,
+        post_wait_ms: 0,
+        argv: String::new(),
+        progress: None,
+        dirs: 0,
+        files: 0,
+    }
+}
+
 /// Display path for any managed file or directory: cwd-relative lexical
 /// path, `/`-separated, whitespace folded so no value column can contain a
 /// double space (spec §8.1.9, §10.9).

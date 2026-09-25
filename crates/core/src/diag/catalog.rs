@@ -1,5 +1,8 @@
-//! Spec §9 diagnostic catalog: all 50 templates transcribed byte-verbatim
-//! from the normative spec table (columns 文案 → message, why → fix).
+//! Spec §9 diagnostic catalog: the 50 spec-table templates transcribed
+//! byte-verbatim (columns 文案 → message, why → fix), plus the two
+//! reason-level additions of the 2026-09-25 repair contract (`E-NAME`,
+//! `E-STATE-DIRTY`) appended after the spec rows so every spec row keeps
+//! its §9 table position.
 //!
 //! `{placeholder}` sequences are PLAIN TEXT replaced at runtime; never pass
 //! these strings through any formatter.
@@ -12,7 +15,9 @@ pub(crate) struct Template {
     pub(crate) fix: &'static str,
 }
 
-/// All 50 diagnostics in §9 table order (this order is the same-line tiebreak).
+/// All 52 diagnostics: 50 in §9 table order (this order is the same-line
+/// tiebreak), then the two repair-contract reason errors (`E-NAME`,
+/// `E-STATE-DIRTY`), which are reason-form only and never anchored rows.
 pub(crate) const CATALOG: &[Template] = &[
     Template {
         id: "E-UTF8",
@@ -314,11 +319,37 @@ pub(crate) const CATALOG: &[Template] = &[
         why: r#"expired entries are ignored by conflict checks and removed on the next state write unless the line also has unparseable fragments (W-STATE-ENTRY)"#,
         fix: r#"renew if still relevant: agent-coexist state {dir} --as {nick} --status {status}"#,
     },
+    Template {
+        id: "E-NAME",
+        message: r#"file name "{name}" is not a valid name"#,
+        why: r##"the H1 is generated from the file name; use 1-100 letters, digits, "_", "-" or ".", starting with a letter, digit, "_" or "-""##,
+        fix: r#"rename the file to a valid name and re-run the same command with the new path; the CLI never renames, truncates or replaces the name you gave"#,
+    },
+    Template {
+        id: "E-STATE-DIRTY",
+        message: r#"{nick} is still declared on line {line} of the state file in {dir}, mixed with unparseable fragments"#,
+        why: r#"removal would rewrite that whole line and could drop the fragments it cannot parse, so nothing is written"#,
+        fix: r#"make line {line} parseable by hand (or delete {nick}'s declaration from it), then re-run: agent-coexist state {dir} --remove {nick}"#,
+    },
 ];
 
 /// §9 supplement 1: E-TYPE fix when actual type is state.
 pub(crate) const FIX_ETYPE_STATE: &str =
     r#"this is a state file: agent-coexist state {dir} --as <nick> --status <name>"#;
+
+/// 2026-09-25 repair: E-H1 fix when the file stem is not a valid NAME.
+/// The base fix suggests `# {stem}.<type>`, which would re-trigger E-H1
+/// the moment it is copied in, so this variant suggests any valid name
+/// instead. It carries no command argument, so it substitutes as plain
+/// text (§8.3.4 quoting stays on command-form fixes).
+pub(crate) const FIX_EH1_BAD_STEM: &str = r##"set line 1 to "# <name>.post" (or .brief / .agent-profile): use 1-100 letters, digits, "_", "-" or ".", starting with a letter, digit, "_" or "-"; use "# .state" for a state file; renaming the file as well keeps the H1 and the file name in agreement"##;
+
+/// 2026-09-25 repair: W-NAME fix when the file stem is not a valid NAME.
+/// The base template also offers `set line 1 to "# {stem}.{type}"`, which
+/// would be an invalid H1; this variant keeps only the other recovery:
+/// rename the file to the H1 name, which parsing already proved to be a
+/// valid NAME. Plain text, like the E-H1 variant.
+pub(crate) const FIX_WNAME_BAD_STEM: &str = r#"rename the file to {name}.agent-besties.md; the file stem is not a valid name, so no valid H1 can be built from it"#;
 
 /// §9 supplement 3: E-HEAD fix when numbering is exhausted.
 pub(crate) const FIX_EHEAD_EXHAUSTED: &str =

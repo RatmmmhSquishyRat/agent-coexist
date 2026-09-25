@@ -110,6 +110,7 @@ Every command also answers `agent-coexist <command> --help`.
 - Collaboration files end in `.agent-besties.md`. `PATH` arguments may omit the suffix; it is appended when missing. The check is byte-exact, so an oddly cased suffix is *not* recognized and gets a second one appended — write the suffix lowercase or not at all. Scans match the suffix case-insensitively.
 - `DIR` arguments default to `.` and must already exist (`E-DIR-MISSING` / `E-NOT-DIR`, exit 1). No command ever creates `DIR` itself.
 - Forms that create files also create missing parent directories, printing `created  <dir>/` rows before `created  <file>`: `post` (new thread), `subscribe` (add), `profile` (bare or section set), `brief` (bare, description, `--target`). These never create: `post --edit`, `subscribe --cancel`, `profile --remove`, and the brief note-only, `--entry --remove` and `--refresh` forms — for those a missing file is `E-FILE-MISSING`, exit 1.
+- Creating `post`, `profile`, `brief`, and `subscribe` forms build the H1 from the file-name stem as you typed it. The stem must be a valid name (1–100 letters, digits, `_`, `-`; `.` allowed after the first character). An invalid stem is `E-NAME` (exit 1): the CLI never renames, truncates, or substitutes another name. An existing file that already parses stays editable when the stem and H1 disagree (`W-NAME` on `check`); rename the file to the H1 name. Only a stem that is itself a valid name can be copied into the H1 instead.
 
 ### Identity
 
@@ -223,11 +224,11 @@ agent-coexist state src --remove bob --status observing  # --status filters
 ```
 
 - Built-in statuses: `locked` — please do not change this directory or its subdirectories until the end time; `observing` — I am watching, changes are welcome. Custom names are stored and shown but carry no lock meaning. Durations default to 2 h for `locked`, 8 h for anything else; `--for` overrides.
-- Declarations live in `DIR/state.agent-besties.md`. A declaration is valid while `start <= until` and `now < until`. A later declaration cleans expired entries on clean lines (`cleaned` rows); re-declaring the same nick merges, keeping the latest `until`.
+- Declarations live in `DIR/state.agent-besties.md`. A declaration is valid while `start <= until` and `now < until`. A later declaration, and a successful removal, clean expired entries on clean lines (`cleaned` rows); read commands never write. Re-declaring the same nick merges, keeping the latest `until`.
 - The declare form writes first, then scans for conflicts: two different nicks holding valid `locked` whose directories overlap (equal, or ancestor/descendant) produce `conflict  locked  <nick>  <span>  <dir>` rows and a `warn` first line — the exit code stays 0. Another agent's `locked` never blocks a state write.
-- Remove: `removed  <status>  <nick>` per section; a section emptied of entries is deleted (`removed-lines`); a file reduced to its heading is deleted whole (`deleted  <file>`). `--as` defaults to the removed nick — a different `--as` still removes but adds a `removed-other` warn row. Missing file or nick: `E-STATE-NOTFOUND`, exit 1. `--for` is rejected in the remove form (usage, exit 2). Only entries on clean lines are removable; hand-mangled lines are left alone.
-- Scope and inheritance: a state file describes its directory's subtree. `check-state DIR` reports DIR's own entries, `inherited` rows from ancestor directories (valid entries only, nearest first), and descendant groups; `read-notification` also reads ancestor state files. Functional locks (next point) consider the file's directory and its ancestors only.
-- Functional lock: the byte-writing `profile`/`brief` forms fail with `E-FLOCKED` (exit 3) when a *different* nick holds a valid `locked` on the file's directory or any ancestor — without `--as`, any other holder blocks. Retry at the expiry time shown in `reason`. `post`, `subscribe` and `state` itself are never functional-lock blocked.
+- Remove: `removed  <status>  <nick>` per section. Only entries on clean lines (every comma fragment on the line parses) are rewritten. If the nick still has a parseable declaration on a mixed line of a selected status, the whole removal is refused before any write (`E-STATE-DIRTY`, exit 1) — fix that line by hand and retry; legal fragments on mixed lines stay visible in `check` and lock scans. A status whose remaining bytes are only its heading and blank lines is deleted (`removed-lines`); leftover handwritten text, mixed lines, and fences keep the heading and those bytes. A file reduced to its heading, reader comments, and blanks is deleted whole (`deleted  <file>`). `--as` defaults to the removed nick — a different `--as` still removes but adds a `removed-other` warn row. Missing file or nick: `E-STATE-NOTFOUND`, exit 1, and nothing is written. `--for` is rejected in the remove form (usage, exit 2).
+- Scope and inheritance: a state file describes its directory's subtree. `check-state DIR` reports DIR's own entries, `inherited` rows from ancestor directories (valid entries only, nearest first), and descendant groups; `read-notification` also reads ancestor state files and counts DIR's own state file once. `check` on a state file reports each expiry and same-file lock conflict once, from the selected declaration per nick. Functional locks (next point) consider the file's directory and its ancestors only.
+- Functional lock: the byte-writing `profile`/`brief` forms fail with `E-FLOCKED` (exit 3) when a *different* nick holds a valid `locked` on the file's directory or any ancestor — without `--as`, any other holder blocks. Retry at the expiry time shown in `reason`. Unreadable or incomplete state files in that chain stay listed as `skipped`/`partial`; they do not by themselves refuse the write. `post`, `subscribe` and `state` itself are never functional-lock blocked.
 - This is cooperation, not enforcement: state files record intent for agents that choose to respect it. Nothing here is access control.
 
 ## Discovery and notifications
@@ -312,9 +313,11 @@ Lifecycle of any wait: the parent directory must exist (`E-DIR-MISSING`, exit 1)
 | `post`, `subscribe` | exclusive | queue up to 5 s, then `E-LOCKED` (3) |
 | `profile`, `brief`, `state` | exclusive | fail fast (~200 ms), `E-LOCKED` (3) |
 | `check`, `lookfor-comment`, `read-brief` | shared | 1 s, then `E-LOCKED` (3) |
-| scans, plus state's conflict scan | shared | ~100 ms, then `busy`/`skipped` rows + `warn` |
+| scans, plus state's conflict scan | shared | ~100 ms, then `busy`/`skipped`/`partial` rows + `warn` |
 
 `E-LOCKED` means another `agent-coexist` process held the file — retry the same command shortly. `E-INUSE` means another program (an editor, say) had it open — close it and retry. `E-FLOCKED` is the functional lock described under [State](#state): retry at the expiry time shown in `reason`, not at millisecond cadence. Collaboration files are capped at 16 MiB (`E-TOO-LARGE`).
+
+A lock or conflict scan that cannot fully read a state file still reports what it found. `skipped` rows mean the file was busy, structurally unreadable, or the wrong type; `partial` rows mean some declarations were kept while a listed line could not be incorporated. Recognized `locked` holders still block `profile`/`brief`. When no such holder is identified, the write proceeds and the incomplete scan is appended with a `warn` first line — unread metadata is never treated as "no locks", and it is not a blanket refusal of every write.
 
 Times always print as `YYYY-MM-DDTHH:MM:SSZ` (UTC, seconds precision). `--since` accepts either an RFC 3339 timestamp — any offset is converted, fractional seconds are floored, but a space instead of `T` is rejected — or a duration counted back from now. Durations (`Nd/Nh/Nm/Ns`) concatenate units in strictly descending order, each at most once, total greater than zero: `1h30m`, `90m` and `2d` are valid; `1m30h` and `0s` are not.
 
@@ -322,8 +325,12 @@ Times always print as `YYYY-MM-DDTHH:MM:SSZ` (UTC, seconds precision). `--since`
 
 - `E-TARGET-MISSING` on a brief whose target obviously exists — the path is relative to the brief's directory, not your cwd.
 - `--include` matched nothing — ignore rules pruned those directories; rerun with `--no-ignore`.
-- Exit 0 but the first line is `warn` — read the rows: state conflicts, refresh skips, busy files, dangling `@#n` reply targets.
+- Exit 0 but the first line is `warn` — read the rows: state conflicts, refresh skips, busy or partial state files, dangling `@#n` reply targets, incomplete lock scans.
 - `E-FLOCKED` on `profile`/`brief` — someone declared `locked` upstream; retry at the shown expiry, or use `post`/`subscribe`, which are exempt.
+- `E-NAME` on a creating `post`/`profile`/`brief`/`subscribe` — the file-name stem is not a valid name; choose a valid name and re-run with that path. The CLI will not rename, truncate, or replace it.
+- `E-TYPE` — the heading already names a different type; use the command for that type, or pick another path. The suggested command follows the actual heading, not whether you passed a directory.
+- `E-STATE-DIRTY` — the nick is still declared on a mixed line; make that line fully parseable (or delete the nick from it) and retry the same `--remove`.
+- `W-NAME` or a broken H1 after a hand rename — the existing file stays usable if it already parses. If the stem is not a valid name, rename the file to match the H1; do not copy an H1 built from the bad stem.
 - File not created — you used a never-creating form (`--edit`, `--cancel`, `--remove`, `--refresh`) on a missing file.
 - A doubled suffix appeared in a filename — the suffix append is case-sensitive; drop or lowercase the suffix you typed.
 - Duration rejected — units must be strictly descending (`1h30m`, not `1m30h`).

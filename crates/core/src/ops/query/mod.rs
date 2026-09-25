@@ -184,9 +184,11 @@ fn file_missing_report(
     )
 }
 
-/// `E-TYPE` reason form (§9 补充1): `cmd_for_actual` mapping, with the
-/// `actual = state` fix replacement available through `{dir}` (the
-/// file's directory, same value as the diag context's).
+/// `E-TYPE` reason form (§9 补充1): the `cmd_for_actual` mapping for every
+/// actual kind — the catalog placeholder is `{cmd_for_actual}`, so the
+/// param key must match it exactly or the fix renders the placeholder
+/// literally. `dir` rides along for the `actual = state` fix variant
+/// (selected by the actual type, not by this param's presence).
 fn type_report(
     dctx: &diag::Context,
     command: &'static str,
@@ -208,8 +210,97 @@ fn type_report(
         vec![
             ("actual", actual.as_str().to_string()),
             ("expected", expected.to_string()),
-            ("cmd", cmd_for_actual.to_string()),
+            ("cmd_for_actual", cmd_for_actual.to_string()),
             ("dir", dctx.dir.clone()),
         ],
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::report::Row;
+
+    fn dctx(dir: &str) -> diag::Context {
+        diag::Context {
+            path: format!("{dir}/standup"),
+            dir: dir.into(),
+            stem: "standup".into(),
+            argv: "agent-coexist read-brief docs/standup".into(),
+            command: "read-brief".into(),
+            now: "2026-09-25T10:00:00Z".into(),
+        }
+    }
+
+    fn row_values(report: &Report, key: &str) -> Vec<String> {
+        report
+            .rows
+            .iter()
+            .filter_map(|row| match row {
+                Row::Fields { key: k, values, .. } if k == key => Some(values.clone()),
+                _ => None,
+            })
+            .next()
+            .unwrap_or_default()
+    }
+
+    #[test]
+    fn type_report_names_the_actual_type_and_resolves_cmd_for_actual() {
+        // a post file reaching a brief command: the reason names the
+        // actual type, the fix names the post command (resolved from
+        // cmd_for_actual — never a literal placeholder), and no state
+        // wording appears even though the dir param is present
+        let report = type_report(
+            &dctx("docs"),
+            "read-brief",
+            "docs/standup",
+            doc::Kind::Post,
+            "brief",
+        );
+        assert_eq!(report.status, Status::Error);
+        assert_eq!(report.exit, 1);
+        let reason = row_values(&report, "reason").join(" ");
+        assert!(reason.contains("post"), "actual type missing: {reason}");
+        assert!(reason.contains("brief"), "expected type missing: {reason}");
+        let fix = row_values(&report, "fix").join(" ");
+        assert!(!fix.contains('{'), "unresolved placeholder in fix: {fix}");
+        assert!(
+            fix.contains("agent-coexist post"),
+            "fix does not name the actual command: {fix}"
+        );
+        assert!(
+            !fix.contains("state"),
+            "state wording on a post file: {fix}"
+        );
+
+        // a state file reaching a post command: the state variant names
+        // the state command with the file's directory
+        let report = type_report(
+            &dctx("src/parser"),
+            "lookfor-comment",
+            "src/parser/state",
+            doc::Kind::State,
+            "post",
+        );
+        let fix = row_values(&report, "fix").join(" ");
+        assert!(
+            fix.contains("agent-coexist state src/parser"),
+            "state fix missing dir: {fix}"
+        );
+
+        // a profile file: the command word is `profile`, not the type
+        // word `agent-profile`
+        let report = type_report(
+            &dctx("docs"),
+            "read-brief",
+            "docs/standup",
+            doc::Kind::Profile,
+            "brief",
+        );
+        let fix = row_values(&report, "fix").join(" ");
+        assert!(
+            fix.contains("agent-coexist profile"),
+            "profile command not named: {fix}"
+        );
+    }
 }
