@@ -21,9 +21,16 @@ The binary is `target/debug/agent-coexist` (`agent-coexist.exe` on Windows).
 ## Project layout
 
 - `crates/core` (`coexist-core`) — parsing of the collaboration files,
-  raw-byte splicing, file locking, and the logic behind every command.
+  raw-byte splicing, file locking, and the logic behind the fourteen
+  business commands. It does not own `guide`, `--help`, or `--version`.
 - `crates/cli` (`agent-coexist`) — the `agent-coexist` binary: argument
-  parsing and console rendering on top of `coexist-core`.
+  parsing and console rendering. Business commands sit on `coexist-core`.
+  `guide` is a CLI-only information branch: it embeds
+  `crates/cli/guide/*.md` and writes that Markdown to stdout before cwd,
+  clock, storage, or lock setup. Do not add a core Request or Report for
+  it.
+- `.agents/skills/agent-coexist/SKILL.md` — the canonical short discovery
+  skill. Consuming projects copy that folder; there is no installer.
 - `vendor/ignore` — pinned `ignore` 0.4.33 with a bounded local patch;
   not a workspace member. See [Vendored `ignore` crate](#vendored-ignore-crate).
 
@@ -85,8 +92,11 @@ crates.io, patched in-tree.
 
 ## Before you open a pull request
 
-1. **Check the docs first.** Command behavior is documented in
-   [the usage guide](docs/usage.md), and the on-disk format in [the file guide](docs/file-format.md).
+1. **Check the docs first.** Operational methods live in
+   [the built-in guide](crates/cli/guide/index.md) (`agent-coexist guide`).
+   Command, flag, and line-protocol facts live in
+   [the command reference](docs/usage.md), and the on-disk format in
+   [the file guide](docs/file-format.md).
    If you want to change behavior, open an issue first describing what
    should change and why.
 2. **Keep it small.** One concern per pull request — a single bug fix or a
@@ -107,9 +117,13 @@ crates.io, patched in-tree.
 
 ## Writing tests
 
-- A good regression test pins observable behavior — the first status line,
-  the rows a script would parse, exit codes — rather than exact blobs of
-  source text or incidental formatting details.
+- A good regression test pins observable behavior — the first status line
+  of a business report, the rows a script would parse, exit codes —
+  rather than exact blobs of source text or incidental formatting
+  details. Do not pin the full wording of `crates/cli/guide/*.md` or
+  `SKILL.md` as a regression. Pin that information commands ignore
+  business environment and storage, that unknown guide input is a usage
+  error, and that business grammar is not bypassed.
 - Recovery `fix` lines are either literal file content / prose or POSIX
   words over native path operands, not the folded display column. Pin
   that command-form operands survive a POSIX consumer; do not treat
@@ -157,17 +171,22 @@ crates.io, patched in-tree.
 
 ## Documentation and changelog
 
-If a change affects user-visible behavior, update `README.md`,
-`docs/usage.md`, or `docs/file-format.md` to match, and add a line under
-`## [Unreleased]` in `CHANGELOG.md` (the file follows
-[Keep a Changelog](https://keepachangelog.com/en/1.1.0/)).
+If a change affects user-visible behavior, update the matching surface in
+the same change: `crates/cli/guide/` for operational methods, `--help`
+text, `README.md`, `docs/usage.md`, or `docs/file-format.md`, and add a
+line under `## [Unreleased]` in `CHANGELOG.md` (the file follows
+[Keep a Changelog](https://keepachangelog.com/en/1.1.0/)). Keep a single
+tutorial source: do not add a second guided tour in `docs/usage.md`.
+`guide` content is owned by those crate-local pages; the command
+reference must not become a second copy.
 
 ## Reporting bugs
 
 Use the [bug-report form](https://github.com/RatmmmhSquishyRat/agent-coexist/issues/new?template=bug_report.yml).
 For suspected security problems, follow [SECURITY.md](SECURITY.md) instead
 of opening a normal bug report. For usage questions, start with
-[the command guide](docs/usage.md), then [open an issue](https://github.com/RatmmmhSquishyRat/agent-coexist/issues).
+`agent-coexist guide`, then [the command reference](docs/usage.md), then
+[open an issue](https://github.com/RatmmmhSquishyRat/agent-coexist/issues).
 
 ## License
 

@@ -3,27 +3,29 @@
 //!
 //! Flow:
 //!
-//! 1. Build the POSIX-quoted `argv` string (every `args_os()` entry,
-//!    program name first) via `diag::Context::argv_from_args`, so the
-//!    per-argument quoting exists only in the template layer — it feeds
-//!    `{argv}` in §8.3 fix templates.
-//! 2. clap parses the grammar; errors pass through the one-line usage
+//! 1. clap parses the grammar; errors pass through the one-line usage
 //!    emitter, while explicit help/version retain clap's stdout and exit 0.
-//! 3. Build the one [`Ctx`] (env entry points `AGENT_COEXIST_NOW` /
+//! 2. `guide` is an information command: emit the embedded Markdown page and
+//!    return before argv recovery, progress, Ctx, environment validation, or
+//!    business resolution. Write/flush failure is exit 1 with no status line.
+//! 3. Business commands capture native `args_os()` into the POSIX-quoted
+//!    `{argv}` string via `diag::Context::argv_from_args` (program name
+//!    first) so the per-argument quoting exists only in the template layer.
+//! 4. Build the one [`Ctx`] (env entry points `AGENT_COEXIST_NOW` /
 //!    `AGENT_COEXIST_LOCK_WAIT_MS` surface here as usage-class faults,
 //!    before any file access), with the progress sink for traversing
 //!    commands only.
-//! 4. [`args::resolve`] validates values and produces the
+//! 5. [`args::resolve`] validates business values and produces the
 //!    [`coexist_core::ops::Request`] (base commands) or the wait call.
-//! 5. Base commands go through `ops::run`; the three wait commands are
+//! 6. Base commands go through `ops::run`; the three wait commands are
 //!    dispatched only here, never from a base arm.
 //!
-//! Reports write stdout only through [`render::render`]; explicit help and
-//! version use clap's output. Usage failures print exactly one stderr line
-//! and exit 2 with stdout untouched. Every other failure is a rendered
-//! report: OS-level I/O faults take the §8.3.5
-//! reason/fix form; `Reason`/`Diagnostics` faults that escape a command are
-//! rendered (never discarded).
+//! Business reports write stdout only through [`render::render`]. Explicit
+//! help and version use clap's output; guide writes borrowed Markdown.
+//! Usage failures print exactly one stderr line and exit 2 with stdout
+//! untouched. Every other business failure is a rendered report: OS-level
+//! I/O faults take the §8.3.5 reason/fix form; `Reason`/`Diagnostics`
+//! faults that escape a command are rendered (never discarded).
 
 use std::ffi::OsString;
 use std::io::{ErrorKind, Write};
@@ -34,6 +36,7 @@ use std::sync::Arc;
 use clap::Parser;
 
 mod args;
+mod guide;
 mod progress;
 mod render;
 
@@ -44,7 +47,6 @@ use coexist_core::report::{Report, Row, Status};
 use coexist_core::wait;
 
 fn main() -> ExitCode {
-    let argv = diag::Context::argv_from_args(std::env::args_os());
     let cli = match args::Cli::try_parse() {
         Ok(cli) => cli,
         Err(error) if error.use_stderr() => {
@@ -53,7 +55,13 @@ fn main() -> ExitCode {
         }
         Err(error) => error.exit(),
     };
-    let (progress_fn, progress) = progress::make(cli.command.traverses());
+    let command = match cli.command {
+        args::TopCommand::Guide { topic } => return guide::emit(topic),
+        args::TopCommand::Business(command) => command,
+    };
+
+    let argv = diag::Context::argv_from_args(std::env::args_os());
+    let (progress_fn, progress) = progress::make(command.traverses());
     let mut ctx = match Ctx::new(argv, progress_fn) {
         Ok(ctx) => ctx,
         Err(fault) => {
@@ -65,7 +73,7 @@ fn main() -> ExitCode {
         }
     };
 
-    match args::resolve(cli, &ctx) {
+    match args::resolve(command, &ctx) {
         Ok(args::Invocation::Base {
             command,
             kind,
@@ -180,8 +188,10 @@ fn object_and_dctx(
     }
 }
 
-/// Render a report to stdout and finish with its exit code. stdout is
-/// written only here (spec §8.1.1).
+/// Render a business report to stdout and finish with its exit code.
+/// Business reports write stdout only here (spec §8.1.1). Information
+/// commands (guide, help, version) write through their own path; guide
+/// checks write and flush, while this path still ignores flush failure.
 fn emit(report: &Report, dctx: &diag::Context) -> ExitCode {
     let stdout = std::io::stdout();
     let mut out = stdout.lock();

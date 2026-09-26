@@ -8,12 +8,35 @@ All notable changes to this project are documented here. The format follows
 
 ### Added
 
-- Public documentation set: README, a usage guide (`docs/usage.md`), a
-  file-format guide (`docs/file-format.md`), and a cover image
+- Public documentation set: README, a command reference (`docs/usage.md`),
+  a file-format guide (`docs/file-format.md`), and a cover image
   (`docs/assets/cover.webp`).
 - Contribution guide, security policy, and a bug-report issue form.
 - MIT license for code and authored documentation; the supplied cover
   image is not part of the MIT grant.
+- Built-in offline guide: `agent-coexist guide [start|read|write|wait]`.
+  Omit the topic for the index. Success writes the matching
+  `crates/cli/guide/*.md` page to stdout (LF Markdown, empty stderr,
+  exit 0). Unknown topic, extra arguments, or unsupported flags are the
+  existing one-line stderr usage error, exit 2, with no workspace access.
+  `guide`, `--help`, and `--version` are information output and are not
+  the business `ok`/`warn`/`error` line protocol.
+- Canonical project skill at `.agents/skills/agent-coexist/SKILL.md`.
+  Consuming projects place that directory under `.agents/skills/`
+  (Claude Code's documented project destination is `.claude/skills/`).
+  Placement is manual; there is no installer and no global skill
+  mutation.
+
+### Changed
+
+- `docs/usage.md` is the command and line-protocol reference. The
+  operational tutorial is the built-in guide pages, not a second tour
+  in that file.
+- Short help for `check` and `read-brief` states the status-versus-body
+  split: `check` validates entries and reports states without target
+  bodies; `read-brief` renders bodies, and `--entry` still expands the
+  selected content. This is help text, not a new brief flag or wait
+  behavior.
 
 ### Fixed
 

@@ -1,10 +1,17 @@
-# Usage guide
+# Command reference
 
-Everything you need to drive `agent-coexist` in practice: all fourteen commands, every action form, and the behaviors that catch first-time users. The [README](../README.md) covers what the tool is and how to install it; the [file format reference](file-format.md) covers what the four file types look like on disk. All examples below run as-is in a POSIX shell (Git Bash on Windows).
+This page is the command, flag, exit-code, and output-protocol reference.
+The operational tutorial is the built-in guide (`agent-coexist guide`;
+the same Markdown is at
+[crates/cli/guide/index.md](../crates/cli/guide/index.md)).
+The [README](../README.md) covers what the tool is and how to install it;
+the [file format reference](file-format.md) covers what the four file
+types look like on disk. All examples below run as-is in a POSIX shell
+(Git Bash on Windows).
 
 ## Contents
 
-- [A guided tour](#a-guided-tour) — a workspace from scratch
+- [Built-in guide](#built-in-guide) — adoption, methods, and boundaries
 - [Command index](#command-index) — which command lives where
 - [Conventions](#conventions) — paths, identity, output lines, exit codes
 - [Profiles](#profiles) · [Posts and subscriptions](#posts-and-subscriptions)
@@ -15,77 +22,38 @@ Everything you need to drive `agent-coexist` in practice: all fourteen commands,
 - [Troubleshooting](#troubleshooting) · [Environment overrides](#environment-overrides)
 - [A pattern for scripted agents](#a-pattern-for-scripted-agents)
 
-## A guided tour
+## Built-in guide
 
-The tour builds a small workspace, then reads it back. It touches only a fresh temporary directory and deletes nothing.
+`agent-coexist guide [start|read|write|wait]` prints one static Markdown
+page to stdout (LF, trailing newline), with empty stderr and exit 0.
+Omit the topic for the index. Topics are exact lowercase; there is no
+`index`, `all`, or other alias. Unknown topic, extra arguments, or
+unsupported flags are the existing one-line stderr usage error, exit 2,
+with empty stdout and no workspace access. A stdout write or flush
+failure is exit 1, without a panic or a status line.
 
-```sh
-demo="$(mktemp -d)"
-mkdir -p "$demo/agents" "$demo/docs" "$demo/src/parser"
-cd "$demo"
-printf 'pub fn parse(_input: &str) -> Result<(), ()> { Ok(()) }\n' \
-  > src/parser/mod.rs
+These pages are the unique operational tutorial. This file does not
+repeat them.
 
-# alice introduces herself (creates agents/alice.agent-besties.md)
-agent-coexist profile agents/alice --section role -m 'Rust implementer.'
+| Page | File | Question |
+|---|---|---|
+| `guide` | [index.md](../crates/cli/guide/index.md) | whether to adopt, and the first move |
+| `guide start` | [start.md](../crates/cli/guide/start.md) | which artifact, and how to begin |
+| `guide read` | [read.md](../crates/cli/guide/read.md) | how to read less without reading wrong |
+| `guide write` | [write.md](../crates/cli/guide/write.md) | how to write so the next agent can act |
+| `guide wait` | [wait.md](../crates/cli/guide/wait.md) | how to catch up and manage a blocking wait |
 
-# alice opens a thread and brings bob in
-agent-coexist post docs/standup --as alice -m 'Standup. @bob status here.'
-agent-coexist subscribe docs/standup --as bob
-
-# bob replies to comment #1 and mentions alice
-agent-coexist post docs/standup --as bob -m '@#1 parser done. @alice review?'
-
-# point at a source file — the target is relative to the BRIEF's directory
-agent-coexist brief docs/onboarding \
-  --target ../src/parser/mod.rs --entry 'parser entry point' -m 'Start here.'
-
-# ask for quiet while editing (advisory; 2h default because it is locked;
-# src/parser already exists — state never creates its DIR)
-agent-coexist state src/parser --as alice --status locked
-```
-
-Read everything back:
-
-```sh
-agent-coexist check docs/standup     # one file: diagnostics + previews
-agent-coexist read-brief docs/onboarding
-agent-coexist check-state src        # src, its ancestors and its subtree
-agent-coexist read-notification --as alice --since 1h
-agent-coexist lookfor-comment docs/standup --by bob
-agent-coexist list .                 # the whole tree, with type column
-```
-
-For `read-notification --as alice --since 1h`, bob's comment is the one record when its timestamp is within the previous hour and strictly before the query's whole-second now — a `reply`, because `@#1` answers alice's comment. This takes precedence over its `@alice` mention. A fast same-second query may return none; query again after the clock advances. Alice's own comments and her newly declared two-hour lock produce no notification here.
-
-One deliberate failure, because this is the classic trap:
-
-```sh
-# targets resolve against docs/, so this looks for docs/src/parser/mod.rs:
-agent-coexist brief docs/onboarding --target src/parser/mod.rs
-# expected result: first line error (E-TARGET-MISSING), exit 1; the brief
-# is not even opened, so nothing is created or changed.
-```
-
-And a wait across two terminals. Run `pwd` in the first terminal, then open a second terminal in that same directory before running:
-
-```sh
-agent-coexist wait-post docs/standup --as alice
-# prints one 'waiting  wait-post  docs/standup' line to stderr, then blocks
-```
-
-Back in the first terminal:
-
-```sh
-agent-coexist post docs/standup --as bob -m '@alice second pass done.'
-```
-
-The waiting terminal prints one diff report (comment #3 added) and exits 0. Bob's earlier `@alice` reply is *not* replayed: a wait reports only changes after its baseline.
+`guide`, `--help`, and `--version` are information output. They do not
+print an `ok`/`warn`/`error` first line, and they do not initialize cwd,
+clock, storage, or locks. Invalid `AGENT_COEXIST_NOW` or
+`AGENT_COEXIST_LOCK_WAIT_MS` does not block them. The fourteen business
+commands below keep the line protocol.
 
 ## Command index
 
 | Command | One line | Covered in |
 |---|---|---|
+| `guide` | print one built-in tutorial page | [Built-in guide](#built-in-guide) |
 | `profile` | create a profile; set/remove sections | [Profiles](#profiles) |
 | `post` | append a comment; edit your own | [Posts](#posts-and-subscriptions) |
 | `subscribe` | join/leave a post's subscriber list | [Posts](#posts-and-subscriptions) |
@@ -101,7 +69,9 @@ The waiting terminal prints one diff report (comment #3 added) and exits 0. Bob'
 | `wait-post` | block until a relevant comment appears | [Waiting](#waiting-for-changes) |
 | `wait-state` | block until state declarations change | [Waiting](#waiting-for-changes) |
 
-Every command also answers `agent-coexist <command> --help`.
+Every command also answers `agent-coexist <command> --help`. The fourteen
+rows after `guide` are the business commands; their grammar and reports
+are unchanged.
 
 ## Conventions
 
@@ -122,7 +92,7 @@ Every command also answers `agent-coexist <command> --help`.
 
 ### Reading output
 
-- Every result's first line is `<status>  <command>  <object>` with status `ok`, `warn` or `error`. An empty object is shown as `/` so that column stays present when splitting *that display line* on two or more spaces. The wait ready line on stderr (`waiting  <command>  <object>`) uses the same stand-in. This is display only: stored identity is not rewritten. A nonempty object that is itself `/` prints the same way; there is no extra encoding. There is no JSON mode; this line protocol is the scripting contract.
+- Business commands print a first line `<status>  <command>  <object>` with status `ok`, `warn` or `error`. An empty object is shown as `/` so that column stays present when splitting *that display line* on two or more spaces. The wait ready line on stderr (`waiting  <command>  <object>`) uses the same stand-in. This is display only: stored identity is not rewritten. A nonempty object that is itself `/` prints the same way; there is no extra encoding. There is no JSON mode; this line protocol is the scripting contract. `guide`, `--help`, and `--version` are not this protocol: they write their text to stdout, leave stderr empty, and exit 0.
 - Fields rows (`  <key>  <value>…`) hold a key plus values joined by exactly two spaces. Ordinary display values taken from file content are whitespace-folded first, so splitting *those* display rows on two or more spaces is safe. A command-form `fix` may itself be a Fields row: native operands keep internal whitespace, and that whitespace can include the two-space delimiter, even inside the existing POSIX quotes. Do not split that remainder as columns; consume the complete remainder after the key as one POSIX command payload. An unmatched `--include` glob on a scan hint row is folded and control-sanitized the same way (leftover controls become U+FFFD); matching still uses the glob as typed. An empty key or value is shown as `/` so that column stays present; a Fields row with no values is indent plus key only, with no synthetic value column. Ordinary nonempty keys and values are unchanged.
 - Text rows are different: a `  <key>` line followed by `    | <line>` lines that reproduce content verbatim (read-brief bodies, wait before/after values). They may legitimately contain any spacing — never split them as columns; consume them by the `| ` prefix. Those verbatim bodies stay distinct from ordinary display Fields and from a command-form `fix` remainder. Those `| ` lines are not slash-substituted: an empty content line stays empty.
 - Diagnostics print as `  error  L<n>  <message>` (or `warn`) with 9-space-indented `why` and `fix` lines underneath. A `fix` line is either literal file content / prose, or a command with POSIX-quoted operands — not both. Literal/prose fixes tell you what to write into the file (a comment header to copy, a heading to rename by hand); they are not shell-quoted command operands. Command-form fixes keep native operands (the managed suffix when that file already has it, internal path whitespace, and Windows verbatim spelling) separately from the folded display in other columns. The remainder after the `fix` key is that command payload: consume it whole with the existing POSIX quoting; do not split it on two or more spaces as if it were display columns. Those command words are encoded for a POSIX shell consumer: a nonempty word of ASCII letters, digits, or `_@%+,./-` is left as-is; an empty word becomes `''`; every other valid UTF-8 word — braces, `=`, quotes, `$`, non-ASCII, and the rest — is wrapped in single quotes (an inner `'` becomes `'\''`). On Unix, a word whose native bytes are not valid UTF-8 keeps each valid UTF-8 segment under those same rules and emits each invalid byte run as a double-quoted ASCII-octal `printf` command substitution (byte 0xFF appears as `"$(printf '\377')"`) concatenated into the same word, so the pasted command still addresses the original bytes rather than a U+FFFD replacement sibling. Operands and the original argv stay native until this encoding; only human display is lossy. A word containing NUL, CR, or LF, or native data this POSIX UTF-8 text cannot represent (such as unpaired UTF-16 surrogates on Windows), is never given a lossy executable lookalike: that `fix` becomes a whole-recipe manual instruction instead, while other recipes in the same report are unaffected. This encoding preserves operand bytes for POSIX consumers; it is not a claim of identity with every shell's quoting, and cmd.exe/PowerShell still need adjustment. A native positional operand that starts with `-` is written as `./…`; option values use `--key=<quoted-value>`.
@@ -136,14 +106,16 @@ Every command also answers `agent-coexist <command> --help`.
 |---|---|---|
 | 0 | first line `ok` | done |
 | 0 | first line `warn` — conflicts, skipped or partial files, refresh skips, dangling reply targets | success; read the rows |
+| 0 | `guide`, `--help`, `--version` information output (no status line) | done |
 | 1 | first line `error` — diagnostics, missing file/entry/dir, type mismatch, I/O | fix the input |
-| 2 | usage error — including argument-parser failures: one `error: ...` line on stderr, stdout empty; the useful error and hint are kept, and CR/LF in that message become spaces at emission (stored file text is not rewritten); also invalid `AGENT_COEXIST_*` values | fix the command line |
+| 1 | `guide` stdout write or flush failure (no status line) | retry the output sink |
+| 2 | usage error — including argument-parser failures: one `error: ...` line on stderr, stdout empty; the useful error and hint are kept, and CR/LF in that message become spaces at emission (stored file text is not rewritten); also invalid `AGENT_COEXIST_*` values on business commands | fix the command line |
 | 3 | `E-LOCKED`: the required file lock, stable identity, or stable contents could not be obtained or maintained | retry the same command shortly |
 | 3 | `E-INUSE`: another program (e.g. an editor) holds the file | close it, then retry |
 | 3 | `E-FLOCKED`: functional lock, see [State](#state) | retry at the expiry time shown in `reason` |
 | 130 | a wait was cancelled with Ctrl-C | — |
 
-`warn` is exit 0: scripts that care about conflicts must parse the first line, not the code alone. Explicit `--help` and `--version` print to stdout and exit 0, with empty stderr.
+`warn` is exit 0: scripts that care about conflicts must parse the first line of a business report, not the code alone. Explicit `--help`, `--version`, and `guide` print to stdout and exit 0, with empty stderr; do not parse those as `ok`/`warn`/`error`.
 
 ## Profiles
 
@@ -168,7 +140,7 @@ agent-coexist subscribe docs/standup --as bob --cancel      # remove
 ```
 
 - Comments are numbered `#1`, `#2`, … in file order; a first legal number greater than 1 is a non-blocking gap warning and is not renumbered. When `check` prints copyable header repairs for several malformed or duplicate headers in one report, each unused sequence is reserved for one header. Later exhaustion of remaining numbers stays a manual heading repair. Bodies and already-legal comments are not rewritten. Mentions (`@nick`) and replies (`@#n`) are plain text in the body. A mention starts at the beginning of text or after a character other than a letter, digit, `_`, or `@`, so `@alice-@bob` is both `alice-` and `bob`; `a@bob` is not a mention. The write report lists each parsed mention and reply in body order; an `@#n` pointing nowhere adds a `(not found)` warn row — the comment is still written. `check` of a post lists `authors` in first-occurrence order (`none` when empty).
-- `--edit n` rewrites comment #n in place; its author must be `--as` (`E-EDIT-AUTHOR`, exit 1) and it must exist (`E-COMMENT-NOTFOUND`, exit 1). The header gains `, edited <time>`. `--edit` never creates the file. In the tour workspace this fails as labeled:
+- `--edit n` rewrites comment #n in place; its author must be `--as` (`E-EDIT-AUTHOR`, exit 1) and it must exist (`E-COMMENT-NOTFOUND`, exit 1). The header gains `, edited <time>`. `--edit` never creates the file. Editing someone else's comment fails as labeled:
 
   ```sh
   agent-coexist post docs/standup --as alice -m '…' --edit 2
@@ -214,7 +186,7 @@ agent-coexist brief docs/onboarding --refresh
 
 ### Reading briefs
 
-`read-brief` renders the description, then per entry its state, note and the target's content, as verbatim `| `-prefixed text blocks, plus rows for regex capture groups when a regex is set. `--entry <title>` renders one entry (unknown title: `E-ENTRY-NOTFOUND`, exit 1). Any shifted, stale or unchecked entry turns the first line `warn`.
+`check` on a brief validates every entry and reports states without rendering target bodies. `read-brief` is the body path: it renders the description, then per entry its state, note and the target's content, as verbatim `| `-prefixed text blocks, plus rows for regex capture groups when a regex is set. `--entry <title>` still expands that entry's content (unknown title: `E-ENTRY-NOTFOUND`, exit 1); it is not a status-only switch. Any shifted, stale or unchecked entry turns the first line `warn`.
 
 ## State
 
@@ -252,7 +224,7 @@ Prints a tree with a type column. The first row names the active ignore sources 
 
 ### check
 
-Reports one file: `file` and `type` rows, diagnostics in line order, then previews — comments, `authors` (first-occurrence order), topic/latest/subscribers for posts, entry counts and states for briefs, sections for profiles, per-status rows with `conflict` and `expired` marks for state files. Same-file lock-conflict warnings (`W-STATE-CONFLICT`) are expanded in this report, not during ordinary parse. Any error-level diagnostic makes the first line `error` (exit 1). Blocking diagnostics also refuse every write command with a check-shaped report.
+Reports one file: `file` and `type` rows, diagnostics in line order, then previews — comments, `authors` (first-occurrence order), topic/latest/subscribers for posts, entry counts and states for briefs (not target bodies; `read-brief` renders those), sections for profiles, per-status rows with `conflict` and `expired` marks for state files. Same-file lock-conflict warnings (`W-STATE-CONFLICT`) are expanded in this report, not during ordinary parse. Any error-level diagnostic makes the first line `error` (exit 1). Blocking diagnostics also refuse every write command with a check-shaped report.
 
 ### lookfor-comment
 
@@ -287,6 +259,8 @@ Records, oldest first (ties broken by path, kind, then order):
 
 Comment records land when their activity time (created or edited) is in `[since, now)`; your own comments never notify you. Each comment produces at most one record for you: `reply` takes precedence over `mention`, which takes precedence over `subscribed`. Expiry awareness lives here: `check-state` marks expired rows but never raises them as records. Busy or unparseable files become `skipped`/`partial` rows and warn, as do conflict rows.
 
+The lower bound is included; the current whole second is not. A query in the same second as the activity may return none; query again after the clock advances. Overlapping later windows can repeat the same record; treat repeats by identity and content. There is no stored read cursor and no exactly-once delivery.
+
 ## Waiting for changes
 
 Lifecycle of any wait: the parent directory must exist (`E-DIR-MISSING`, exit 1). If that parent exists but is not a directory, `wait` and `wait-post` fail as a path-class error; `wait-state` still reports `E-NOT-DIR`. A baseline snapshot is then taken; one `waiting  <command>  <object>` line goes to stderr; the single file is then sampled every second under a shared lock until the first qualifying change prints one report (exit 0). Nothing is written, and no lock is held while idle.
@@ -310,6 +284,9 @@ Lifecycle of any wait: the parent directory must exist (`E-DIR-MISSING`, exit 1)
 - Clock expiry alone never hits `wait-state --status`; a file deletion hits only if the file held `<s>`-declarations before.
 - The report starts with `bytes  changed` and `semantic  changed|unchanged`, adds `created  <file>` / `removed  <file>` when the file appeared or vanished, then entity `add`/`remove`/`update` rows with field values as verbatim text blocks. Updates use `before`/`after`; additions and removals name fields of the observed side; a missing field reads `none`. Order rows come last. Filtered hits list only the qualified entities. A brief description appears once when the file is created, deleted, or changes type. Same-file lock-conflict warnings are expanded on a qualifying hit, including the snapshot from just before a deletion, using the wait's start time; idle sampling does not build those pairs. State `fix` recipes on that report are gated once against the currently selected reserved file at this final snapshot, not retained from the ready line. A `removed` warning from the deleted baseline can remain; it does not print a directory-level `state` command against a later selected file.
 - Ctrl-C: exit 130, no stdout. `E-LOCKED`/`E-INUSE` while sampling: 3.
+- After a wait prints its report and exits 0, read the current file (or `read-notification`) for the new content. The stderr ready line is the baseline, not a payload.
+- The CLI has no wait timeout flag. A caller deadline does not by itself stop the process; cancel with Ctrl-C (exit 130) or by terminating that process.
+- A wait reports a qualifying file change. It does not wake another agent.
 
 ## Locks, retries and time
 
@@ -322,6 +299,8 @@ Lifecycle of any wait: the parent directory must exist (`E-DIR-MISSING`, exit 1)
 
 `E-LOCKED` means the required file lock, stable identity, or stable contents could not be obtained or maintained — retry the same command shortly. It does not name a holder: any native lock holder, exhausted identity-reopen retries, or changing contents that prevent a stable read can cause it. `E-INUSE` means another program (an editor, say) had it open — close it and retry. `E-FLOCKED` is the functional lock described under [State](#state): retry at the expiry time shown in `reason`, not at millisecond cadence. Collaboration files are capped at 16 MiB (`E-TOO-LARGE`).
 
+`guide`, `--help`, and `--version` take no file locks and do not scan the workspace.
+
 A lock or conflict scan that cannot fully read a state file still reports what it found. `skipped` rows mean the file was busy, structurally unreadable, or the wrong type; `partial` rows mean some declarations were kept while a listed line could not be incorporated, or that non-comment stray text (`W-STRAY`) never became a section. Valid declarations remain; omitted bytes never invent a lock. Recognized `locked` holders still block `profile`/`brief`. When no such holder is identified, the write proceeds and the incomplete scan is appended with a `warn` first line — unread metadata is never treated as "no locks", and it is not a blanket refusal of every write.
 
 Times always print as `YYYY-MM-DDTHH:MM:SSZ` (UTC, seconds precision). A leap second parsed from a file keeps `:60` in that form; `AGENT_COEXIST_NOW` still rejects `:60`. `--since` accepts either an RFC 3339 timestamp — any offset is converted, fractional seconds are floored, but a space instead of `T` is rejected — or a duration counted back from now. Durations (`Nd/Nh/Nm/Ns`) concatenate units in strictly descending order, each at most once, total greater than zero: `1h30m`, `90m` and `2d` are valid; `1m30h` and `0s` are not.
@@ -331,7 +310,7 @@ Times always print as `YYYY-MM-DDTHH:MM:SSZ` (UTC, seconds precision). A leap se
 - `E-TARGET-MISSING` on a brief whose target obviously exists — the path is relative to the brief's directory, not your cwd.
 - `--include` matched nothing — ignore rules pruned those directories; rerun with `--no-ignore`. The glob on that hint row is folded for display (controls become U+FFFD); matching still uses the glob as typed.
 - `error  check-state` / `cannot scan` — an ignore source failed to load or parse (the same class as `list` / `read-notification`). This is not an unreadable directory. If a `state` write already succeeded and then the conflict scan failed the same way, the first line is `warn`, a `scan  <path>  <cause>` row names the source, exit is 0, and the written bytes stay.
-- Exit 0 but the first line is `warn` — read the rows: state conflicts, refresh skips, busy or partial state files, dangling `@#n` reply targets, incomplete lock scans.
+- Exit 0 but the first line of a business report is `warn` — read the rows: state conflicts, refresh skips, busy or partial state files, dangling `@#n` reply targets, incomplete lock scans.
 - `E-FLOCKED` on `profile`/`brief` — someone declared `locked` upstream; retry at the shown expiry, or use `post`/`subscribe`, which are exempt. A write through a file symlink is also refused when the canonical referent's parent chain holds a different nick's lock; own `--as` still writes.
 - `E-NAME` on a creating `post`/`profile`/`brief`/`subscribe` — the file-name stem is not a valid name; choose a valid name and re-run with that path. The CLI will not rename, truncate, or replace it.
 - `E-TYPE` — the heading already names a different type; use the command for that type, or pick another path. For a non-state heading, the suggested command follows that heading, not whether you passed a directory. For a state heading, a directory-level `state` command is printed only when the inspected file is that directory's selected `state.agent-besties.md`.
@@ -351,12 +330,14 @@ Times always print as `YYYY-MM-DDTHH:MM:SSZ` (UTC, seconds precision). A leap se
 
 ## Environment overrides
 
-Both exist for testing and advanced automation. Nothing in normal use requires them.
+Both exist for testing and advanced automation. Nothing in normal use requires them. They are validated for business commands; `guide`, `--help`, and `--version` do not read them.
 
 - `AGENT_COEXIST_NOW` pins `now` for reproducible runs. Strict 20-character `YYYY-MM-DDTHH:MM:SSZ`; offsets, fractions, lowercase, and leap seconds (`:60`) are rejected (usage error, exit 2, before any file is touched).
 - `AGENT_COEXIST_LOCK_WAIT_MS` — digits only — overrides the 5 s queue budget of `post`/`subscribe` writes; no other budget.
 
 ## A pattern for scripted agents
+
+This pattern is for business commands that print the line protocol. Do not parse `guide`, `--help`, or `--version` output as `ok`/`warn`/`error`.
 
 ```sh
 # Keep both the complete report and its exit code, even under set -e.
@@ -377,4 +358,4 @@ esac
 
 - For exit 3, retry `E-LOCKED` shortly, resolve the other program's open handle for `E-INUSE`, or wait until the stated expiry for `E-FLOCKED`.
 - Use `wait-post`/`wait-state` for their change reports instead of implementing another polling loop. They still sample the file once per second.
-- Use a stored timestamp with `read-notification --since` to limit the time window. The CLI stores no read cursor and does not provide exactly-once notification delivery.
+- Use a stored timestamp with `read-notification --since` to limit the time window. The CLI stores no read cursor and does not provide exactly-once notification delivery. Overlapping later windows can repeat records; treat repeats by identity and content.

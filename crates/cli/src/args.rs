@@ -5,14 +5,17 @@
 //! 1. clap parses the grammar (`-h` / `-V`, positional shapes, required
 //!    arguments, `u64` overflow for `--edit` / `--reply-to` / `--comment`)
 //!    and returns grammar errors to main for one-line stderr and exit 2;
-//!    explicit help/version keep clap's stdout and exit 0.
-//! 2. [`resolve`] validates every value **before any file access**
+//!    explicit help/version keep clap's stdout and exit 0. `guide` is a
+//!    typed information command on [`TopCommand`], flattened away from the
+//!    fourteen business [`Commands`].
+//! 2. [`resolve`] validates every business value **before any file access**
 //!    (spec §7.1.5–§7.1.7): nick / status / section grammars, control
 //!    characters and double spaces in the enumerating values, `-m`
 //!    normalization, `--since` / `--for` resolution against the one `Ctx`
 //!    clock, `--regex` compilation, the six brief forms, profile pairing,
 //!    the two state forms, and walk glob validity. Every failure is exactly
-//!    one stderr line `error: <msg>` and exit 2.
+//!    one stderr line `error: <msg>` and exit 2. `guide` never enters
+//!    [`resolve`].
 //! 3. The result is a plain-value [`coexist_core::ops::Request`] (or a wait
 //!    invocation): no clap type crosses into core.
 //!
@@ -68,9 +71,8 @@ pub enum DiagKind {
     Dir(PathBuf),
 }
 
-/// The parsed command line (spec §7.2 grammar; the three wait extensions of
-/// the optional wait plan are registered alongside the eleven base
-/// commands).
+/// The parsed command line: information `guide` plus the fourteen business
+/// commands (eleven base + three wait extensions).
 #[derive(Parser, Debug)]
 #[command(
     name = "agent-coexist",
@@ -80,7 +82,43 @@ pub enum DiagKind {
 )]
 pub struct Cli {
     #[command(subcommand)]
-    pub command: Commands,
+    pub command: TopCommand,
+}
+
+/// Top-level dispatch: `guide`, or one of the flattened business [`Commands`].
+#[derive(Subcommand, Debug)]
+pub enum TopCommand {
+    /// Print an offline operational guide page
+    #[command(after_help = H_GUIDE)]
+    Guide {
+        /// start, read, write or wait; omit for the default page
+        #[arg(value_name = "start|read|write|wait", value_parser = parse_guide_topic)]
+        topic: Option<GuideTopic>,
+    },
+    #[command(flatten)]
+    Business(Commands),
+}
+
+/// Exact lowercase guide topic; omitted topic selects the default page.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum GuideTopic {
+    Start,
+    Read,
+    Write,
+    Wait,
+}
+
+fn parse_guide_topic(raw: &str) -> Result<GuideTopic, String> {
+    match raw {
+        "start" => Ok(GuideTopic::Start),
+        "read" => Ok(GuideTopic::Read),
+        "write" => Ok(GuideTopic::Write),
+        "wait" => Ok(GuideTopic::Wait),
+        _ => Err(format!(
+            "'{}' is not a valid guide topic; expected start, read, write or wait",
+            names::fold(raw)
+        )),
+    }
 }
 
 /// The `WALK` argument group shared by `list`, `read-notification` and
@@ -143,7 +181,7 @@ pub enum Commands {
         #[command(flatten)]
         walk: WalkArgs,
     },
-    /// Report the structure, diagnostics and preview of one file
+    /// Verify one file and report status without target content
     #[command(after_help = H_CHECK)]
     Check {
         /// the collaboration file; the '.agent-besties.md' suffix may be omitted
@@ -274,7 +312,7 @@ pub enum Commands {
         #[arg(long, value_name = "n")]
         comment: Option<u64>,
     },
-    /// Render a brief: description, entries, notes, content
+    /// Render a brief's description, notes and target text
     #[command(after_help = H_READ_BRIEF)]
     ReadBrief {
         /// the brief file; the suffix may be omitted
@@ -333,12 +371,13 @@ impl Commands {
     }
 }
 
-/// Validate the parsed command line and map it onto a core [`Request`] or a
-/// wait invocation. `ctx` supplies the one clock `--since` / `--for` are
+/// Validate the parsed business command and map it onto a core [`Request`] or
+/// a wait invocation. `ctx` supplies the one clock `--since` / `--for` are
 /// resolved against. Fails with the exact stderr message (without the
 /// `error: ` prefix) for every usage-class condition (spec §7.1.7).
-pub fn resolve(cli: Cli, ctx: &Ctx) -> Result<Invocation, String> {
-    match cli.command {
+/// `guide` never reaches this function.
+pub fn resolve(command: Commands, ctx: &Ctx) -> Result<Invocation, String> {
+    match command {
         Commands::List { dir, types, walk } => {
             let dir = dir.unwrap_or_else(|| PathBuf::from("."));
             let walk = walk_options(walk)?;
@@ -828,10 +867,19 @@ PATH arguments name a collaboration file and may omit the '.agent-besties.md' su
 DIR arguments default to the current directory; every scan is recursive.
 TIME example: 2026-09-17T09:12:00Z (UTC, seconds precision). DURATION example: 1h30m (Nd/Nh/Nm/Ns, each unit at most once, total > 0).
 Type vocabulary: post, brief, agent-profile, state ('profile' is accepted as an alias for agent-profile).
-'check' reports one file's format, diagnostics and preview; 'check-state' reports the state entries of a directory, its ancestors and its subtree.
-Exit codes: 0 = first line 'ok' or 'warn' ('warn' is also exit 0; parse the first line to detect conflicts); 1 = first line 'error'; 2 = usage error (one stderr line); 3 = retryable lock failure (E-LOCKED/E-INUSE/E-FLOCKED).
+'check' reports one file's format, diagnostics and status without target content; 'read-brief' renders a brief including target text; 'check-state' reports the state entries of a directory, its ancestors and its subtree.
+For usage judgment see 'agent-coexist guide'; for exact syntax see this help and each command's --help.
+Exit codes for business commands: 0 = first line 'ok' or 'warn' ('warn' is also exit 0; parse the first line to detect conflicts); 1 = first line 'error'; 2 = usage error (one stderr line); 3 = retryable lock failure (E-LOCKED/E-INUSE/E-FLOCKED).
+guide, --help and --version are information output: they print Markdown or clap help/version to stdout with no ok/warn/error status line and exit 0 on success; usage errors still exit 2; a failed guide write or flush exits 1.
 Progress ('scanning N dirs, M files...') is only written when stderr is a TTY; no output means the scan is still running within its bounded waits.
 Help texts and fix commands assume a POSIX shell (Git Bash on Windows); cmd.exe/PowerShell users must adjust quoting.";
+
+const H_GUIDE: &str = "\
+Usage: agent-coexist guide [start|read|write|wait]
+
+Prints one offline Markdown page to stdout and exits 0. Omit the topic for the default adoption page; pass exactly one of start, read, write, wait for that page. stdout is the page; stderr is empty. No ok/warn/error status line, pager, color, network, or workspace access.
+Topics are exact lowercase words; there is no index, overview, all, or prefix match. This command has no DIR, PATH, --as, or -m. Invalid AGENT_COEXIST_NOW / AGENT_COEXIST_LOCK_WAIT_MS do not block it.
+Example: agent-coexist guide start";
 
 const H_LIST: &str = "\
 Usage: agent-coexist list [DIR] [--type <type>]... [--include <glob>]... [--exclude <glob>]... [--no-ignore]
@@ -847,6 +895,7 @@ const H_CHECK: &str = "\
 Usage: agent-coexist check <PATH>
 
 Reports one file: 'file', 'type' (when determinable), diagnostics in line order, then counts and previews (topic/latest for posts, entries for briefs, sections for profiles, entry rows for state).
+Does not expand target-file contents; use read-brief when you need the target text.
 PATH is a single collaboration file (the '.agent-besties.md' suffix may be omitted); 'check-state' is the directory-level counterpart for state files. This command has no -m.
 Reading uses a shared lock with a 1s wait; a busy file fails with E-LOCKED (exit 3, retry the same command shortly).
 Example: agent-coexist check docs/standup";
@@ -919,7 +968,7 @@ Example: agent-coexist lookfor-comment docs/standup --by bob";
 const H_READ_BRIEF: &str = "\
 Usage: agent-coexist read-brief <PATH> [--entry <title>]
 
-Renders the description and, per entry, its state, note and the target's content as verbatim text blocks. --entry renders only that entry (titles match after whitespace folding). This command has no -m.
+Renders the description and, per entry, its state, note and the target's content as verbatim text blocks. --entry renders only that entry (titles match after whitespace folding). Use check when you only need status, not the target text. This command has no -m.
 Reading uses a shared lock with a 1s wait; a busy file fails with E-LOCKED (exit 3).
 Example: agent-coexist read-brief docs/onboarding --entry 'parser entry point'";
 
@@ -1001,24 +1050,29 @@ mod tests {
         assert_eq!(suffixed(path.clone()), path);
     }
 
-    fn brief_cli(target: Option<String>, regex: Option<String>) -> Cli {
-        Cli {
-            command: Commands::Brief {
-                path: PathBuf::from("plan"),
-                as_nick: None,
-                message: None,
-                target,
-                entry: None,
-                regex,
-                remove: false,
-                refresh: false,
-            },
+    fn parse_args(args: &[&str]) -> Result<Cli, clap::Error> {
+        let mut argv = Vec::with_capacity(args.len() + 1);
+        argv.push("agent-coexist");
+        argv.extend(args);
+        Cli::try_parse_from(&argv)
+    }
+
+    fn brief_command(target: Option<String>, regex: Option<String>) -> Commands {
+        Commands::Brief {
+            path: PathBuf::from("plan"),
+            as_nick: None,
+            message: None,
+            target,
+            entry: None,
+            regex,
+            remove: false,
+            refresh: false,
         }
     }
 
     fn resolve_brief(target: Option<String>, regex: Option<String>) -> Result<Invocation, String> {
         let ctx = Ctx::new(Some(String::new()), None).expect("ctx");
-        resolve(brief_cli(target, regex), &ctx)
+        resolve(brief_command(target, regex), &ctx)
     }
 
     fn brief_target(inv: Invocation) -> BriefTarget {
@@ -1086,17 +1140,15 @@ mod tests {
     #[test]
     fn resolve_rejects_remove_combined_with_target() {
         let ctx = Ctx::new(Some(String::new()), None).expect("ctx");
-        let mixed = Cli {
-            command: Commands::Brief {
-                path: PathBuf::from("plan"),
-                as_nick: None,
-                message: None,
-                target: Some("new.txt".into()),
-                entry: Some("item".into()),
-                regex: None,
-                remove: true,
-                refresh: false,
-            },
+        let mixed = Commands::Brief {
+            path: PathBuf::from("plan"),
+            as_nick: None,
+            message: None,
+            target: Some("new.txt".into()),
+            entry: Some("item".into()),
+            regex: None,
+            remove: true,
+            refresh: false,
         };
         match resolve(mixed, &ctx) {
             Err(_) => {}
@@ -1107,17 +1159,15 @@ mod tests {
             Ok(_) => panic!("expected usage error, never RemoveEntry"),
         }
 
-        let valid = Cli {
-            command: Commands::Brief {
-                path: PathBuf::from("plan"),
-                as_nick: None,
-                message: None,
-                target: None,
-                entry: Some("item".into()),
-                regex: None,
-                remove: true,
-                refresh: false,
-            },
+        let valid = Commands::Brief {
+            path: PathBuf::from("plan"),
+            as_nick: None,
+            message: None,
+            target: None,
+            entry: Some("item".into()),
+            regex: None,
+            remove: true,
+            refresh: false,
         };
         match resolve(valid, &ctx) {
             Ok(Invocation::Base {
@@ -1128,6 +1178,60 @@ mod tests {
                 other => panic!("expected RemoveEntry, got {other:?}"),
             },
             _ => panic!("expected ok remove"),
+        }
+    }
+
+    /// Guide grammar: omitted topic is the default page; only exact
+    /// lowercase start|read|write|wait; unknown topic/args/flags are clap
+    /// usage errors; business commands stay on the business branch.
+    #[test]
+    fn guide_grammar_is_exact_and_does_not_capture_business() {
+        match parse_args(&["guide"]) {
+            Ok(Cli {
+                command: TopCommand::Guide { topic: None },
+            }) => {}
+            other => panic!("expected default guide, got {other:?}"),
+        }
+        for (word, want) in [
+            ("start", GuideTopic::Start),
+            ("read", GuideTopic::Read),
+            ("write", GuideTopic::Write),
+            ("wait", GuideTopic::Wait),
+        ] {
+            match parse_args(&["guide", word]) {
+                Ok(Cli {
+                    command: TopCommand::Guide { topic: Some(got) },
+                }) if got == want => {}
+                other => panic!("expected guide {word}, got {other:?}"),
+            }
+        }
+
+        for bad in ["index", "overview", "all", "Start", "WAIT"] {
+            let err = parse_args(&["guide", bad]).expect_err(bad);
+            assert!(err.use_stderr(), "{bad}");
+        }
+
+        assert!(parse_args(&["guide", "start", "extra"])
+            .unwrap_err()
+            .use_stderr());
+        assert!(parse_args(&["guide", "--as", "alice"])
+            .unwrap_err()
+            .use_stderr());
+        assert!(parse_args(&["guide", "--json"]).unwrap_err().use_stderr());
+        assert!(parse_args(&["read"]).unwrap_err().use_stderr());
+        assert!(parse_args(&["start"]).unwrap_err().use_stderr());
+
+        match parse_args(&["wait", "docs/onboarding"]) {
+            Ok(Cli {
+                command: TopCommand::Business(Commands::Wait { .. }),
+            }) => {}
+            other => panic!("wait must stay a business command, got {other:?}"),
+        }
+        match parse_args(&["list"]) {
+            Ok(Cli {
+                command: TopCommand::Business(Commands::List { .. }),
+            }) => {}
+            other => panic!("list must stay a business command, got {other:?}"),
         }
     }
 }
