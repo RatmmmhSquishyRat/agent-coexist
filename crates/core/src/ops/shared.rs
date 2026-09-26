@@ -768,7 +768,7 @@ fn display_of(p: &Path) -> String {
 /// Strip the Windows verbatim prefix `fs::canonicalize` adds without
 /// converting native path components to text. Warning keys retain this
 /// lexical spelling; directory-relation comparisons keep the canonical form.
-fn lexical_dir(p: &Path) -> PathBuf {
+pub(super) fn lexical_dir(p: &Path) -> PathBuf {
     #[cfg(windows)]
     {
         use std::ffi::OsString;
@@ -825,7 +825,7 @@ mod tests {
                     .unwrap_or(0)
             ));
         std::fs::create_dir_all(&dir).unwrap();
-        dir
+        lexical_dir(&std::fs::canonicalize(dir).unwrap())
     }
 
     fn read_state(dir: &Path, content: &str) -> StateFileInfo {
@@ -1246,6 +1246,11 @@ mod tests {
             std::fs::create_dir_all(&hop).unwrap();
             files.push(read_state(&source, "# invalid\n"));
             // A second native spelling of the same on-disk state file.
+            assert_ne!(
+                source,
+                hop.join(".."),
+                "fixture must retain an alternate native spelling"
+            );
             files.push(read_state_file(
                 &mut ctx,
                 &hop.join("..").join("state.agent-besties.md"),

@@ -138,7 +138,7 @@ Every command also answers `agent-coexist <command> --help`.
 | 0 | first line `warn` — conflicts, skipped or partial files, refresh skips, dangling reply targets | success; read the rows |
 | 1 | first line `error` — diagnostics, missing file/entry/dir, type mismatch, I/O | fix the input |
 | 2 | usage error — including argument-parser failures: one `error: ...` line on stderr, stdout empty; the useful error and hint are kept, and CR/LF in that message become spaces at emission (stored file text is not rewritten); also invalid `AGENT_COEXIST_*` values | fix the command line |
-| 3 | `E-LOCKED`: another `agent-coexist` process holds the lock | retry the same command shortly |
+| 3 | `E-LOCKED`: the required file lock or stable file identity was not obtained within the retry window | retry the same command shortly |
 | 3 | `E-INUSE`: another program (e.g. an editor) holds the file | close it, then retry |
 | 3 | `E-FLOCKED`: functional lock, see [State](#state) | retry at the expiry time shown in `reason` |
 | 130 | a wait was cancelled with Ctrl-C | — |
@@ -175,7 +175,7 @@ agent-coexist subscribe docs/standup --as bob --cancel      # remove
   # expected: error (E-EDIT-AUTHOR), exit 1 — comment #2 is bob's
   ```
 
-- Subscribing twice, or cancelling when not subscribed, leaves the file unchanged (`unchanged  <nick>`, `ok`). Cancelling the last subscriber removes the subscriber list. `--cancel` on a missing file is `E-FILE-MISSING`, exit 1.
+- Subscribing twice, or cancelling when not subscribed, leaves the file unchanged (`unchanged  <nick>`, `ok`). Cancel edits only the first authoritative subscriber property. Deleting its last nick deletes that property, leaves later duplicate properties as stored, then reports the subscribers of the resulting document. A surviving duplicate can become the list; `none` only when that list is empty. `--cancel` on a missing file is `E-FILE-MISSING`, exit 1.
 - `post` and `subscribe` queue up to 5 s on a busy lock; see [Locks, retries and time](#locks-retries-and-time).
 
 ## Briefs
@@ -320,7 +320,7 @@ Lifecycle of any wait: the parent directory must exist (`E-DIR-MISSING`, exit 1)
 | `check`, `lookfor-comment`, `read-brief` | shared | 1 s, then `E-LOCKED` (3) |
 | scans, plus state's conflict scan | shared | ~100 ms, then `busy`/`skipped`/`partial` rows + `warn` |
 
-`E-LOCKED` means another `agent-coexist` process held the file — retry the same command shortly. `E-INUSE` means another program (an editor, say) had it open — close it and retry. `E-FLOCKED` is the functional lock described under [State](#state): retry at the expiry time shown in `reason`, not at millisecond cadence. Collaboration files are capped at 16 MiB (`E-TOO-LARGE`).
+`E-LOCKED` means the required file lock or stable file identity was not obtained within the retry window — retry the same command shortly. It does not name a holder: any native lock holder, or exhausted identity-reopen retries, can cause it. `E-INUSE` means another program (an editor, say) had it open — close it and retry. `E-FLOCKED` is the functional lock described under [State](#state): retry at the expiry time shown in `reason`, not at millisecond cadence. Collaboration files are capped at 16 MiB (`E-TOO-LARGE`).
 
 A lock or conflict scan that cannot fully read a state file still reports what it found. `skipped` rows mean the file was busy, structurally unreadable, or the wrong type; `partial` rows mean some declarations were kept while a listed line could not be incorporated, or that non-comment stray text (`W-STRAY`) never became a section. Valid declarations remain; omitted bytes never invent a lock. Recognized `locked` holders still block `profile`/`brief`. When no such holder is identified, the write proceeds and the incomplete scan is appended with a `warn` first line — unread metadata is never treated as "no locks", and it is not a blanket refusal of every write.
 

@@ -73,7 +73,7 @@ Daily standup thread. @bob please post your status here.
 
 All timestamps on this page are fixed examples, not live data.
 
-- The preamble may hold one `- subscribers: <nick>, <nick>, …` line. Subscribers are an explicit list, maintained by hand or with `subscribe`; cancelling the last subscriber removes the line. A second subscribers line or a repeated nick is a warning.
+- The preamble may hold one `- subscribers: <nick>, <nick>, …` line. Subscribers are an explicit list, maintained by hand or with `subscribe`. Cancel edits only the first authoritative property; deleting its last nick removes that line, later duplicate properties stay as stored, and the resulting document's remaining first property becomes the list. A second subscribers line or a repeated nick is a warning.
 - Each comment is one section with an exact header grammar: `## #<seq> <nick> (<created>)`, optionally `, edited <edited>` before the closing `)`. `<seq>` has no leading zeros, single spaces separate the fields, and only trailing whitespace may follow the `)`. A header that deviates is a blocking error, and the section stops counting as a comment.
 - New comments are numbered `max(existing seq) + 1`. Hand-made gaps and reordering are warnings — including a first legal comment whose number is greater than 1 — and the file is not renumbered. Duplicate numbers are blocking. When `check` prints copyable header repairs in one report, each unused sequence is reserved for one header, starting at `max(existing seq) + 1`; a later header that cannot take a remaining number stays a manual heading repair. Bodies and already-legal comments are not rewritten.
 - The body is the section's first fence. `@nick` mentions and `@#n` replies are recognized from that text, not stored as separate fields. Subscribers, by contrast, have an explicit property line. A mention starts at the beginning of text or after a character other than a letter, digit, `_`, or `@`; a preceding `-` is a boundary, so `@alice-@bob` is two mentions (`alice-` and `bob`). `a@bob` and `mail@work` are not mentions.
@@ -180,7 +180,7 @@ Writes change only the byte spans they target. Untargeted bytes survive verbatim
 
 | Command | Spans it rewrites or deletes |
 | ------- | ---------------------------- |
-| `subscribe` | the `- subscribers:` line (rewritten or removed) |
+| `subscribe` | the first authoritative `- subscribers:` line (rewritten or removed); later duplicate properties stay as stored |
 | `post --edit n` | comment #n's header line and body fence |
 | `brief --refresh` | the `hash:` values of each entry |
 | `brief --entry … --remove`, `profile --section … --remove` | the entry/section span, whole |
@@ -193,7 +193,7 @@ Writes change only the byte spans they target. Untargeted bytes survive verbatim
 
 ## Cooperation, not security
 
-- While reading or writing, the CLI holds short-lived OS advisory file locks so that concurrent `agent-coexist` processes do not interleave their reads and writes. These coordinate only programs that also take them; any editor can modify the files at any time.
+- While reading or writing, the CLI holds short-lived OS file locks so concurrent `agent-coexist` processes do not interleave their reads and writes. On Unix local filesystems those locks are generally advisory and coordinate programs that also take them. On Windows, `LockFileEx` byte-range locks can reject other handles' ordinary I/O even when the other program takes no lock. This is not authentication, a sandbox, or a security guarantee: mapped I/O, rename-save replacement, and non-cooperating actors are not generally excluded.
 - `--as <nick>` is an unverified label, not authentication. Author checks compare nick strings; anyone can claim any nick.
 - A `locked` status is a request. Other `agent-coexist` processes honor it by refusing their `profile` and `brief` writes on targets at or below the locked directory until it expires; `post`, `subscribe`, and `state` writes are never gated, and tools that ignore these files are unaffected. A write through a file symlink also honors that request on the canonical referent's parent directory and its ancestors, in addition to the supplied path's directory chain. Own `--as` still exempts you. Failed canonicalization keeps the supplied chain. This is not a volume-wide hardlink search, and concurrent replacements are not atomic. Entries expire automatically at `until`.
 - A creating write that is refused (wrong type, `E-NAME`, another nick's `locked`, a busy lock, a blocking parse error) may delete an empty file this invocation just created, and empty parent directories it just created, after checking they are still the same empty objects. Pre-existing files, files that already contain bytes, replacements at the same path, and directories that are no longer empty are left in place. A brief empty file or directory can appear and then vanish; that cleanup is not crash-safe or atomic against other programs.

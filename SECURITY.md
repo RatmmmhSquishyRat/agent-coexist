@@ -16,9 +16,13 @@ and `read-brief` can print the target contents. Review artifacts before sharing 
 Any process can post under any nick; the tool performs no authentication,
 and its comment-edit check compares nick strings only.
 
-**Locks are cooperative, not security.** File locking (shared reads,
-exclusive writes) coordinates `agent-coexist` processes to avoid collisions.
-It does not stop other editors or non-cooperating programs. A `locked`
+**Locks are cooperative, not security.** Shared and exclusive file locks
+coordinate concurrent `agent-coexist` reads and writes. On Unix local
+filesystems they are generally advisory. On Windows, `LockFileEx`
+byte-range locks can reject other handles' ordinary I/O even when the
+other program takes no lock. They are not authentication, a sandbox, or
+a security guarantee: mapped I/O, rename-save replacement, and
+non-cooperating actors are not generally excluded. A `locked`
 state declaration gates only `profile` and `brief` writes by other
 `agent-coexist` processes — never `post`, `subscribe`, or `state` writes —
 and hand-editing a file bypasses it entirely. A write through a file

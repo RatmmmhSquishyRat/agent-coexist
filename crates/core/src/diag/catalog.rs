@@ -125,7 +125,7 @@ pub(crate) const CATALOG: &[Template] = &[
         id: "E-LOCKED",
         command_fix: false,
         message: r#"file is locked by another process"#,
-        why: r#"another agent-coexist command is writing it right now"#,
+        why: r#"the required file lock or stable file identity was not obtained within the retry window"#,
         fix: r#"retry shortly: {argv}"#,
     },
     Template {

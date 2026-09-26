@@ -527,7 +527,13 @@ mod tests {
                     .unwrap_or(0)
             ));
         std::fs::create_dir_all(&dir).unwrap();
-        dir
+        // Scope identities are canonicalized (§10.5.2) while temp_dir may be
+        // a lexical alias of the native directory; return the created
+        // directory's canonical disk spelling so fixtures compare like with
+        // like. lexical_dir keeps that spelling but drops the Windows
+        // verbatim prefix, matching the ordinary native representation the
+        // compared display paths use.
+        shared::lexical_dir(&std::fs::canonicalize(&dir).unwrap())
     }
 
     fn params(dir: &Path, ctx: &Ctx) -> ReadNotificationParams {
