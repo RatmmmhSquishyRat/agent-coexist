@@ -105,6 +105,11 @@ All notable changes to this project are documented here. The format follows
   components are not given extra case-folding, and I/O paths are not
   rewritten. Upstream glob grammar, precedence, and licenses are
   unchanged.
+- In a `core.excludesFile` path read from git config, only a recognized
+  leading `~` home component expands, at a component boundary and using
+  the home directory's native bytes. Interior or later tildes —
+  including Windows short native names such as `RUNNER~1` — and
+  `~user` forms stay literal.
 - Scan trees keep native source-path identity: distinct native directories
   stay distinct nodes when display names fold together, and a root whose
   name contains spaces still relativizes correctly. `check-state`

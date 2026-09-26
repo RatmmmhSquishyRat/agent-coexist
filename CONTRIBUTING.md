@@ -56,10 +56,14 @@ crates.io, patched in-tree.
   gitdir's exclude rules. Ordinary `.git` directories consult `commondir`
   the same way gitfiles do. Gitfile and commondir descriptors are read
   in full; only trailing CR/LF bytes are trimmed, so an embedded LF
-  stays in the native path. Descriptor-safe reads, relative bases,
-  optional missing sources, load errors, and ignore grammar are
-  unchanged. Unix matcher prefix stripping requires a
-  component boundary; upstream raw `./` remainder spelling is kept.
+  stays in the native path. In a `core.excludesFile` path read from
+  git config, only a recognized leading `~` home component expands, at
+  a component boundary and using the home directory's native bytes;
+  interior or later tildes — including Windows short native names such
+  as `RUNNER~1` — and `~user` forms stay literal. Descriptor-safe
+  reads, relative bases, optional missing sources, load errors, and
+  ignore grammar are unchanged. Unix matcher prefix stripping requires
+  a component boundary; upstream raw `./` remainder spelling is kept.
   On Windows, ordinary and verbatim volume prefixes compare as native
   Rust `Prefix` values (`c:` and `C:` are already the same disk; `C:\`
   and `\\?\C:\` match as one volume). Prefix stripping consumes every

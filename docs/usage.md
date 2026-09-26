@@ -56,7 +56,7 @@ agent-coexist lookfor-comment docs/standup --by bob
 agent-coexist list .                 # the whole tree, with type column
 ```
 
-For `read-notification --as alice --since 1h`, bob's comment is the one record — a `reply`, because `@#1` answers alice's comment. This takes precedence over its `@alice` mention. Alice's own comments and her newly declared two-hour lock produce no notification here.
+For `read-notification --as alice --since 1h`, bob's comment is the one record when its timestamp is within the previous hour and strictly before the query's whole-second now — a `reply`, because `@#1` answers alice's comment. This takes precedence over its `@alice` mention. A fast same-second query may return none; query again after the clock advances. Alice's own comments and her newly declared two-hour lock produce no notification here.
 
 One deliberate failure, because this is the classic trap:
 
@@ -138,7 +138,7 @@ Every command also answers `agent-coexist <command> --help`.
 | 0 | first line `warn` — conflicts, skipped or partial files, refresh skips, dangling reply targets | success; read the rows |
 | 1 | first line `error` — diagnostics, missing file/entry/dir, type mismatch, I/O | fix the input |
 | 2 | usage error — including argument-parser failures: one `error: ...` line on stderr, stdout empty; the useful error and hint are kept, and CR/LF in that message become spaces at emission (stored file text is not rewritten); also invalid `AGENT_COEXIST_*` values | fix the command line |
-| 3 | `E-LOCKED`: the required file lock or stable file identity was not obtained within the retry window | retry the same command shortly |
+| 3 | `E-LOCKED`: the required file lock, stable identity, or stable contents could not be obtained or maintained | retry the same command shortly |
 | 3 | `E-INUSE`: another program (e.g. an editor) holds the file | close it, then retry |
 | 3 | `E-FLOCKED`: functional lock, see [State](#state) | retry at the expiry time shown in `reason` |
 | 130 | a wait was cancelled with Ctrl-C | — |
@@ -320,7 +320,7 @@ Lifecycle of any wait: the parent directory must exist (`E-DIR-MISSING`, exit 1)
 | `check`, `lookfor-comment`, `read-brief` | shared | 1 s, then `E-LOCKED` (3) |
 | scans, plus state's conflict scan | shared | ~100 ms, then `busy`/`skipped`/`partial` rows + `warn` |
 
-`E-LOCKED` means the required file lock or stable file identity was not obtained within the retry window — retry the same command shortly. It does not name a holder: any native lock holder, or exhausted identity-reopen retries, can cause it. `E-INUSE` means another program (an editor, say) had it open — close it and retry. `E-FLOCKED` is the functional lock described under [State](#state): retry at the expiry time shown in `reason`, not at millisecond cadence. Collaboration files are capped at 16 MiB (`E-TOO-LARGE`).
+`E-LOCKED` means the required file lock, stable identity, or stable contents could not be obtained or maintained — retry the same command shortly. It does not name a holder: any native lock holder, exhausted identity-reopen retries, or changing contents that prevent a stable read can cause it. `E-INUSE` means another program (an editor, say) had it open — close it and retry. `E-FLOCKED` is the functional lock described under [State](#state): retry at the expiry time shown in `reason`, not at millisecond cadence. Collaboration files are capped at 16 MiB (`E-TOO-LARGE`).
 
 A lock or conflict scan that cannot fully read a state file still reports what it found. `skipped` rows mean the file was busy, structurally unreadable, or the wrong type; `partial` rows mean some declarations were kept while a listed line could not be incorporated, or that non-comment stray text (`W-STRAY`) never became a section. Valid declarations remain; omitted bytes never invent a lock. Recognized `locked` holders still block `profile`/`brief`. When no such holder is identified, the write proceeds and the incomplete scan is appended with a `warn` first line — unread metadata is never treated as "no locks", and it is not a blanket refusal of every write.
 

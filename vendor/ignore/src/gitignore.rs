@@ -8,7 +8,6 @@ the `git` command line tool.
 */
 
 use std::{
-    ffi::OsString,
     io::{BufRead, BufReader, Read},
     path::{Path, PathBuf},
     sync::Arc,
@@ -752,21 +751,20 @@ fn parse_excludes_file(data: &[u8]) -> Option<PathBuf> {
     std::str::from_utf8(candidate).ok().map(expand_tilde)
 }
 
-/// Expands ~ in file paths to the value of $HOME.
+/// Expands a leading `~` path component to the native home directory.
 ///
-/// Replacement semantics match the previous whole-string `~` substitution,
-/// using the native home `OsString` rather than a lossy UTF-8 view.
+/// Later tildes and `~user` paths are left unchanged.
 fn expand_tilde(path: &str) -> PathBuf {
+    let Some(rest) = path.strip_prefix('~') else {
+        return PathBuf::from(path);
+    };
+    if !rest.is_empty() && !rest.starts_with(std::path::is_separator) {
+        return PathBuf::from(path);
+    }
     let Some(home) = home_dir() else {
         return PathBuf::from(path);
     };
-    let mut expanded = OsString::new();
-    let mut rest = path;
-    while let Some(i) = rest.find('~') {
-        expanded.push(&rest[..i]);
-        expanded.push(home.as_os_str());
-        rest = &rest[i + 1..];
-    }
+    let mut expanded = home.into_os_string();
     expanded.push(rest);
     PathBuf::from(expanded)
 }
@@ -1053,7 +1051,10 @@ mod tests {
     fn parse_excludes_file2() {
         let data = bytes("[core]\nexcludesFile = ~/foo/bar");
         let got = super::parse_excludes_file(&data).unwrap();
-        assert_eq!(got, super::expand_tilde("~/foo/bar"));
+        let expected = super::home_dir()
+            .map(|home| home.join("foo/bar"))
+            .unwrap_or_else(|| PathBuf::from("~/foo/bar"));
+        assert_eq!(got, expected);
     }
 
     #[test]
@@ -1064,9 +1065,12 @@ mod tests {
 
     #[test]
     fn parse_excludes_file4() {
-        let data = bytes("[core]\nexcludesFile = \"~/foo/bar\"");
-        let got = super::parse_excludes_file(&data);
-        assert_eq!(got.unwrap(), super::expand_tilde("~/foo/bar"));
+        let data = bytes("[core]\nexcludesFile = \"~/foo/~/bar\"");
+        let got = super::parse_excludes_file(&data).unwrap();
+        let expected = super::home_dir()
+            .map(|home| home.join("foo/~/bar"))
+            .unwrap_or_else(|| PathBuf::from("~/foo/~/bar"));
+        assert_eq!(got, expected);
     }
 
     #[test]
@@ -1227,7 +1231,7 @@ mod tests {
         }
 
         let td = crate::tests::TempDir::new().unwrap();
-        let base = td.path();
+        let base = td.path().join("native~literal");
         let home = base.join("home");
         let xdg = base.join("xdg");
         std::fs::create_dir_all(&home).unwrap();
@@ -1252,7 +1256,7 @@ mod tests {
         let ok = run_env_isolated(
             "gitignore::tests::git_config_home_excludesfile_used_without_override",
             ROOT_KEY,
-            base,
+            &base,
             &[
                 ("HOME", &home),
                 ("USERPROFILE", &home),
