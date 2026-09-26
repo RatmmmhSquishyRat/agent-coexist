@@ -273,6 +273,35 @@ mod tests {
         assert_eq!(shell_quote(OsStr::new("room\0sibling")), None);
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn shell_quote_posix_sh_roundtrip_keeps_one_argument_bytes() {
+        use std::os::unix::ffi::OsStrExt;
+        use std::process::Command;
+
+        let raw = OsStr::from_bytes(b"x\xff\xfe $'\" \ty");
+        let quoted = shell_quote(raw).expect("CR/LF-free native bytes remain quoteable");
+        let script =
+            format!("set -- START {quoted} END\nprintf '%s\\n' \"$#\"\nprintf '<%s>' \"$2\"");
+        let out = Command::new("/bin/sh")
+            .arg("-c")
+            .arg(script)
+            .output()
+            .expect("/bin/sh roundtrip");
+        assert!(
+            out.status.success(),
+            "posix sh must accept quoted operand, status={:?}",
+            out.status.code()
+        );
+        let mut expected = b"3\n<".to_vec();
+        expected.extend_from_slice(raw.as_bytes());
+        expected.push(b'>');
+        assert_eq!(
+            out.stdout, expected,
+            "quoted operand must stay one argument with original bytes"
+        );
+    }
+
     #[test]
     fn normalize_body_rules() {
         assert_eq!(normalize_body("a\r\nb\r\n").unwrap(), "a\nb");

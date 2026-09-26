@@ -549,7 +549,9 @@ fn consume_emitted_ok(cwd: &Path, fix: &str) -> String {
 
 /// Native non-UTF-8 directory plus a distinct U+FFFD-named sibling.
 /// Recovery must address the former and leave the latter's bytes untouched.
-#[cfg(unix)]
+/// Linux only: macOS `create_dir` of the 0xFF filename fails with errno 92
+/// (illegal byte sequence) before any product path runs.
+#[cfg(target_os = "linux")]
 fn native_room_and_fffd_sibling(cwd: &Path) -> (std::path::PathBuf, std::path::PathBuf) {
     use std::ffi::OsStr;
     use std::os::unix::ffi::OsStrExt;
@@ -562,7 +564,8 @@ fn native_room_and_fffd_sibling(cwd: &Path) -> (std::path::PathBuf, std::path::P
 
 /// Same isolated consume as [`consume_emitted`], but through `/bin/sh` so
 /// Unix recovery cannot rely on Bash-only quoting.
-#[cfg(unix)]
+/// Linux-only with the byte-0xFF filesystem consumers.
+#[cfg(target_os = "linux")]
 fn consume_emitted_sh(cwd: &Path, fix: &str) -> Output {
     let command = shell_command_from_fix(fix);
     let mut path = vec![Path::new(BIN).parent().unwrap().to_path_buf()];
@@ -584,7 +587,7 @@ fn consume_emitted_sh(cwd: &Path, fix: &str) -> Output {
         .expect("sh failed to run emitted fix")
 }
 
-#[cfg(unix)]
+#[cfg(target_os = "linux")]
 fn consume_emitted_sh_ok(cwd: &Path, fix: &str) -> String {
     let out = consume_emitted_sh(cwd, fix);
     assert!(
@@ -3046,12 +3049,15 @@ fn removed_wait_state_recovery_does_not_recreate_or_retarget() {
 
 // ---------------------------------------------------------------------------
 // R24 native-recovery encoding: Context path_arg, explicit *_arg params, argv
+// The three byte-0xFF filesystem consumers stay on Linux: macOS rejects that
+// filename (errno 92, illegal byte sequence) before any product path runs.
+// The LF whole-recipe refusal stays on all Unix with a lawful UTF-8 LF name.
 // ---------------------------------------------------------------------------
 
 /// W-BODY recovery from Context `path_arg` must write only the native
 /// non-UTF-8 profile. Consuming the emitted command under `/bin/sh` must
 /// not mutate the distinct U+FFFD-named sibling.
-#[cfg(unix)]
+#[cfg(target_os = "linux")]
 #[test]
 fn emitted_wbody_mutates_native_file_not_fffd_sibling() {
     let dir = tempfile::tempdir().unwrap();
@@ -3097,7 +3103,7 @@ fn emitted_wbody_mutates_native_file_not_fffd_sibling() {
 
 /// E-DIR-MISSING `parent_arg` inspection must list the native parent, not
 /// the U+FFFD sibling tree. This path is params-only (no Context field).
-#[cfg(unix)]
+#[cfg(target_os = "linux")]
 #[test]
 fn emitted_missing_dir_lists_native_parent_not_fffd_sibling() {
     let dir = tempfile::tempdir().unwrap();
@@ -3145,7 +3151,7 @@ fn emitted_missing_dir_lists_native_parent_not_fffd_sibling() {
 
 /// E-STATE-DIRTY `{argv}` retry must keep the native directory and the
 /// observing-only status selection after the dirty line is repaired by hand.
-#[cfg(unix)]
+#[cfg(target_os = "linux")]
 #[test]
 fn emitted_dirty_retry_keeps_native_dir_and_observing_selection() {
     let dir = tempfile::tempdir().unwrap();
@@ -3205,31 +3211,31 @@ fn emitted_dirty_retry_keeps_native_dir_and_observing_selection() {
     );
 }
 
-/// An invalid byte adjacent to a trailing newline cannot stay an executable
+/// A UTF-8 directory whose name contains LF cannot stay an executable
 /// recovery: the existing row parser still sees one complete physical line,
-/// and neither the native file nor the U+FFFD sibling is written.
+/// and neither the native file nor its folded-display sibling is written.
 #[cfg(unix)]
 #[test]
-fn emitted_crlf_native_operand_stays_manual_not_lossy_command() {
+fn emitted_lf_native_operand_stays_manual_not_lossy_command() {
     use std::ffi::OsStr;
     use std::os::unix::ffi::OsStrExt;
 
     let dir = tempfile::tempdir().unwrap();
     let cwd = dir.path();
-    let native_dir = cwd.join(OsStr::from_bytes(b"room-\xff\n"));
-    let lossy_dir = cwd.join("room-\u{FFFD}\n");
+    let native_dir = cwd.join(OsStr::from_bytes(b"room-\nx"));
+    let folded_dir = cwd.join("room- x");
     fs::create_dir(&native_dir).unwrap();
-    fs::create_dir(&lossy_dir).unwrap();
+    fs::create_dir(&folded_dir).unwrap();
     let native = native_dir.join("alice.agent-besties.md");
-    let lossy = lossy_dir.join("alice.agent-besties.md");
+    let folded = folded_dir.join("alice.agent-besties.md");
     let native_before = "# alice.agent-profile\n\n## role\n";
-    let lossy_before = concat!(
+    let folded_before = concat!(
         "# alice.agent-profile\n\n",
         "## role\n\n",
-        "```md\nlossy-sibling\n```\n",
+        "```md\nfolded-sibling\n```\n",
     );
     fs::write(&native, native_before).unwrap();
-    fs::write(&lossy, lossy_before).unwrap();
+    fs::write(&folded, folded_before).unwrap();
 
     let out = cli(cwd)
         .arg("check")
@@ -3242,12 +3248,12 @@ fn emitted_crlf_native_operand_stays_manual_not_lossy_command() {
     assert_eq!(
         repairs.len(),
         1,
-        "CR/LF operand must keep one complete recovery row:\n{stdout}"
+        "LF operand must keep one complete recovery row:\n{stdout}"
     );
     assert!(
         !stdout.contains("--section="),
-        "CR/LF operand must not emit an executable section command:\n{stdout}"
+        "LF operand must not emit an executable section command:\n{stdout}"
     );
     assert_eq!(fs::read_to_string(&native).unwrap(), native_before);
-    assert_eq!(fs::read_to_string(&lossy).unwrap(), lossy_before);
+    assert_eq!(fs::read_to_string(&folded).unwrap(), folded_before);
 }

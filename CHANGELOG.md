@@ -131,10 +131,14 @@ All notable changes to this project are documented here. The format follows
   the managed suffix when present, internal path whitespace, and
   Windows verbatim spelling) separately from folded display. Those
   words are encoded for a POSIX shell consumer: a nonempty word of
-  ASCII letters, digits, or `_@%+,./-` is left as-is; every other word
-  (empty, braces, `=`, quotes, `$`, non-ASCII, and the rest) is
-  single-quoted. This preserves operands for POSIX consumers; it is not
-  a user quoting API, and cmd.exe/PowerShell still need adjustment.
+  ASCII letters, digits, or `_@%+,./-` is left as-is; every other
+  representable UTF-8 word without NUL, CR, or LF (empty, braces, `=`,
+  quotes, `$`, non-ASCII, and the rest) is single-quoted. Cases outside
+  that readable quoting follow the native-byte and whole-recipe manual
+  branches in the later Unreleased recovery bullet, including
+  original-argv retries. This preserves operands for POSIX consumers;
+  it is not a user quoting API, and cmd.exe/PowerShell still need
+  adjustment.
   Positional native operands that start with `-` are written as `./…`;
   option values use `--key=<quoted-value>`. That encoding applies to
   command-form recovery. Literal/prose `fix` lines remain file content
