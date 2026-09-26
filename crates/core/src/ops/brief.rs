@@ -67,7 +67,7 @@ pub fn run(ctx: &mut Ctx, p: &BriefParams) -> Result<Report, Fault> {
                     "brief",
                     &object,
                     "E-TARGET-MISSING",
-                    vec![("target", display_stored_path(&t.target))],
+                    vec![("target", display_stored_path(&t.target).into())],
                 ));
             }
             Err(err) => return Err(Fault::io("read", resolved, err)),
@@ -266,7 +266,7 @@ fn target_step(
                             .with("existing", display_stored_path(&prop.value))
                             .with("target", display_stored_path(&t.target))
                             .with("target_arg", t.target.clone())
-                            .with("path_arg", p.path.to_string_lossy().into_owned()));
+                            .with("path_arg", p.path.as_os_str()));
                     }
                 }
             }
@@ -694,7 +694,7 @@ fn find_entry(doc: &doc::Document, title: &str) -> Option<usize> {
 fn entry_notfound(title: &str, path: &Path) -> Fault {
     Fault::reason("E-ENTRY-NOTFOUND")
         .with("title", title.to_string())
-        .with("path_arg", path.to_string_lossy().into_owned())
+        .with("path_arg", path.as_os_str())
 }
 
 /// Skeleton written by the three creation forms (§4.5.1): H1, blank line,

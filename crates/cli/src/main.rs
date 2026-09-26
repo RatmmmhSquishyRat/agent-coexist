@@ -25,6 +25,7 @@
 //! reason/fix form; `Reason`/`Diagnostics` faults that escape a command are
 //! rendered (never discarded).
 
+use std::ffi::OsString;
 use std::io::{ErrorKind, Write};
 use std::path::Path;
 use std::process::ExitCode;
@@ -43,11 +44,7 @@ use coexist_core::report::{Report, Row, Status};
 use coexist_core::wait;
 
 fn main() -> ExitCode {
-    let argv = diag::Context::argv_from_args(
-        &std::env::args_os()
-            .map(|arg| arg.to_string_lossy().into_owned())
-            .collect::<Vec<_>>(),
-    );
+    let argv = diag::Context::argv_from_args(std::env::args_os());
     let cli = match args::Cli::try_parse() {
         Ok(cli) => cli,
         Err(error) if error.use_stderr() => {
@@ -237,11 +234,10 @@ fn io_report(
     ) || matches!(source.raw_os_error(), Some(123) | Some(206));
     let fix = if path_class {
         "fix the path, then run the corrected command".to_string()
+    } else if let Some(argv) = &ctx.argv {
+        format!("check the file's permissions and free space, then retry: {argv}")
     } else {
-        format!(
-            "check the file's permissions and free space, then retry: {}",
-            ctx.argv
-        )
+        diag::FIX_NATIVE_OPERAND.to_string()
     };
     report.kv("fix", vec![fix]);
     report.status = Status::Error;
@@ -258,7 +254,7 @@ fn reason_from_fault(
     command: &'static str,
     object: &str,
     id: &'static str,
-    params: Vec<(&'static str, String)>,
+    params: Vec<(&'static str, OsString)>,
 ) -> Report {
     let mut report = ops::reason_report(dctx, command, object, id, params);
     if let Some(Row::Fields { key, values, .. }) = report.rows.first_mut() {
@@ -290,4 +286,36 @@ fn cancelled_report(command: &'static str, object: &str) -> Report {
     report.status = Status::Error;
     report.exit = 1;
     report
+}
+
+#[cfg(all(test, windows))]
+mod tests {
+    use super::*;
+    use std::ffi::OsStr;
+    use std::os::windows::ffi::OsStringExt;
+
+    #[test]
+    fn io_retry_with_unpaired_utf16_is_wholly_manual() {
+        let native = OsString::from_wide(&[b'r' as u16, 0xd800]);
+        let argv = diag::Context::argv_from_args([OsStr::new("agent-coexist"), native.as_os_str()]);
+        assert!(argv.is_none());
+        let ctx = Ctx::new(argv, None).expect("context");
+        let report = io_report(
+            "check",
+            "room",
+            "open",
+            Path::new("room"),
+            &std::io::Error::new(ErrorKind::PermissionDenied, "permission denied"),
+            &ctx,
+        );
+        let fix = report
+            .rows
+            .iter()
+            .find_map(|row| match row {
+                Row::Fields { key, values, .. } if key == "fix" => Some(values),
+                _ => None,
+            })
+            .expect("fix row");
+        assert_eq!(fix, &[diag::FIX_NATIVE_OPERAND]);
+    }
 }

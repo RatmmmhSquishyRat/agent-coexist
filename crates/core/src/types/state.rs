@@ -538,7 +538,7 @@ mod tests {
             .unwrap();
         assert!(expired
             .params
-            .contains(&("until", "2026-09-17T10:00:00Z".to_string())));
+            .contains(&("until", "2026-09-17T10:00:00Z".into())));
         let status_name = doc
             .diagnostics
             .iter()
@@ -546,7 +546,7 @@ mod tests {
             .unwrap();
         assert!(status_name
             .params
-            .contains(&("lowercased", "bad-name".to_string())));
+            .contains(&("lowercased", "bad-name".into())));
         let entry10 = doc
             .diagnostics
             .iter()
@@ -554,7 +554,7 @@ mod tests {
             .unwrap();
         assert!(entry10.params.contains(&(
             "fragment",
-            "dave 2026-09-17T09:00:00Z..2026-09-17T12:00:00Z note".to_string()
+            "dave 2026-09-17T09:00:00Z..2026-09-17T12:00:00Z note".into()
         )));
     }
 

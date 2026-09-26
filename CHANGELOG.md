@@ -235,6 +235,18 @@ All notable changes to this project are documented here. The format follows
 - State declaration merging and status-section cleanup keep
   original reports and file bytes. These are identity and byte
   contracts, not a universal timing claim.
+- Recovery commands no longer lose native operand identity. Diagnostic
+  operands and the original argv stay native until emission: on Unix,
+  bytes that are not valid UTF-8 are emitted as ASCII-octal `printf`
+  command substitutions inside the same word, so a generated `fix` can
+  no longer address a U+FFFD replacement sibling, while ordinary UTF-8
+  operands keep the existing readable quoting. A recipe whose operand
+  or original argv word contains NUL, CR, or LF, or whose native data
+  cannot be represented in the documented POSIX UTF-8 syntax (such as
+  unpaired UTF-16 surrogates on Windows), is printed as whole-recipe
+  manual recovery instead of a lossy executable lookalike.
+  Human-readable display remains separately lossy, and
+  cmd.exe/PowerShell remain out of scope.
 
 ## [0.1.0] - 2026-09-22
 

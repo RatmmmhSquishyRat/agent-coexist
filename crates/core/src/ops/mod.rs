@@ -36,6 +36,7 @@ pub mod subscribe;
 
 pub use context::Ctx;
 
+use std::ffi::OsString;
 use std::path::PathBuf;
 
 use crate::diag;
@@ -260,7 +261,7 @@ pub fn reason_report(
     command: &'static str,
     object: &str,
     id: &'static str,
-    params: Vec<(&'static str, String)>,
+    params: Vec<(&'static str, OsString)>,
 ) -> Report {
     let rendered = diag::reason(id, &params, dctx);
     let mut report = Report::new(command, object);

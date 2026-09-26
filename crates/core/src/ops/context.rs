@@ -29,14 +29,16 @@ pub struct Ctx {
     pub post_wait_ms: u64,
     /// The original command line: every argument POSIX-quoted per spec
     /// §8.3.4, joined by single spaces (feeds `{argv}` in fix templates).
-    pub argv: String,
+    /// `None` requires manual recovery because at least one native argument
+    /// cannot be represented in a single-line POSIX recipe.
+    pub argv: Option<String>,
     progress: Option<ProgressFn>,
     dirs: usize,
     files: usize,
 }
 
 impl Ctx {
-    pub fn new(argv: String, progress: Option<ProgressFn>) -> Result<Ctx, Fault> {
+    pub fn new(argv: Option<String>, progress: Option<ProgressFn>) -> Result<Ctx, Fault> {
         let now = time::now()?;
         let post_wait_ms = time::post_wait_ms()?;
         Ok(Ctx {
@@ -92,7 +94,7 @@ pub(crate) fn test_ctx(now: Time) -> Ctx {
     Ctx {
         now,
         post_wait_ms: 0,
-        argv: String::new(),
+        argv: Some(String::new()),
         progress: None,
         dirs: 0,
         files: 0,
@@ -210,7 +212,7 @@ mod tests {
         let mut ctx = Ctx {
             now: time::parse("2026-09-17T10:00:00Z").expect("fixed clock"),
             post_wait_ms: 0,
-            argv: String::new(),
+            argv: Some(String::new()),
             progress: Some(sink),
             dirs: 0,
             files: 0,

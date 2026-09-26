@@ -547,6 +547,54 @@ fn consume_emitted_ok(cwd: &Path, fix: &str) -> String {
     String::from_utf8_lossy(&out.stdout).into_owned()
 }
 
+/// Native non-UTF-8 directory plus a distinct U+FFFD-named sibling.
+/// Recovery must address the former and leave the latter's bytes untouched.
+#[cfg(unix)]
+fn native_room_and_fffd_sibling(cwd: &Path) -> (std::path::PathBuf, std::path::PathBuf) {
+    use std::ffi::OsStr;
+    use std::os::unix::ffi::OsStrExt;
+    let native = cwd.join(OsStr::from_bytes(b"room-\xff"));
+    let lossy = cwd.join("room-\u{FFFD}");
+    fs::create_dir(&native).unwrap();
+    fs::create_dir(&lossy).unwrap();
+    (native, lossy)
+}
+
+/// Same isolated consume as [`consume_emitted`], but through `/bin/sh` so
+/// Unix recovery cannot rely on Bash-only quoting.
+#[cfg(unix)]
+fn consume_emitted_sh(cwd: &Path, fix: &str) -> Output {
+    let command = shell_command_from_fix(fix);
+    let mut path = vec![Path::new(BIN).parent().unwrap().to_path_buf()];
+    path.extend(std::env::split_paths(
+        &std::env::var_os("PATH").unwrap_or_default(),
+    ));
+    AssertCommand::new("/bin/sh")
+        .arg("-c")
+        .arg(command)
+        .env_clear()
+        .env("AGENT_COEXIST_NOW", NOW)
+        .env("PATH", std::env::join_paths(path).unwrap())
+        .env("HOME", cwd)
+        .env("USERPROFILE", cwd)
+        .env("XDG_CONFIG_HOME", cwd)
+        .current_dir(cwd)
+        .timeout(Duration::from_secs(120))
+        .output()
+        .expect("sh failed to run emitted fix")
+}
+
+#[cfg(unix)]
+fn consume_emitted_sh_ok(cwd: &Path, fix: &str) -> String {
+    let out = consume_emitted_sh(cwd, fix);
+    assert!(
+        out.status.success(),
+        "emitted command failed under /bin/sh\nfix={fix}\n{}",
+        describe(&out)
+    );
+    String::from_utf8_lossy(&out.stdout).into_owned()
+}
+
 // ---------------------------------------------------------------------------
 // (a) §10.2 concurrent real writers
 // ---------------------------------------------------------------------------
@@ -2994,4 +3042,212 @@ fn removed_wait_state_recovery_does_not_recreate_or_retarget() {
             );
         }
     }
+}
+
+// ---------------------------------------------------------------------------
+// R24 native-recovery encoding: Context path_arg, explicit *_arg params, argv
+// ---------------------------------------------------------------------------
+
+/// W-BODY recovery from Context `path_arg` must write only the native
+/// non-UTF-8 profile. Consuming the emitted command under `/bin/sh` must
+/// not mutate the distinct U+FFFD-named sibling.
+#[cfg(unix)]
+#[test]
+fn emitted_wbody_mutates_native_file_not_fffd_sibling() {
+    let dir = tempfile::tempdir().unwrap();
+    let cwd = dir.path();
+    let (native_dir, lossy_dir) = native_room_and_fffd_sibling(cwd);
+    let native = native_dir.join("alice.agent-besties.md");
+    let lossy = lossy_dir.join("alice.agent-besties.md");
+    fs::write(&native, "# alice.agent-profile\n\n## role\n").unwrap();
+    let lossy_before = concat!(
+        "# alice.agent-profile\n\n",
+        "## role\n\n",
+        "```md\nlossy-sibling\n```\n",
+    );
+    fs::write(&lossy, lossy_before).unwrap();
+
+    let out = cli(cwd)
+        .arg("check")
+        .arg(&native)
+        .output()
+        .expect("failed to run agent-coexist");
+    assert_eq!(out.status.code(), Some(0), "{}", describe(&out));
+    let stdout = assert_first_line(&out, "warn", "check");
+    let repair = fix_payloads(&stdout)
+        .into_iter()
+        .find(|fix| {
+            let cmd = shell_command_from_fix(fix);
+            cmd.contains("profile") && cmd.contains("--section")
+        })
+        .unwrap_or_else(|| panic!("missing native W-BODY profile repair:\n{stdout}"));
+    consume_emitted_sh_ok(cwd, repair);
+
+    let after_native = fs::read_to_string(&native).unwrap();
+    assert!(
+        after_native.contains("<text>"),
+        "W-BODY consume must write the native profile:\n{after_native}"
+    );
+    assert_eq!(
+        fs::read_to_string(&lossy).unwrap(),
+        lossy_before,
+        "U+FFFD sibling must stay untouched"
+    );
+}
+
+/// E-DIR-MISSING `parent_arg` inspection must list the native parent, not
+/// the U+FFFD sibling tree. This path is params-only (no Context field).
+#[cfg(unix)]
+#[test]
+fn emitted_missing_dir_lists_native_parent_not_fffd_sibling() {
+    let dir = tempfile::tempdir().unwrap();
+    let cwd = dir.path();
+    let (native_dir, lossy_dir) = native_room_and_fffd_sibling(cwd);
+    fs::write(
+        native_dir.join("onlyhere.agent-besties.md"),
+        concat!(
+            "# onlyhere.post\n\n",
+            "## #1 alice (2026-09-17T10:00:00Z)\n\n",
+            "```md\nnative-only\n```\n",
+        ),
+    )
+    .unwrap();
+    fs::write(
+        lossy_dir.join("twin.agent-besties.md"),
+        concat!(
+            "# twin.post\n\n",
+            "## #1 bob (2026-09-17T10:00:00Z)\n\n",
+            "```md\nlossy-only\n```\n",
+        ),
+    )
+    .unwrap();
+
+    let out = cli(cwd)
+        .arg("list")
+        .arg(native_dir.join("missing"))
+        .output()
+        .expect("failed to run agent-coexist");
+    assert_eq!(out.status.code(), Some(1), "{}", describe(&out));
+    let stdout = assert_first_line(&out, "error", "list");
+    let list_fix = *fix_payloads(&stdout)
+        .first()
+        .expect("E-DIR-MISSING parent list repair missing");
+    let listed = consume_emitted_sh_ok(cwd, list_fix);
+    assert!(
+        leaf_row(&listed, "onlyhere", "post").is_some(),
+        "parent_arg list must show the native tree:\n{listed}"
+    );
+    assert!(
+        leaf_row(&listed, "twin", "post").is_none(),
+        "parent_arg list must not show the U+FFFD sibling tree:\n{listed}"
+    );
+}
+
+/// E-STATE-DIRTY `{argv}` retry must keep the native directory and the
+/// observing-only status selection after the dirty line is repaired by hand.
+#[cfg(unix)]
+#[test]
+fn emitted_dirty_retry_keeps_native_dir_and_observing_selection() {
+    let dir = tempfile::tempdir().unwrap();
+    let cwd = dir.path();
+    let (native_dir, lossy_dir) = native_room_and_fffd_sibling(cwd);
+    let native = native_dir.join("state.agent-besties.md");
+    let lossy = lossy_dir.join("state.agent-besties.md");
+    let before = concat!(
+        "# .state\n\n",
+        "## observing\n",
+        "alice 2026-09-17T09:00:00Z..2026-09-17T15:00:00Z, leftover-garbage\n",
+        "\n",
+        "## locked\n",
+        "alice 2026-09-17T09:00:00Z..2026-09-17T15:00:00Z\n",
+    );
+    let lossy_before = concat!(
+        "# .state\n\n",
+        "## observing\n",
+        "mallory 2026-09-17T09:00:00Z..2026-09-17T15:00:00Z\n",
+    );
+    fs::write(&native, before).unwrap();
+    fs::write(&lossy, lossy_before).unwrap();
+
+    let out = cli(cwd)
+        .arg("state")
+        .arg(&native_dir)
+        .arg("--remove")
+        .arg("alice")
+        .arg("--status")
+        .arg("observing")
+        .arg("--as")
+        .arg("alice")
+        .output()
+        .expect("failed to run agent-coexist");
+    assert_eq!(out.status.code(), Some(1), "{}", describe(&out));
+    let stdout = assert_first_line(&out, "error", "state");
+    assert_eq!(fs::read_to_string(&native).unwrap(), before);
+    let retry = *fix_payloads(&stdout)
+        .first()
+        .expect("missing dirty-line retry");
+
+    fs::write(&native, before.replace(", leftover-garbage", "")).unwrap();
+    consume_emitted_sh_ok(cwd, retry);
+    assert_eq!(
+        fs::read_to_string(&native).unwrap(),
+        concat!(
+            "# .state\n\n",
+            "## locked\n",
+            "alice 2026-09-17T09:00:00Z..2026-09-17T15:00:00Z\n",
+        ),
+        "retry must remove observing only on the native directory, preserving live locked"
+    );
+    assert_eq!(
+        fs::read_to_string(&lossy).unwrap(),
+        lossy_before,
+        "U+FFFD sibling state must stay untouched"
+    );
+}
+
+/// An invalid byte adjacent to a trailing newline cannot stay an executable
+/// recovery: the existing row parser still sees one complete physical line,
+/// and neither the native file nor the U+FFFD sibling is written.
+#[cfg(unix)]
+#[test]
+fn emitted_crlf_native_operand_stays_manual_not_lossy_command() {
+    use std::ffi::OsStr;
+    use std::os::unix::ffi::OsStrExt;
+
+    let dir = tempfile::tempdir().unwrap();
+    let cwd = dir.path();
+    let native_dir = cwd.join(OsStr::from_bytes(b"room-\xff\n"));
+    let lossy_dir = cwd.join("room-\u{FFFD}\n");
+    fs::create_dir(&native_dir).unwrap();
+    fs::create_dir(&lossy_dir).unwrap();
+    let native = native_dir.join("alice.agent-besties.md");
+    let lossy = lossy_dir.join("alice.agent-besties.md");
+    let native_before = "# alice.agent-profile\n\n## role\n";
+    let lossy_before = concat!(
+        "# alice.agent-profile\n\n",
+        "## role\n\n",
+        "```md\nlossy-sibling\n```\n",
+    );
+    fs::write(&native, native_before).unwrap();
+    fs::write(&lossy, lossy_before).unwrap();
+
+    let out = cli(cwd)
+        .arg("check")
+        .arg(&native)
+        .output()
+        .expect("failed to run agent-coexist");
+    assert_eq!(out.status.code(), Some(0), "{}", describe(&out));
+    let stdout = assert_first_line(&out, "warn", "check");
+    let repairs = fix_payloads(&stdout);
+    assert_eq!(
+        repairs.len(),
+        1,
+        "CR/LF operand must keep one complete recovery row:\n{stdout}"
+    );
+    assert!(
+        !stdout.contains("--section="),
+        "CR/LF operand must not emit an executable section command:\n{stdout}"
+    );
+    assert_eq!(fs::read_to_string(&native).unwrap(), native_before);
+    assert_eq!(fs::read_to_string(&lossy).unwrap(), lossy_before);
 }

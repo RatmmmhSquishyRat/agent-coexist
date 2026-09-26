@@ -63,8 +63,8 @@ pub fn read_brief(ctx: &mut Ctx, p: &ReadBriefParams) -> Result<Report, Fault> {
                                 &object,
                                 "E-ENTRY-NOTFOUND",
                                 vec![
-                                    ("title", title.to_string()),
-                                    ("path_arg", p.path.to_string_lossy().into_owned()),
+                                    ("title", title.into()),
+                                    ("path_arg", p.path.as_os_str().to_os_string()),
                                 ],
                             ));
                         }

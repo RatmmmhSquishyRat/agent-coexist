@@ -11,6 +11,7 @@
 //! `pub(super)`.
 
 use std::collections::HashSet;
+use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 
 use crate::consts;
@@ -158,7 +159,7 @@ fn edit_step(
                 .with("n", n.to_string())
                 .with("max", max_seq.to_string())
                 .with("nick", p.nick.clone())
-                .with("path_arg", p.path.to_string_lossy().into_owned()));
+                .with("path_arg", p.path.as_os_str()));
         }
     };
     let comment = &doc.post.comments[idx];
@@ -167,7 +168,7 @@ fn edit_step(
             .with("n", n.to_string())
             .with("author", comment.nick.clone())
             .with("nick", p.nick.clone())
-            .with("path_arg", p.path.to_string_lossy().into_owned()));
+            .with("path_arg", p.path.as_os_str()));
     }
     let section = &doc.sections[comment.section];
     let mut splices = Vec::new();
@@ -490,9 +491,9 @@ fn flocked_report(
         object,
         "E-FLOCKED",
         vec![
-            ("dir", primary.dir_display.clone()),
-            ("holder", primary.nick.clone()),
-            ("until", time::format(primary.until)),
+            ("dir", primary.dir_display.clone().into()),
+            ("holder", primary.nick.clone().into()),
+            ("until", time::format(primary.until).into()),
         ],
     );
     for holder in &stash.holders[1..] {
@@ -598,12 +599,12 @@ pub(super) fn refuse_report(
     report
 }
 
-fn file_missing_params(path: &Path) -> Vec<(&'static str, String)> {
+fn file_missing_params(path: &Path) -> Vec<(&'static str, OsString)> {
     vec![
-        ("file", context::display_file(path)),
+        ("file", context::display_file(path).into()),
         (
             "dir_arg",
-            context::parent_dir(path).to_string_lossy().into_owned(),
+            context::parent_dir(path).as_os_str().to_os_string(),
         ),
     ]
 }
@@ -619,10 +620,7 @@ fn type_fault(actual: doc::Kind, expected: doc::Kind, path: &Path) -> Fault {
         .with("actual", actual.as_str())
         .with("expected", expected.as_str())
         .with("cmd_for_actual", cmd_for_actual)
-        .with(
-            "dir_arg",
-            context::parent_dir(path).to_string_lossy().into_owned(),
-        )
+        .with("dir_arg", context::parent_dir(path).as_os_str())
 }
 
 /// `unchanged  <file>` rows for the no-write forms.
@@ -826,7 +824,7 @@ mod tests {
             Ok(stem) => panic!("invalid stem accepted: {stem}"),
             Err(Fault::Reason { id, params }) => {
                 assert_eq!(id, "E-NAME");
-                assert_eq!(params, vec![("name", "has space".to_string())]);
+                assert_eq!(params, vec![("name", "has space".into())]);
             }
             Err(other) => panic!("unexpected fault: {other:?}"),
         }

@@ -5,6 +5,7 @@
 //! collapse to one U+0020, control characters become U+FFFD in display
 //! text). These are the ONLY folding/quoting helpers in the crate — callers
 //! never write their own copy.
+use std::ffi::OsStr;
 use std::sync::LazyLock;
 
 use crate::consts;
@@ -113,21 +114,71 @@ pub fn excerpt(s: &str) -> String {
     text
 }
 
-/// POSIX single-quote wrapping for command-form fix values (spec §8.3.4):
-/// nonempty words containing only ASCII letters, digits or `_@%+,./-`
-/// remain readable as-is. Everything else (including `=` assignment
-/// syntax and the empty argument) is wrapped in single quotes, with
-/// inner `'` written as `'\''`.
-pub fn shell_quote(s: &str) -> String {
+/// Quote one native operand for a single-line POSIX recovery command.
+/// UTF-8 segments use the existing readable quoting; on Unix, invalid-byte
+/// runs use double-quoted octal `printf` substitutions. Those runs contain
+/// no LF, so command substitution cannot strip part of the operand.
+/// CR/LF would split the fix record, NUL cannot occur in OS argv, and
+/// non-Unix non-UTF-8 operands cannot use this shell convention. Refuse
+/// them rather than emit a command for a different native identity.
+pub fn shell_quote(value: &OsStr) -> Option<String> {
+    let bytes = value.as_encoded_bytes();
+    if bytes.iter().any(|b| matches!(b, b'\0' | b'\r' | b'\n')) {
+        return None;
+    }
+    if let Some(value) = value.to_str() {
+        let mut out = String::with_capacity(value.len() + 2);
+        shell_quote_utf8(value, &mut out);
+        return Some(out);
+    }
+    #[cfg(unix)]
+    {
+        let mut out = String::with_capacity(bytes.len());
+        let mut invalid_run = false;
+        for chunk in bytes.utf8_chunks() {
+            if !chunk.valid().is_empty() {
+                if invalid_run {
+                    out.push_str("')\"");
+                    invalid_run = false;
+                }
+                shell_quote_utf8(chunk.valid(), &mut out);
+            }
+            if !chunk.invalid().is_empty() {
+                if !invalid_run {
+                    out.push_str("\"$(printf '");
+                    invalid_run = true;
+                }
+                for &byte in chunk.invalid() {
+                    out.push('\\');
+                    out.push(char::from(b'0' + (byte >> 6)));
+                    out.push(char::from(b'0' + ((byte >> 3) & 7)));
+                    out.push(char::from(b'0' + (byte & 7)));
+                }
+            }
+        }
+        if invalid_run {
+            out.push_str("')\"");
+        }
+        Some(out)
+    }
+    #[cfg(not(unix))]
+    {
+        None
+    }
+}
+
+/// Single-quote all but nonempty ASCII `[A-Za-z0-9_@%+,./-]` words,
+/// escaping inner `'` as `'\''`.
+fn shell_quote_utf8(s: &str, out: &mut String) {
     if !s.is_empty()
         && s.bytes().all(|b| {
             b.is_ascii_alphanumeric()
                 || matches!(b, b'_' | b'@' | b'%' | b'+' | b',' | b'.' | b'/' | b'-')
         })
     {
-        return s.to_string();
+        out.push_str(s);
+        return;
     }
-    let mut out = String::with_capacity(s.len() + 2);
     out.push('\'');
     for c in s.chars() {
         if c == '\'' {
@@ -137,7 +188,6 @@ pub fn shell_quote(s: &str) -> String {
         }
     }
     out.push('\'');
-    out
 }
 
 /// Normalize a `-m` text before it is written (spec §2.1.3): CRLF becomes LF,
@@ -216,6 +266,11 @@ mod tests {
         assert_eq!(cut.chars().count(), 80);
         assert!(cut.ends_with("..."));
         assert_eq!(cut.trim_end_matches('.').chars().count(), 77);
+    }
+
+    #[test]
+    fn shell_quote_refuses_nul_that_cannot_enter_os_argv() {
+        assert_eq!(shell_quote(OsStr::new("room\0sibling")), None);
     }
 
     #[test]

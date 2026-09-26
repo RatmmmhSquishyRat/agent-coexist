@@ -409,6 +409,11 @@ pub(crate) const FIX_UNSELECTED_STATE: &str =
 pub(crate) const FIX_SECTION_NAME_UNIQUE: &str =
     "rename this heading by hand to a valid section name distinct from every other section and any other planned heading repair, then run check again";
 
+/// Replace the entire recipe when its native operands cannot be emitted
+/// losslessly in one POSIX UTF-8 fix record. Never substitute this as a path.
+pub const FIX_NATIVE_OPERAND: &str =
+    "repair the original file or retry the original command by hand; a native operand cannot be represented losslessly in a single-line POSIX UTF-8 recovery command";
+
 /// A control-bearing heading cannot be passed through the CLI's existing
 /// input grammar. Never substitute a sanitized sibling as its identity.
 pub(crate) const FIX_CONTROL_HEADING: &str =

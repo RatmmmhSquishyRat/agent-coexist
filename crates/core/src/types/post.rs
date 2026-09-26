@@ -582,10 +582,10 @@ mod tests {
             .iter()
             .find(|d| d.id == "E-SEQ-DUP")
             .expect("E-SEQ-DUP present");
-        assert!(dup.params.contains(&("n", "2".to_string())));
+        assert!(dup.params.contains(&("n", "2".into())));
         // max legal seq in the file is 4, so {next} = max legal + 1 = 5
         // (§9 suppl. 3)
-        assert!(dup.params.contains(&("next", "5".to_string())));
+        assert!(dup.params.contains(&("next", "5".into())));
     }
 
     fn parse_post(src: &str) -> crate::doc::Document {
@@ -672,9 +672,9 @@ mod tests {
             .find(|d| d.id == "W-SEQ-GAP")
             .expect("W-SEQ-GAP for missing #1");
         assert_eq!(gap.line, 3);
-        assert!(gap.params.contains(&("a", "0".to_string())));
-        assert!(gap.params.contains(&("b", "2".to_string())));
-        assert!(gap.params.contains(&("m", "1".to_string())));
+        assert!(gap.params.contains(&("a", "0".into())));
+        assert!(gap.params.contains(&("b", "2".into())));
+        assert!(gap.params.contains(&("m", "1".into())));
         assert!(!doc
             .diagnostics
             .iter()
@@ -737,7 +737,7 @@ mod tests {
                     .params
                     .iter()
                     .find(|(k, _)| *k == "m")
-                    .map(|(_, v)| v.as_str())
+                    .and_then(|(_, v)| v.to_str())
                     .expect("m");
                 (d.line, m)
             })
@@ -760,16 +760,16 @@ mod tests {
             .iter()
             .find(|d| d.id == "E-SEQ-DUP")
             .expect("E-SEQ-DUP present");
-        assert!(dup.params.contains(&("n", "3".to_string())));
+        assert!(dup.params.contains(&("n", "3".into())));
         // max legal seq is 3, so {next} = 4 even with a later duplicate
-        assert!(dup.params.contains(&("next", "4".to_string())));
+        assert!(dup.params.contains(&("next", "4".into())));
     }
 
     fn param<'a>(d: &'a Diagnostic, key: &str) -> Option<&'a str> {
         d.params
             .iter()
             .find(|(k, _)| *k == key)
-            .map(|(_, v)| v.as_str())
+            .and_then(|(_, v)| v.to_str())
     }
 
     #[test]

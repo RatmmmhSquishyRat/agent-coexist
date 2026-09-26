@@ -176,7 +176,7 @@ fn remove_step(
         None => {
             return Err(Fault::reason("E-SECTION-NOTFOUND")
                 .with("name", name.to_string())
-                .with("path_arg", p.path.to_string_lossy().into_owned()));
+                .with("path_arg", p.path.as_os_str()));
         }
     };
     if stash_flock(stash, ctx, &p.path, p.as_nick.as_deref()) {

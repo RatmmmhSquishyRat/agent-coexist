@@ -564,7 +564,7 @@ mod tests {
         // directory's display name.
         let dir = scratch("root-state-skip-once");
         std::fs::write(dir.join("state.agent-besties.md"), b"# not a managed H1\n").unwrap();
-        let mut ctx = Ctx::new("agent-coexist read-notification".to_string(), None).unwrap();
+        let mut ctx = Ctx::new(Some("agent-coexist read-notification".to_string()), None).unwrap();
         let p = params(&dir, &ctx);
         let report = read_notification(&mut ctx, &p).unwrap();
         let skipped = value_rows(&report, "skipped");
@@ -587,7 +587,7 @@ mod tests {
             format!("# .state\n\n## locked\nbob {start}..{until}\n").as_bytes(),
         )
         .unwrap();
-        let mut ctx = Ctx::new("agent-coexist read-notification".to_string(), None).unwrap();
+        let mut ctx = Ctx::new(Some("agent-coexist read-notification".to_string()), None).unwrap();
         let p = params(&dir, &ctx);
         let report = read_notification(&mut ctx, &p).unwrap();
         let state_rows = value_rows(&report, "state");
@@ -849,7 +849,7 @@ mod tests {
         std::fs::write(last.join("notes.agent-besties.md"), "# notes.post\n").unwrap();
         let removed = [a.clone(), b.clone()];
         let mut ctx = Ctx::new(
-            String::new(),
+            Some(String::new()),
             Some(Box::new(move |_, files| {
                 // Both native sources have already contributed history;
                 // invalidate only their later directory-identity lookup.

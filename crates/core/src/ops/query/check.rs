@@ -417,7 +417,8 @@ mod tests {
                             .find(|(name, _)| *name == key)
                             .unwrap()
                             .1
-                            .as_str()
+                            .to_str()
+                            .unwrap()
                     };
                     Some((diagnostic.id, diagnostic.line, param("a"), param("b")))
                 }

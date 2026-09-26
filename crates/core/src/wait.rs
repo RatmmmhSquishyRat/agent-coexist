@@ -308,10 +308,7 @@ fn ensure_parent_dir(path: &Path, filter: &Filter) -> Result<(), Fault> {
                 Err(Fault::reason("E-NOT-DIR")
                     .with("path", object)
                     .with("cmd", command)
-                    .with(
-                        "parent_arg",
-                        context::parent_dir(parent).to_string_lossy().into_owned(),
-                    ))
+                    .with("parent_arg", context::parent_dir(parent).as_os_str()))
             }
             Filter::Any | Filter::Post(_) => Err(Fault::io(
                 "read",
@@ -320,10 +317,9 @@ fn ensure_parent_dir(path: &Path, filter: &Filter) -> Result<(), Fault> {
             )),
         },
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            Err(Fault::reason("E-DIR-MISSING").with("dir", object).with(
-                "parent_arg",
-                context::parent_dir(parent).to_string_lossy().into_owned(),
-            ))
+            Err(Fault::reason("E-DIR-MISSING")
+                .with("dir", object)
+                .with("parent_arg", context::parent_dir(parent).as_os_str()))
         }
         Err(error) => Err(Fault::io("read", parent.to_path_buf(), error)),
     }
@@ -353,10 +349,7 @@ fn validate(document: &Document, filter: &Filter, path: &Path) -> Result<(), Fau
                 .with("actual", kind)
                 .with("expected", expected);
             if kind == "state" {
-                fault = fault.with(
-                    "dir_arg",
-                    context::parent_dir(path).to_string_lossy().into_owned(),
-                );
+                fault = fault.with("dir_arg", context::parent_dir(path).as_os_str());
             } else {
                 let cmd = match kind {
                     "post" => "post",
@@ -450,10 +443,7 @@ fn check_duplicate_state_identities(document: &Document, path: &Path) -> Result<
                         Diagnostic::new("W-STATE-DUP", declaration.line)
                             .with("nick", declaration.nick.clone())
                             .with("status", section.status.clone())
-                            .with(
-                                "dir_arg",
-                                context::parent_dir(path).to_string_lossy().into_owned(),
-                            ),
+                            .with("dir_arg", context::parent_dir(path).as_os_str()),
                     );
                 }
                 return Err(Fault::Diagnostics(diagnostics));

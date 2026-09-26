@@ -1052,7 +1052,12 @@ mod tests {
         let data = bytes("[core]\nexcludesFile = ~/foo/bar");
         let got = super::parse_excludes_file(&data).unwrap();
         let expected = super::home_dir()
-            .map(|home| home.join("foo/bar"))
+            .map(|home| {
+                // Even an empty native home retains the literal suffix's slash.
+                let mut expected = home.into_os_string();
+                expected.push("/foo/bar");
+                PathBuf::from(expected)
+            })
             .unwrap_or_else(|| PathBuf::from("~/foo/bar"));
         assert_eq!(got, expected);
     }
@@ -1068,7 +1073,11 @@ mod tests {
         let data = bytes("[core]\nexcludesFile = \"~/foo/~/bar\"");
         let got = super::parse_excludes_file(&data).unwrap();
         let expected = super::home_dir()
-            .map(|home| home.join("foo/~/bar"))
+            .map(|home| {
+                let mut expected = home.into_os_string();
+                expected.push("/foo/~/bar");
+                PathBuf::from(expected)
+            })
             .unwrap_or_else(|| PathBuf::from("~/foo/~/bar"));
         assert_eq!(got, expected);
     }

@@ -445,9 +445,9 @@ fn remove(ctx: &mut Ctx, p: &super::StateRemove) -> Result<Report, Fault> {
                 &object,
                 "E-STATE-DIRTY",
                 vec![
-                    ("nick", p.nick.clone()),
-                    ("dir", object.clone()),
-                    ("line", line.to_string()),
+                    ("nick", p.nick.clone().into()),
+                    ("dir", object.clone().into()),
+                    ("line", line.to_string().into()),
                 ],
             ));
         }
@@ -794,9 +794,9 @@ fn e_type_report(dctx: &diag::Context, object: &str, actual: &'static str) -> Re
         object,
         "E-TYPE",
         vec![
-            ("actual", actual.to_string()),
-            ("expected", "state".to_string()),
-            ("cmd_for_actual", cmd_for_kind(actual).to_string()),
+            ("actual", actual.into()),
+            ("expected", "state".into()),
+            ("cmd_for_actual", cmd_for_kind(actual).into()),
         ],
     )
 }
@@ -812,10 +812,10 @@ fn cmd_for_kind(kind: &str) -> &'static str {
 
 fn state_notfound(dctx: &diag::Context, object: &str, nick: &str, status: Option<&str>) -> Report {
     let mut params = Vec::with_capacity(2 + usize::from(status.is_some()));
-    params.push(("nick", nick.to_string()));
-    params.push(("dir", object.to_string()));
+    params.push(("nick", nick.into()));
+    params.push(("dir", object.into()));
     if let Some(status) = status {
-        params.push(("status", status.to_string()));
+        params.push(("status", status.into()));
     }
     reason_report(dctx, "state", object, "E-STATE-NOTFOUND", params)
 }
@@ -832,10 +832,10 @@ fn check_dir(ctx: &Ctx, dir: &Path) -> Result<Option<Report>, Fault> {
             &object,
             "E-DIR-MISSING",
             vec![
-                ("dir", object.clone()),
+                ("dir", object.clone().into()),
                 (
                     "parent_arg",
-                    context::parent_dir(dir).to_string_lossy().into_owned(),
+                    context::parent_dir(dir).as_os_str().to_os_string(),
                 ),
             ],
         ))),
@@ -846,11 +846,11 @@ fn check_dir(ctx: &Ctx, dir: &Path) -> Result<Option<Report>, Fault> {
             &object,
             "E-NOT-DIR",
             vec![
-                ("path", object.clone()),
-                ("cmd", "state".to_string()),
+                ("path", object.clone().into()),
+                ("cmd", "state".into()),
                 (
                     "parent_arg",
-                    context::parent_dir(dir).to_string_lossy().into_owned(),
+                    context::parent_dir(dir).as_os_str().to_os_string(),
                 ),
             ],
         ))),

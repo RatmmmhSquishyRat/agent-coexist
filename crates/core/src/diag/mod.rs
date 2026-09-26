@@ -17,10 +17,14 @@
 
 mod catalog;
 
+use std::borrow::Cow;
+use std::ffi::{OsStr, OsString};
 use std::path::PathBuf;
 
 use crate::error::Diagnostic;
 use crate::names;
+
+pub use catalog::FIX_NATIVE_OPERAND;
 
 /// Error level: every id from the catalog starting with `E-`.
 pub fn is_error(id: &str) -> bool {
@@ -58,8 +62,9 @@ pub fn order(id: &str) -> usize {
 /// commands. `state_file_selected` records the existing reserved-state
 /// lookup once for the inspected file; false includes unknown selection.
 /// `now` is the command clock; `argv` must be built with
-/// [`Context::argv_from_args`] for per-argument POSIX quoting.
-#[derive(Debug, Clone, Default)]
+/// [`Context::argv_from_args`] for per-argument POSIX quoting. `None`
+/// records an unrepresentable command, not an absent placeholder.
+#[derive(Debug, Clone)]
 pub struct Context {
     pub path: String,
     pub dir: String,
@@ -68,19 +73,45 @@ pub struct Context {
     /// True only when the native inspected path is the selected state file.
     pub state_file_selected: bool,
     pub stem: String,
-    pub argv: String,
+    pub argv: Option<String>,
     pub command: String,
     pub now: String,
 }
 
+impl Default for Context {
+    fn default() -> Self {
+        Self {
+            path: String::new(),
+            dir: String::new(),
+            path_arg: PathBuf::new(),
+            dir_arg: PathBuf::new(),
+            state_file_selected: false,
+            stem: String::new(),
+            argv: Some(String::new()),
+            command: String::new(),
+            now: String::new(),
+        }
+    }
+}
+
 impl Context {
     /// The `{argv}` value: every argument POSIX-quoted per §8.3.4, joined by
-    /// single spaces (§9: `{argv}` = 原命令行).
-    pub fn argv_from_args(args: &[String]) -> String {
-        args.iter()
-            .map(|a| names::shell_quote(a))
-            .collect::<Vec<_>>()
-            .join(" ")
+    /// single spaces (§9: `{argv}` = 原命令行). `None` means at least one
+    /// native argument cannot be represented in a single-line POSIX recipe.
+    pub fn argv_from_args<I, A>(args: I) -> Option<String>
+    where
+        I: IntoIterator<Item = A>,
+        A: AsRef<OsStr>,
+    {
+        let mut out = String::new();
+        for (index, arg) in args.into_iter().enumerate() {
+            let quoted = names::shell_quote(arg.as_ref())?;
+            if index != 0 {
+                out.push(' ');
+            }
+            out.push_str(&quoted);
+        }
+        Some(out)
     }
 }
 
@@ -101,11 +132,11 @@ pub fn render(d: &Diagnostic, ctx: &Context) -> Rendered {
 
 /// Render a reason-form failure (spec §8.3.1): the same catalog row, with
 /// the catalog `文案` column serving as the reason text.
-pub fn reason(id: &str, params: &[(&'static str, String)], ctx: &Context) -> Rendered {
+pub fn reason(id: &str, params: &[(&'static str, OsString)], ctx: &Context) -> Rendered {
     parts(id, params, ctx)
 }
 
-fn parts(id: &str, params: &[(&'static str, String)], ctx: &Context) -> Rendered {
+fn parts(id: &str, params: &[(&'static str, OsString)], ctx: &Context) -> Rendered {
     match catalog::find(id) {
         Some(t) => Rendered {
             message: subst(
@@ -117,8 +148,9 @@ fn parts(id: &str, params: &[(&'static str, String)], ctx: &Context) -> Rendered
                 params,
                 ctx,
                 false,
-            ),
-            why: subst(t.why, params, ctx, false),
+            )
+            .unwrap_or_else(str::to_string),
+            why: subst(t.why, params, ctx, false).unwrap_or_else(str::to_string),
             fix: fix_text(id, t, params, ctx),
         },
         None => Rendered {
@@ -134,7 +166,7 @@ fn parts(id: &str, params: &[(&'static str, String)], ctx: &Context) -> Rendered
 fn fix_text(
     id: &str,
     t: &catalog::Template,
-    params: &[(&'static str, String)],
+    params: &[(&'static str, OsString)],
     ctx: &Context,
 ) -> String {
     let state_recipe = matches!(
@@ -173,19 +205,21 @@ fn fix_text(
         // This fix describes literal headings, but a control-bearing
         // identity still needs manual repair, not a display-folded sibling.
         "E-STATUS-DUP"
-            if get(params, "status").is_some_and(|s| s.chars().any(char::is_control)) =>
+            if get(params, "status")
+                .and_then(OsStr::to_str)
+                .is_some_and(|s| s.chars().any(char::is_control)) =>
         {
             return catalog::FIX_CONTROL_HEADING.to_string();
         }
         "E-H1" => return eh1_fix(t, params, ctx),
         "W-NAME" => return wname_fix(t, params, ctx),
-        "W-BODY" => return wbody_fix(params, ctx),
+        "W-BODY" => return wbody_fix(params, ctx).unwrap_or_else(str::to_string),
         "W-SECTION-NAME" if get(params, "suggested").is_none() => {
             return catalog::FIX_SECTION_NAME_UNIQUE.to_string();
         }
         _ => t.fix,
     };
-    subst(template, params, ctx, t.command_fix)
+    subst(template, params, ctx, t.command_fix).unwrap_or_else(str::to_string)
 }
 
 /// Shared composer for fixes that suggest an H1 built from the file stem
@@ -198,33 +232,30 @@ fn fix_text(
 fn heading_fix(
     base: &'static str,
     fallback: &'static str,
-    params: &[(&'static str, String)],
+    params: &[(&'static str, OsString)],
     ctx: &Context,
 ) -> String {
     let folded = resolve("stem", params, ctx)
-        .map(|s| names::display_text(&s))
+        .map(|s| names::display_text(&s.to_string_lossy()))
         .unwrap_or_default();
     let template = if names::valid_name(&folded) {
         base
     } else {
         fallback
     };
-    let mut effective: Vec<(&'static str, String)> = Vec::with_capacity(params.len() + 1);
-    effective.push(("stem", folded));
-    effective.extend(params.iter().cloned());
-    subst(template, &effective, ctx, false)
+    subst(template, params, ctx, false).unwrap_or_else(str::to_string)
 }
 
 /// E-H1 fix: base suggestion when the stem is a valid NAME, otherwise the
 /// any-valid-name guidance (never an invalid or quoted stem as the H1).
-fn eh1_fix(t: &catalog::Template, params: &[(&'static str, String)], ctx: &Context) -> String {
+fn eh1_fix(t: &catalog::Template, params: &[(&'static str, OsString)], ctx: &Context) -> String {
     heading_fix(t.fix, catalog::FIX_EH1_BAD_STEM, params, ctx)
 }
 
 /// W-NAME fix: both recoveries with plain substitution when the stem is a
 /// valid NAME; otherwise rename-only — the H1 name is already valid, the
 /// stem can never become a valid H1. The mismatch itself stays a warning.
-fn wname_fix(t: &catalog::Template, params: &[(&'static str, String)], ctx: &Context) -> String {
+fn wname_fix(t: &catalog::Template, params: &[(&'static str, OsString)], ctx: &Context) -> String {
     heading_fix(t.fix, catalog::FIX_WNAME_BAD_STEM, params, ctx)
 }
 
@@ -232,42 +263,50 @@ fn wname_fix(t: &catalog::Template, params: &[(&'static str, String)], ctx: &Con
 /// that owns the body-less unit. Post variants carry `seq`/`author` params,
 /// profile `name`, brief `title`. Unaddressable headings receive manual
 /// repair guidance instead of a command that the CLI must reject.
-fn wbody_fix(params: &[(&'static str, String)], ctx: &Context) -> String {
-    let path = subst("{path_arg}", params, ctx, true);
+fn wbody_fix(params: &[(&'static str, OsString)], ctx: &Context) -> Result<String, &'static str> {
+    let path = subst("{path_arg}", params, ctx, true)?;
     if let Some(seq) = get(params, "seq") {
-        let author = get(params, "author")
-            .map(|a| names::shell_quote(a))
-            .unwrap_or_else(|| "<nick>".to_string());
-        format!(
+        let author = match get(params, "author") {
+            Some(author) => names::shell_quote(author).ok_or(FIX_NATIVE_OPERAND)?,
+            None => "<nick>".to_string(),
+        };
+        Ok(format!(
             "agent-coexist post {path} --as={author} --edit={} -m '<text>'",
-            names::shell_quote(seq)
-        )
+            names::shell_quote(seq).ok_or(FIX_NATIVE_OPERAND)?
+        ))
     } else if let Some(name) = get(params, "name") {
-        if name.chars().any(char::is_control) {
-            return catalog::FIX_CONTROL_HEADING.to_string();
+        let text = name.to_str().ok_or(FIX_NATIVE_OPERAND)?;
+        if text.chars().any(char::is_control) {
+            return Err(catalog::FIX_CONTROL_HEADING);
         }
-        if !names::valid_section(name) {
-            return "rename the heading by hand to a valid, distinct section name and add a fenced body beneath it, then run check again".to_string();
+        if !names::valid_section(text) {
+            return Err("rename the heading by hand to a valid, distinct section name and add a fenced body beneath it, then run check again");
         }
-        format!(
+        Ok(format!(
             "agent-coexist profile {path} --section={} -m '<text>'",
-            names::shell_quote(name)
-        )
+            names::shell_quote(name).ok_or(FIX_NATIVE_OPERAND)?
+        ))
     } else if let Some(title) = get(params, "title") {
-        if title.chars().any(char::is_control) {
-            return catalog::FIX_CONTROL_HEADING.to_string();
+        let text = title.to_str().ok_or(FIX_NATIVE_OPERAND)?;
+        if text.chars().any(char::is_control) {
+            return Err(catalog::FIX_CONTROL_HEADING);
         }
-        format!(
+        Ok(format!(
             "agent-coexist brief {path} --entry={} -m '<note>'",
-            names::shell_quote(title)
-        )
+            names::shell_quote(title).ok_or(FIX_NATIVE_OPERAND)?
+        ))
     } else {
-        format!("agent-coexist profile {path} --section <name> -m '<text>'")
+        Ok(format!(
+            "agent-coexist profile {path} --section <name> -m '<text>'"
+        ))
     }
 }
 
-fn get<'a>(params: &'a [(&'static str, String)], key: &str) -> Option<&'a String> {
-    params.iter().find(|(k, _)| *k == key).map(|(_, v)| v)
+fn get<'a>(params: &'a [(&'static str, OsString)], key: &str) -> Option<&'a OsStr> {
+    params
+        .iter()
+        .find(|(k, _)| *k == key)
+        .map(|(_, v)| v.as_os_str())
 }
 
 fn is_title_param(key: &str) -> bool {
@@ -275,9 +314,10 @@ fn is_title_param(key: &str) -> bool {
 }
 
 /// Human display only; executable operands must not use this lossy value.
-fn display_param(key: &str, value: String) -> String {
+fn display_param<'a>(key: &str, value: &'a OsStr) -> Cow<'a, str> {
+    let value = value.to_string_lossy();
     if is_title_param(key) || key == "stem" {
-        names::display_text(&value)
+        Cow::Owned(names::display_text(&value))
     } else {
         value
     }
@@ -286,9 +326,13 @@ fn display_param(key: &str, value: String) -> String {
 /// Positional paths must survive both shell and CLI option parsing. Native
 /// spelling is otherwise left alone; option values use `--key={value}` in
 /// the templates and need only shell quoting.
-fn quote_value(key: &str, value: &str) -> String {
-    if matches!(key, "path_arg" | "dir_arg" | "parent_arg") && value.starts_with('-') {
-        names::shell_quote(&format!("./{value}"))
+fn quote_value(key: &str, value: &OsStr) -> Option<String> {
+    if matches!(key, "path_arg" | "dir_arg" | "parent_arg")
+        && value.as_encoded_bytes().starts_with(b"-")
+    {
+        let mut operand = OsString::from("./");
+        operand.push(value);
+        names::shell_quote(&operand)
     } else {
         names::shell_quote(value)
     }
@@ -298,7 +342,12 @@ fn quote_value(key: &str, value: &str) -> String {
 /// then the context keys; unknown placeholders stay literal so a missing
 /// value is visible instead of silently dropped. Human titles and stems
 /// are sanitized, but a command must never address the sanitized sibling.
-fn subst(template: &str, params: &[(&'static str, String)], ctx: &Context, quote: bool) -> String {
+fn subst(
+    template: &str,
+    params: &[(&'static str, OsString)],
+    ctx: &Context,
+    quote: bool,
+) -> Result<String, &'static str> {
     let mut out = String::with_capacity(template.len());
     let mut rest = template;
     while let Some(open) = rest.find('{') {
@@ -308,6 +357,9 @@ fn subst(template: &str, params: &[(&'static str, String)], ctx: &Context, quote
             Some(close) => {
                 let key = &after[..close];
                 if !key.is_empty() && key.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
+                    if key == "argv" && get(params, key).is_none() && ctx.argv.is_none() {
+                        return Err(FIX_NATIVE_OPERAND);
+                    }
                     if let Some(v) = resolve(key, params, ctx) {
                         // §9: `{argv}` is the command line with every
                         // argument already §8.3.4-quoted and joined by
@@ -315,17 +367,25 @@ fn subst(template: &str, params: &[(&'static str, String)], ctx: &Context, quote
                         // embeds verbatim. Re-quoting would collapse the
                         // whole line into one giant single-quoted program
                         // name.
-                        if quote && key != "argv" {
-                            if is_title_param(key) && v.chars().any(char::is_control) {
-                                return catalog::FIX_CONTROL_HEADING.to_string();
+                        if key == "argv" {
+                            let argv = v
+                                .to_str()
+                                .filter(|s| !s.contains(['\0', '\r', '\n']))
+                                .ok_or(FIX_NATIVE_OPERAND)?;
+                            out.push_str(argv);
+                        } else if quote {
+                            if is_title_param(key) {
+                                let text = v.to_str().ok_or(FIX_NATIVE_OPERAND)?;
+                                if text.chars().any(char::is_control) {
+                                    return Err(catalog::FIX_CONTROL_HEADING);
+                                }
+                                // Stored statuses can be readable but not
+                                // addressable through the CLI grammar.
+                                if key == "status" && !names::valid_status(text) {
+                                    return Err(catalog::FIX_INVALID_STATUS);
+                                }
                             }
-                            // Readable stored statuses need not satisfy CLI
-                            // admission. Do not emit a rejected operand or
-                            // substitute another, normalized status identity.
-                            if key == "status" && !names::valid_status(&v) {
-                                return catalog::FIX_INVALID_STATUS.to_string();
-                            }
-                            out.push_str(&quote_value(key, &v));
+                            out.push_str(&quote_value(key, v).ok_or(FIX_NATIVE_OPERAND)?);
                         } else {
                             out.push_str(&display_param(key, v));
                         }
@@ -351,37 +411,31 @@ fn subst(template: &str, params: &[(&'static str, String)], ctx: &Context, quote
         }
     }
     out.push_str(rest);
-    out
+    Ok(out)
 }
 
-fn resolve(key: &str, params: &[(&'static str, String)], ctx: &Context) -> Option<String> {
+fn resolve<'a>(
+    key: &str,
+    params: &'a [(&'static str, OsString)],
+    ctx: &'a Context,
+) -> Option<&'a OsStr> {
     if let Some(v) = get(params, key) {
-        return Some(v.clone());
+        return Some(v);
     }
-    let operand = match key {
-        "path_arg" => Some(&ctx.path_arg),
-        "dir_arg" => Some(&ctx.dir_arg),
-        _ => None,
-    };
-    if let Some(operand) = operand {
-        return (!operand.as_os_str().is_empty()).then(|| operand.to_string_lossy().into_owned());
-    }
-    let v = match key {
-        "path" => &ctx.path,
-        "dir" => &ctx.dir,
-        "stem" => &ctx.stem,
-        "argv" => &ctx.argv,
-        "command" => &ctx.command,
-        "now" => &ctx.now,
+    let value = match key {
+        "path_arg" => ctx.path_arg.as_os_str(),
+        "dir_arg" => ctx.dir_arg.as_os_str(),
+        "path" => OsStr::new(&ctx.path),
+        "dir" => OsStr::new(&ctx.dir),
+        "stem" => OsStr::new(&ctx.stem),
+        "argv" => OsStr::new(ctx.argv.as_deref()?),
+        "command" => OsStr::new(&ctx.command),
+        "now" => OsStr::new(&ctx.now),
         _ => return None,
     };
-    // an unset context field stays as the literal placeholder rather than
-    // silently vanishing (§9 supplement 7 spirit)
-    if v.is_empty() {
-        None
-    } else {
-        Some(v.clone())
-    }
+    // An unset context field stays as the literal placeholder rather than
+    // silently vanishing (§9 supplement 7 spirit).
+    (!value.is_empty()).then_some(value)
 }
 
 #[cfg(test)]
@@ -396,7 +450,7 @@ mod tests {
             dir_arg: "docs".into(),
             state_file_selected: false,
             stem: "standup".into(),
-            argv: "agent-coexist check docs/standup".into(),
+            argv: Some("agent-coexist check docs/standup".into()),
             command: "check".into(),
             now: "2026-09-17T10:00:00Z".into(),
         }
@@ -575,6 +629,31 @@ mod tests {
             !r.fix.contains('\u{1b}'),
             "W-BODY entry title must not leak ESC: {}",
             r.fix
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn unpaired_utf16_requires_whole_recipe_manual_recovery() {
+        use std::os::windows::ffi::OsStringExt;
+
+        let native = OsString::from_wide(&[b'r' as u16, 0xd800]);
+        assert!(names::shell_quote(&native).is_none());
+        let mut c = ctx();
+        c.path_arg = PathBuf::from(&native);
+        let body = Diagnostic::new("W-BODY", 3).with("name", "role");
+        assert_eq!(render(&body, &c).fix, FIX_NATIVE_OPERAND);
+
+        // Explicit params override an otherwise representable context.
+        let missing = Diagnostic::new("E-DIR-MISSING", 0).with("parent_arg", &native);
+        assert_eq!(render(&missing, &ctx()).fix, FIX_NATIVE_OPERAND);
+
+        // Prose-mode templates still embed an executable original argv.
+        c.argv = Context::argv_from_args([OsStr::new("agent-coexist"), native.as_os_str()]);
+        assert!(c.argv.is_none());
+        assert_eq!(
+            render(&Diagnostic::new("E-STATE-DIRTY", 0), &c).fix,
+            FIX_NATIVE_OPERAND
         );
     }
 

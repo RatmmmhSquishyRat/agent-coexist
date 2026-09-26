@@ -30,6 +30,7 @@ pub use lookfor::lookfor_comment;
 pub use read_brief::read_brief;
 pub use read_notification::read_notification;
 
+use std::ffi::OsString;
 use std::path::Path;
 
 use crate::diag;
@@ -69,7 +70,7 @@ enum LoadError {
     /// Lock wait expired — `E-LOCKED` / `E-INUSE`, exit 3 (§10.2, §11).
     Busy {
         id: &'static str,
-        params: Vec<(&'static str, String)>,
+        params: Vec<(&'static str, OsString)>,
     },
     /// Read or parse refused the bytes (`E-UTF8` / `E-TOO-LARGE`): there
     /// is no document, only diagnostics.
@@ -158,11 +159,11 @@ fn dir_error(ctx: &Ctx, command: &'static str, dir: &Path) -> Result<Option<Repo
             &object,
             "E-NOT-DIR",
             vec![
-                ("path", object.clone()),
-                ("cmd", command.to_string()),
+                ("path", object.clone().into()),
+                ("cmd", command.into()),
                 (
                     "parent_arg",
-                    context::parent_dir(dir).to_string_lossy().into_owned(),
+                    context::parent_dir(dir).as_os_str().to_os_string(),
                 ),
             ],
         ))),
@@ -172,10 +173,10 @@ fn dir_error(ctx: &Ctx, command: &'static str, dir: &Path) -> Result<Option<Repo
             &object,
             "E-DIR-MISSING",
             vec![
-                ("dir", object.clone()),
+                ("dir", object.clone().into()),
                 (
                     "parent_arg",
-                    context::parent_dir(dir).to_string_lossy().into_owned(),
+                    context::parent_dir(dir).as_os_str().to_os_string(),
                 ),
             ],
         ))),
@@ -197,7 +198,7 @@ fn file_missing_report(
         command,
         object,
         "E-FILE-MISSING",
-        vec![("file", context::display_file(path))],
+        vec![("file", context::display_file(path).into())],
     )
 }
 
@@ -225,9 +226,9 @@ fn type_report(
         object,
         "E-TYPE",
         vec![
-            ("actual", actual.as_str().to_string()),
-            ("expected", expected.to_string()),
-            ("cmd_for_actual", cmd_for_actual.to_string()),
+            ("actual", actual.as_str().into()),
+            ("expected", expected.into()),
+            ("cmd_for_actual", cmd_for_actual.into()),
         ],
     )
 }

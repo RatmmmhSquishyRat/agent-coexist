@@ -1017,7 +1017,7 @@ mod tests {
     }
 
     fn resolve_brief(target: Option<String>, regex: Option<String>) -> Result<Invocation, String> {
-        let ctx = Ctx::new(String::new(), None).expect("ctx");
+        let ctx = Ctx::new(Some(String::new()), None).expect("ctx");
         resolve(brief_cli(target, regex), &ctx)
     }
 
@@ -1085,7 +1085,7 @@ mod tests {
     /// (regression: BRIEF-REMOVE-DROPS-TARGET).
     #[test]
     fn resolve_rejects_remove_combined_with_target() {
-        let ctx = Ctx::new(String::new(), None).expect("ctx");
+        let ctx = Ctx::new(Some(String::new()), None).expect("ctx");
         let mixed = Cli {
             command: Commands::Brief {
                 path: PathBuf::from("plan"),
