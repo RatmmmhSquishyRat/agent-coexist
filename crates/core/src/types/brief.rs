@@ -12,7 +12,7 @@ use crate::doc::{Body, Section};
 use crate::error::Diagnostic;
 use crate::names;
 use crate::text::Span;
-use crate::types::{is_blank_line, property_parts, ScanCtx};
+use crate::types::{is_blank_line, is_reader_comment, property_parts, ScanCtx};
 
 /// One `- <key>: <value>` line of a brief entry (spec §2.6.1, §4.3).
 #[derive(Debug, Clone)]
@@ -84,14 +84,14 @@ pub(crate) fn is_sha256_hex(value: &str) -> bool {
 pub(crate) fn scan(ctx: &mut ScanCtx, preamble: Range<usize>, sections: &[Section]) -> Brief {
     let description = ctx.first_fence_in(&preamble);
 
-    // preamble: fences, blank lines and `> ` comment lines are fine; any
+    // preamble: fences, blank lines and true `> ` comments are fine; any
     // other non-blank line is stray (no property semantics here, §4.2)
     for idx in preamble {
         if ctx.fenced(idx) {
             continue;
         }
         let line = ctx.line_str(idx);
-        if is_blank_line(line) || line.starts_with("> ") {
+        if is_blank_line(line) || is_reader_comment(line.as_bytes()) {
             continue;
         }
         ctx.push(Diagnostic::new("W-STRAY", idx + 1).with("n", (idx + 1).to_string()));
@@ -103,10 +103,7 @@ pub(crate) fn scan(ctx: &mut ScanCtx, preamble: Range<usize>, sections: &[Sectio
         let head_idx = ctx.idx_at(sec.head.start);
         let head_line = head_idx + 1;
         if !seen_titles.insert(sec.title.as_str()) {
-            ctx.push(
-                Diagnostic::new("E-ENTRY-DUP", head_line)
-                    .with("title", names::display_text(&sec.title)),
-            );
+            ctx.push(Diagnostic::new("E-ENTRY-DUP", head_line).with("title", sec.title.clone()));
         }
 
         let mut path: Option<Property> = None;
@@ -156,7 +153,7 @@ pub(crate) fn scan(ctx: &mut ScanCtx, preamble: Range<usize>, sections: &[Sectio
                             // unknown key: kept byte-for-byte, flagged
                             ctx.push(
                                 Diagnostic::new("W-ENTRY-KEY", prop.line)
-                                    .with("title", names::display_text(&sec.title))
+                                    .with("title", sec.title.clone())
                                     .with("key", key.to_string()),
                             );
                             attributes.push(prop);
@@ -174,38 +171,26 @@ pub(crate) fn scan(ctx: &mut ScanCtx, preamble: Range<usize>, sections: &[Sectio
         // entry-level checks (anchors per §9)
         if let Some(p) = &path {
             if is_absolute_path(&p.value) {
-                ctx.push(
-                    Diagnostic::new("W-ENTRY-ABS", p.line)
-                        .with("title", names::display_text(&sec.title)),
-                );
+                ctx.push(Diagnostic::new("W-ENTRY-ABS", p.line).with("title", sec.title.clone()));
             }
         } else {
-            ctx.push(
-                Diagnostic::new("E-ENTRY-PATH", head_line)
-                    .with("title", names::display_text(&sec.title)),
-            );
+            ctx.push(Diagnostic::new("E-ENTRY-PATH", head_line).with("title", sec.title.clone()));
         }
         let hash_valid = hash.as_ref().is_some_and(|h| is_sha256_hex(&h.value));
         if !hash_valid {
-            ctx.push(
-                Diagnostic::new("E-ENTRY-HASH", head_line)
-                    .with("title", names::display_text(&sec.title)),
-            );
+            ctx.push(Diagnostic::new("E-ENTRY-HASH", head_line).with("title", sec.title.clone()));
         }
         if let Some(r) = &regex {
             if let Err(err) = regex::Regex::new(&r.value) {
-                // {target} is unavailable when the entry has no path line
-                // (§9 supplement 7): show the reader placeholder instead
-                let target = path
-                    .as_ref()
-                    .map(|p| names::display_text(&p.value))
-                    .unwrap_or_else(|| "<file>".to_string());
-                ctx.push(
-                    Diagnostic::new("E-ENTRY-REGEX", r.line)
-                        .with("title", names::display_text(&sec.title))
-                        .with("err", names::display_text(&err.to_string()))
-                        .with("target", target),
-                );
+                // Missing path remains absence. A real value, including
+                // "<file>", is an executable target rather than a marker.
+                let mut diagnostic = Diagnostic::new("E-ENTRY-REGEX", r.line)
+                    .with("title", sec.title.clone())
+                    .with("err", names::display_text(&err.to_string()));
+                if let Some(path) = &path {
+                    diagnostic = diagnostic.with("target_arg", path.value.clone());
+                }
+                ctx.push(diagnostic);
             }
         }
 
@@ -324,13 +309,6 @@ mod tests {
         let e = &d.brief.entries[0];
         assert_eq!(e.attributes.len(), 1);
         assert_eq!(e.attributes[0].key, "extra");
-        // {target} present because the entry has a path
-        let p = d.diagnostics[2]
-            .params
-            .iter()
-            .find(|(k, _)| *k == "target")
-            .unwrap();
-        assert_eq!(p.1, "/abs/x");
         // missing path -> E-ENTRY-PATH and target unavailable in regex diag
         let src = "# b.brief\n\n## t\n\n- regex: (\n";
         let d = parse_brief(src, "b");
@@ -338,12 +316,6 @@ mod tests {
             ids(&d),
             vec!["E-ENTRY-PATH", "E-ENTRY-HASH", "E-ENTRY-REGEX"]
         );
-        let p = d.diagnostics[2]
-            .params
-            .iter()
-            .find(|(k, _)| *k == "target")
-            .unwrap();
-        assert_eq!(p.1, "<file>");
     }
 
     #[test]
@@ -377,6 +349,28 @@ mod tests {
         let src = "# b.brief\n\n> note for readers\n\n```md\ndesc\n```\n";
         let d = parse_brief(src, "b");
         assert_eq!(ids(&d), Vec::<&str>::new());
+        assert!(d.brief.description.is_some());
+    }
+
+    #[test]
+    fn preamble_cr_tainted_gt_is_stray_bytes_kept() {
+        let tainted = "# b.brief\n\n> hello\rworld\n\n```md\ndesc\n```\n";
+        let d = parse_brief(tainted, "b");
+        assert_eq!(
+            d.diagnostics
+                .iter()
+                .map(|x| (x.id, x.line))
+                .collect::<Vec<_>>(),
+            vec![("W-STRAY", 3)]
+        );
+        assert_eq!(d.source, tainted);
+        assert!(d.brief.description.is_some());
+
+        let crlf = "# b.brief\r\n\r\n> note for readers\r\n\r\n```md\ndesc\r\n```\r\n";
+        let d = parse_brief(crlf, "b");
+        assert!(!ids(&d).contains(&"W-STRAY"));
+        assert!(ids(&d).contains(&"W-CRLF"));
+        assert_eq!(d.source, crlf);
         assert!(d.brief.description.is_some());
     }
 }

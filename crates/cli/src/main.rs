@@ -7,7 +7,8 @@
 //!    program name first) via `diag::Context::argv_from_args`, so the
 //!    per-argument quoting exists only in the template layer — it feeds
 //!    `{argv}` in §8.3 fix templates.
-//! 2. clap parses the grammar (its own stderr + exit 2 for grammar errors).
+//! 2. clap parses the grammar; errors pass through the one-line usage
+//!    emitter, while explicit help/version retain clap's stdout and exit 0.
 //! 3. Build the one [`Ctx`] (env entry points `AGENT_COEXIST_NOW` /
 //!    `AGENT_COEXIST_LOCK_WAIT_MS` surface here as usage-class faults,
 //!    before any file access), with the progress sink for traversing
@@ -17,9 +18,10 @@
 //! 5. Base commands go through `ops::run`; the three wait commands are
 //!    dispatched only here, never from a base arm.
 //!
-//! stdout is written only by [`render::render`]. Usage failures print
-//! exactly one stderr line and exit 2 with stdout untouched. Every other
-//! failure is a rendered report: OS-level I/O faults take the §8.3.5
+//! Reports write stdout only through [`render::render`]; explicit help and
+//! version use clap's output. Usage failures print exactly one stderr line
+//! and exit 2 with stdout untouched. Every other failure is a rendered
+//! report: OS-level I/O faults take the §8.3.5
 //! reason/fix form; `Reason`/`Diagnostics` faults that escape a command are
 //! rendered (never discarded).
 
@@ -46,20 +48,23 @@ fn main() -> ExitCode {
             .map(|arg| arg.to_string_lossy().into_owned())
             .collect::<Vec<_>>(),
     );
-    let cli = args::Cli::parse();
+    let cli = match args::Cli::try_parse() {
+        Ok(cli) => cli,
+        Err(error) if error.use_stderr() => {
+            let message = error.to_string();
+            return usage_stderr(message.strip_prefix("error: ").unwrap_or(&message));
+        }
+        Err(error) => error.exit(),
+    };
     let (progress_fn, progress) = progress::make(cli.command.traverses());
     let mut ctx = match Ctx::new(argv, progress_fn) {
         Ok(ctx) => ctx,
         Err(fault) => {
-            eprintln!(
-                "error: {}",
-                args::fault_usage_message(
-                    &fault,
-                    "AGENT_COEXIST_NOW must be a strict TIME like 2026-09-17T09:12:00Z and \
-                     AGENT_COEXIST_LOCK_WAIT_MS a non-negative decimal integer"
-                )
-            );
-            return ExitCode::from(2);
+            return usage_stderr(&args::fault_usage_message(
+                &fault,
+                "AGENT_COEXIST_NOW must be a strict TIME like 2026-09-17T09:12:00Z and \
+                 AGENT_COEXIST_LOCK_WAIT_MS a non-negative decimal integer",
+            ));
         }
     };
 
@@ -102,10 +107,6 @@ fn main() -> ExitCode {
             // line, any fault report and wait's own reports always agree
             // (state object = dir; file objects = suffix-stripped display).
             let (command, object) = wait::command_object(&path, &filter);
-            let dctx = match &kind {
-                args::DiagKind::File(file) => context::diag_context_for_file(&ctx, command, file),
-                args::DiagKind::Dir(dir) => context::diag_context_for_dir(&ctx, command, dir),
-            };
             let cancel = Arc::new(wait::Cancellation::new());
             {
                 let cancel = Arc::clone(&cancel);
@@ -118,9 +119,22 @@ fn main() -> ExitCode {
             let ready = || {
                 // One readiness hint on stderr, best-effort: a failing
                 // stderr must not cancel an otherwise valid wait result.
-                let _ = writeln!(std::io::stderr(), "waiting  {command}  {object}");
+                // Empty object uses the same `/` column as stdout reports.
+                let _ = writeln!(
+                    std::io::stderr(),
+                    "waiting  {command}  {}",
+                    render::column(&object)
+                );
             };
-            match wait::run(&path, filter, &cancel, ready) {
+            let result = wait::run(&path, filter, &cancel, ready);
+            // Bind recovery to the original inspected path after waiting: a
+            // removed file or a changed reserved-state selection must not
+            // inherit permission to emit directory-level mutation recipes.
+            let dctx = match &kind {
+                args::DiagKind::File(file) => context::diag_context_for_file(&ctx, command, file),
+                args::DiagKind::Dir(dir) => context::diag_context_for_dir(&ctx, command, dir),
+            };
+            match result {
                 Ok(report) => emit(&report, &dctx),
                 Err(Fault::Cancelled) => ExitCode::from(130),
                 Err(Fault::Usage(msg)) => usage_stderr(&msg),
@@ -186,8 +200,11 @@ fn emit(report: &Report, dctx: &diag::Context) -> ExitCode {
 }
 
 /// One stderr line and exit 2, stdout untouched (spec §7.1.7, §11).
+/// CR/LF in clap grammar errors and custom usage text become spaces;
+/// stored body text is not rewritten here.
 fn usage_stderr(msg: &str) -> ExitCode {
-    eprintln!("error: {msg}");
+    let line = msg.replace(['\n', '\r'], " ");
+    eprintln!("error: {line}");
     ExitCode::from(2)
 }
 

@@ -105,6 +105,11 @@ pub fn fenced(content: &str) -> String {
 /// and the new section are separated by at least one blank line (spec
 /// §10.3.3). Trailing blank lines already present satisfy the rule and are
 /// never removed; a trailing CRLF counts like LF.
+///
+/// A terminal isolated CR is not a terminator (§2.1.2). Inserting LF
+/// against it would form CRLF and activate a previously opaque heading or
+/// property; keep that CR in line content by placing a neutral ASCII space
+/// before the LF gap.
 pub fn append_gap(file: &str) -> &'static str {
     let bytes = file.as_bytes();
     let mut terminators = 0usize;
@@ -119,6 +124,9 @@ pub fn append_gap(file: &str) -> &'static str {
         } else {
             break;
         }
+    }
+    if terminators == 0 && i > 0 && bytes[i - 1] == b'\r' {
+        return " \n\n";
     }
     match terminators {
         0 => "\n\n",
@@ -195,6 +203,31 @@ impl LineIndex {
     /// 1-based line number of byte `offset`.
     pub(crate) fn line_at(&self, offset: usize) -> usize {
         self.idx_at(offset) + 1
+    }
+
+    /// Exclusive 0-based line index for a half-open byte offset: the first
+    /// line whose start is not strictly before `offset`. Keep [`Self::idx_at`]
+    /// for point lookups: at EOF without a terminator it names the last
+    /// real line, which must not be used as an exclusive range end.
+    /// A phantom trailing-newline line starts at EOF, so it becomes this
+    /// exclusive end and is not treated as content.
+    pub(crate) fn idx_end(&self, offset: usize) -> usize {
+        let off = offset.min(self.len);
+        self.starts.partition_point(|&s| s < off)
+    }
+
+    /// 0-based line indices whose bytes intersect the half-open `span`.
+    /// Empty spans yield an empty range. A line whose start equals
+    /// `span.end` is excluded. An unterminated last line is included when
+    /// `span` runs to EOF; a phantom trailing-newline line is not.
+    pub(crate) fn lines_in(&self, span: Span) -> std::ops::Range<usize> {
+        if span.start >= span.end {
+            let i = self.idx_at(span.start);
+            return i..i;
+        }
+        let start = self.idx_at(span.start);
+        let end = self.idx_end(span.end);
+        start..end.max(start)
     }
 }
 /// Closed backtick fence block (spec §2.5).
@@ -454,6 +487,8 @@ mod tests {
         assert_eq!(append_gap("abc\r\n\r\n"), "");
         assert_eq!(append_gap("abc\n\n\n\n"), "");
         assert_eq!(append_gap(""), "\n\n");
+        assert_eq!(append_gap("abc\r"), " \n\n");
+        assert_eq!(append_gap("abc\n\r"), " \n\n");
     }
 
     #[test]
@@ -468,5 +503,18 @@ mod tests {
         assert_eq!(idx.line_at(3), 2);
         assert_eq!(idx.line_at(4), 2);
         assert_eq!(idx.line_at(6), 3);
+        // half-open EOF includes the unterminated last line; empty-at-EOF
+        // does not turn that line into a range
+        assert_eq!(idx.idx_end(6), 3);
+        assert_eq!(idx.lines_in(0..6), 0..3);
+        assert_eq!(idx.lines_in(5..6), 2..3);
+        assert_eq!(idx.lines_in(6..6), 2..2);
+
+        let idx = LineIndex::new("a\r\nb\nc\n");
+        assert_eq!(idx.count(), 4);
+        assert_eq!(idx.idx_at(7), 3);
+        assert_eq!(idx.idx_end(7), 3);
+        assert_eq!(idx.lines_in(0..7), 0..3);
+        assert_eq!(idx.lines_in(7..7), 3..3);
     }
 }

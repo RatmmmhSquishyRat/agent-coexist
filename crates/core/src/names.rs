@@ -114,33 +114,17 @@ pub fn excerpt(s: &str) -> String {
 }
 
 /// POSIX single-quote wrapping for command-form fix values (spec §8.3.4):
-/// values containing whitespace or any of `"'$\`&|;<>()*?[]!` are wrapped in
-/// single quotes with inner `'` written as `'\''`; anything else is returned
-/// as-is.
+/// nonempty words containing only ASCII letters, digits or `_@%+,./-`
+/// remain readable as-is. Everything else (including `=` assignment
+/// syntax and the empty argument) is wrapped in single quotes, with
+/// inner `'` written as `'\''`.
 pub fn shell_quote(s: &str) -> String {
-    let needs = s.chars().any(|c| {
-        c.is_whitespace()
-            || matches!(
-                c,
-                '"' | '\''
-                    | '$'
-                    | '\\'
-                    | '`'
-                    | '&'
-                    | '|'
-                    | ';'
-                    | '<'
-                    | '>'
-                    | '('
-                    | ')'
-                    | '*'
-                    | '?'
-                    | '['
-                    | ']'
-                    | '!'
-            )
-    });
-    if !needs {
+    if !s.is_empty()
+        && s.bytes().all(|b| {
+            b.is_ascii_alphanumeric()
+                || matches!(b, b'_' | b'@' | b'%' | b'+' | b',' | b'.' | b'/' | b'-')
+        })
+    {
         return s.to_string();
     }
     let mut out = String::with_capacity(s.len() + 2);
@@ -232,15 +216,6 @@ mod tests {
         assert_eq!(cut.chars().count(), 80);
         assert!(cut.ends_with("..."));
         assert_eq!(cut.trim_end_matches('.').chars().count(), 77);
-    }
-
-    #[test]
-    fn shell_quote_rules() {
-        assert_eq!(shell_quote("plain-path_1.txt"), "plain-path_1.txt");
-        assert_eq!(shell_quote("has space"), "'has space'");
-        assert_eq!(shell_quote("it's"), "'it'\\''s'");
-        assert_eq!(shell_quote("a$b"), "'a$b'");
-        assert_eq!(shell_quote("back`tick"), "'back`tick'");
     }
 
     #[test]

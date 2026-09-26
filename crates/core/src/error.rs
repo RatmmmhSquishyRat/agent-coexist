@@ -10,10 +10,10 @@ use std::path::PathBuf;
 
 /// One catalog diagnostic anchored at a 1-based line of the parsed file.
 ///
-/// `params` keys are the `{placeholder}` names of the §9 templates. Values
-/// taken from file content MUST already be folded per §10.9.4 (see
-/// [`crate::names::display_text`]) when the param is created; rendering never
-/// re-folds.
+/// `params` keys are the `{placeholder}` names of the §9 templates. Heading
+/// identity values retain their parsed form; the renderer sanitizes only
+/// human display. Native command operands use `*_arg` keys and must never
+/// be reconstructed from folded display paths or placeholder-like text.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Diagnostic {
     pub id: &'static str,

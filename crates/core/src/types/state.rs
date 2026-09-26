@@ -1,11 +1,11 @@
 //! The `state` type view (spec §6): status sections, comma-split entry
 //! declarations with clean/dirty line classification, the per-nick
-//! selection used by read commands, and the expiry / in-file `locked`
-//! conflict diagnostics — both derived once, here, over the selected
-//! declarations (§6.2.5, §6.2.7), so no consumer re-derives or
-//! duplicates them.
+//! selection used by read commands, and expiry diagnostics over those
+//! selected declarations (§6.2.5). The complete pairwise `locked`
+//! conflict report is derived only when emitted by `check` (§6.2.7)
+//! or a qualifying wait hit, not by ordinary parsing or scans.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use chrono::{DateTime, Utc};
 
@@ -59,27 +59,75 @@ impl Declaration {
     }
 }
 
-/// The declarations a read command reports for a section: grouped by
-/// nick, keeping the declaration with the latest `until` (earliest wins
-/// ties, §6.2.4), returned in file order (§6.2.6).
-pub fn selected(section: &StateSection) -> Vec<&Declaration> {
-    let mut slot_of: HashMap<&str, usize> = HashMap::new();
-    let mut best: Vec<usize> = Vec::new();
-    for (i, d) in section.entries.iter().enumerate() {
-        match slot_of.get(d.nick.as_str()) {
-            None => {
-                slot_of.insert(d.nick.as_str(), best.len());
-                best.push(i);
+/// Effective declarations across the whole file, including repeated status
+/// sections: latest `until` per (status, nick), earliest occurrence on ties,
+/// returned in the selected declarations' original file order (§6.2.4).
+pub fn selected(sections: &[StateSection]) -> Vec<(&StateSection, &Declaration)> {
+    select_latest(sections.iter().flat_map(|section| {
+        section.entries.iter().map(move |entry| {
+            (
+                section.status.as_str(),
+                entry.nick.as_str(),
+                entry.until,
+                (section, entry),
+            )
+        })
+    }))
+}
+
+/// Append the complete same-file conflict diagnostics for [`selected`]'s
+/// effective view. Only report consumers (`check` and qualifying wait hits)
+/// call this; ordinary parsing never expands the pairwise report. `now` is
+/// the same command clock used to parse the document. Pairs retain selected
+/// file order and anchor on the later declaration; the caller stable-sorts
+/// these together with the parse diagnostics by line and catalog order.
+pub(crate) fn append_conflict_diagnostics(
+    effective: &[(&StateSection, &Declaration)],
+    now: DateTime<Utc>,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    let locked: Vec<&Declaration> = effective
+        .iter()
+        .filter(|(section, declaration)| {
+            section.status == "locked" && section.valid_name && declaration.valid(now)
+        })
+        .map(|(_, declaration)| *declaration)
+        .collect();
+    for x in 0..locked.len() {
+        for y in (x + 1)..locked.len() {
+            if locked[x].nick != locked[y].nick {
+                diagnostics.push(
+                    Diagnostic::new("W-STATE-CONFLICT", locked[y].line)
+                        .with("a", locked[x].nick.clone())
+                        .with("b", locked[y].nick.clone()),
+                );
             }
-            Some(&slot) => {
-                if d.until > section.entries[best[slot]].until {
-                    best[slot] = i;
+        }
+    }
+}
+
+/// Shared selection rule for the parsed document and the raw scan-history
+/// view. The payload is either a borrowed declaration or its raw position;
+/// selection never drops history from the source view.
+pub(crate) fn select_latest<'a, T>(
+    entries: impl IntoIterator<Item = (&'a str, &'a str, DateTime<Utc>, T)>,
+) -> Vec<T> {
+    let mut latest = HashMap::new();
+    for (order, (status, nick, until, value)) in entries.into_iter().enumerate() {
+        match latest.entry((status, nick)) {
+            std::collections::hash_map::Entry::Vacant(slot) => {
+                slot.insert((order, until, value));
+            }
+            std::collections::hash_map::Entry::Occupied(mut slot) => {
+                if until > slot.get().1 {
+                    slot.insert((order, until, value));
                 }
             }
         }
     }
-    best.sort_unstable();
-    best.into_iter().map(|i| &section.entries[i]).collect()
+    let mut selected: Vec<_> = latest.into_values().collect();
+    selected.sort_unstable_by_key(|(order, _, _)| *order);
+    selected.into_iter().map(|(_, _, value)| value).collect()
 }
 
 /// `{lowercased}` for W-STATUS-NAME (§9 suppl. 8): the folded status
@@ -127,17 +175,16 @@ fn parse_entry(frag: &str) -> Option<(&str, DateTime<Utc>, DateTime<Utc>)> {
 
 /// Scan a state file (spec §6.2): per section the status name checks,
 /// the entry lines and the per-(status, nick) duplicates and reversed
-/// ranges — per-entry facts. Time expiry (§6.2.5) and the in-file
-/// `locked` conflicts (§6.2.7) are derived once, over each section's
-/// selected declarations (§6.2.4), and pushed here as well: every
-/// consumer of `Document::diagnostics` sees one coherent derivation,
-/// never a parse-time set plus a preview-time duplicate. Diagnostics
-/// are pushed through `ctx`; `doc::parse` sorts them once at the end.
+/// ranges — per-entry facts. Time expiry (§6.2.5) uses the whole file's
+/// selected declarations (§6.2.4). Pairwise `locked` diagnostics are
+/// deferred to report consumers, which use the same selected view.
+/// Parse diagnostics are pushed through `ctx`; `doc::parse` sorts them
+/// once at the end.
 pub(crate) fn scan(ctx: &mut ScanCtx, sections: &[Section]) -> Vec<StateSection> {
     let now = ctx.now();
     let mut out: Vec<StateSection> = Vec::with_capacity(sections.len());
     // folded titles already seen, for E-STATUS-DUP at later occurrences
-    let mut seen_titles: Vec<&str> = Vec::new();
+    let mut seen_titles = HashSet::new();
 
     for (si, sec) in sections.iter().enumerate() {
         let status = sec.title.clone();
@@ -151,15 +198,12 @@ pub(crate) fn scan(ctx: &mut ScanCtx, sections: &[Section]) -> Vec<StateSection>
                     .with("lowercased", suggest_status(&status)),
             );
         }
-        if seen_titles.contains(&sec.title.as_str()) {
+        if !seen_titles.insert(sec.title.as_str()) {
             ctx.push(Diagnostic::new("E-STATUS-DUP", head_no).with("status", status.clone()));
-        } else {
-            seen_titles.push(sec.title.as_str());
         }
 
         let mut entries: Vec<Declaration> = Vec::new();
         let mut clean_lines: Vec<Span> = Vec::new();
-        let mut nicks: Vec<String> = Vec::new();
 
         for idx in ctx.section_body_lines(sec) {
             if ctx.fenced(idx) || is_blank_line(ctx.line_str(idx)) {
@@ -234,75 +278,52 @@ pub(crate) fn scan(ctx: &mut ScanCtx, sections: &[Section]) -> Vec<StateSection>
             }
         }
 
-        // per-(status, nick) duplicates and reversed ranges (§6.2.4,
-        // §6.2.5): per-entry facts, reported for every declaration
-        // alike, selected or not.
-        for d in &entries {
-            if nicks.iter().any(|n| n == &d.nick) {
-                ctx.push(
-                    Diagnostic::new("W-STATE-DUP", d.line)
-                        .with("nick", d.nick.clone())
-                        .with("status", status.clone()),
-                );
-            } else {
-                nicks.push(d.nick.clone());
-            }
-            if d.start > d.until {
-                // W-STATE-RANGE and never also W-STATE-EXPIRED (§6.2.5)
-                ctx.push(
-                    Diagnostic::new("W-STATE-RANGE", d.line)
-                        .with("nick", d.nick.clone())
-                        .with("status", status.clone()),
-                );
-            }
-        }
-
-        let section = StateSection {
+        out.push(StateSection {
             status,
             section: si,
             valid_name,
             entries,
             clean_lines,
-        };
-        // Time expiry over the selected declarations only (§6.2.4's
-        // per-nick latest-`until` view, §6.2.5/§6.3.2): a superseded
-        // earlier declaration of the same nick is not reported — the
-        // merged view is the valid one — and a reversed range keeps the
-        // per-entry W-STATE-RANGE above, never an expiry on top.
-        for d in selected(&section) {
-            if d.start <= d.until && now >= d.until {
-                ctx.push(
-                    Diagnostic::new("W-STATE-EXPIRED", d.line)
-                        .with("nick", d.nick.clone())
-                        .with("status", section.status.clone())
-                        .with("until", crate::time::format(d.until)),
-                );
-            }
-        }
-        out.push(section);
+        });
     }
 
-    // In-file conflict (§6.2.7), derived once over the selected
-    // declarations of every valid `locked` section: each pair of valid
-    // declarations with different nicks, `{a}` the earlier one, `{b}`
-    // the later, anchored on the later declaration's line (§9
-    // supplement 6).
-    let flat: Vec<&Declaration> = out
-        .iter()
-        .filter(|sec| sec.status == "locked" && sec.valid_name)
-        .flat_map(selected)
-        .collect();
-    for x in 0..flat.len() {
-        for y in (x + 1)..flat.len() {
-            if flat[x].nick != flat[y].nick && flat[x].valid(now) && flat[y].valid(now) {
+    // Duplicate identities and inverted ranges are raw per-entry facts,
+    // including identities repeated under a later section of the same name.
+    let mut seen = std::collections::HashSet::new();
+    for section in &out {
+        for d in &section.entries {
+            if !seen.insert((section.status.as_str(), d.nick.as_str())) {
                 ctx.push(
-                    Diagnostic::new("W-STATE-CONFLICT", flat[y].line)
-                        .with("a", flat[x].nick.clone())
-                        .with("b", flat[y].nick.clone()),
+                    Diagnostic::new("W-STATE-DUP", d.line)
+                        .with("nick", d.nick.clone())
+                        .with("status", section.status.clone()),
+                );
+            }
+            if d.start > d.until {
+                ctx.push(
+                    Diagnostic::new("W-STATE-RANGE", d.line)
+                        .with("nick", d.nick.clone())
+                        .with("status", section.status.clone()),
                 );
             }
         }
     }
+
+    // Expiry uses one effective view across every section. A superseded
+    // declaration cannot add an expired row; inverted ranges retain
+    // W-STATE-RANGE only.
+    let effective = selected(&out);
+    for (section, d) in &effective {
+        if d.start <= d.until && now >= d.until {
+            ctx.push(
+                Diagnostic::new("W-STATE-EXPIRED", d.line)
+                    .with("nick", d.nick.clone())
+                    .with("status", section.status.clone())
+                    .with("until", crate::time::format(d.until)),
+            );
+        }
+    }
+
     out
 }
 
@@ -376,11 +397,36 @@ mod tests {
             ],
             clean_lines: Vec::new(),
         };
-        let rows: Vec<(&str, usize)> = selected(&section)
+        let rows: Vec<(&str, usize)> = selected(std::slice::from_ref(&section))
             .iter()
-            .map(|d| (d.nick.as_str(), d.line))
+            .map(|(_, d)| (d.nick.as_str(), d.line))
             .collect();
         assert_eq!(rows, vec![("bob", 3), ("alice", 5)]);
+    }
+
+    #[test]
+    fn repeated_sections_share_selection() {
+        let src = concat!(
+            "# .state\n\n## locked\n",
+            "alice 2026-09-17T08:00:00Z..2026-09-17T09:00:00Z\n",
+            "\n## locked\n",
+            "alice 2026-09-17T09:00:00Z..2026-09-17T12:00:00Z, ",
+            "bob 2026-09-17T09:00:00Z..2026-09-17T13:00:00Z\n",
+        );
+        let doc = crate::doc::parse(
+            src.as_bytes().to_vec(),
+            std::path::Path::new("state.agent-besties.md"),
+            crate::time::parse("2026-09-17T10:00:00Z").unwrap(),
+        )
+        .unwrap();
+        let entries: Vec<_> = selected(&doc.state)
+            .into_iter()
+            .map(|(_, entry)| (entry.nick.as_str(), entry.line))
+            .collect();
+        assert_eq!(entries, vec![("alice", 7), ("bob", 7)]);
+        assert!(doc.diagnostics.iter().any(|d| d.id == "E-STATUS-DUP"));
+        assert!(doc.diagnostics.iter().any(|d| d.id == "W-STATE-DUP"));
+        assert!(!doc.diagnostics.iter().any(|d| d.id == "W-STATE-EXPIRED"));
     }
 
     #[test]
@@ -460,31 +506,29 @@ mod tests {
         assert_eq!(bad.clean_lines.len(), 2);
 
         // selection under locked: per nick the latest until, file order
-        let rows: Vec<(&str, usize)> = selected(locked)
-            .iter()
-            .map(|d| (d.nick.as_str(), d.line))
+        let rows: Vec<(&str, usize)> = selected(&doc.state)
+            .into_iter()
+            .filter(|(section, _)| section.status == "locked")
+            .map(|(_, d)| (d.nick.as_str(), d.line))
             .collect();
-        assert_eq!(rows, vec![("bob", 6), ("alice", 7), ("carol", 9)]);
+        assert_eq!(
+            rows,
+            vec![("bob", 6), ("alice", 7), ("carol", 9), ("gina", 17)]
+        );
 
-        // Diagnostics: exactly one derivation over the selected
-        // declarations — no parse-time + preview duplicates. The
-        // selected alice under locked is the L7 renewal, so bob's
-        // conflict anchors on L7 (§9 supplement 6), and gina conflicts
-        // with both bob and the selected alice.
+        // Parse diagnostics retain per-entry issues and selected expiry.
+        // Pairwise conflict reporting belongs to report consumers.
         let rows: Vec<(&str, usize)> = doc.diagnostics.iter().map(|d| (d.id, d.line)).collect();
         assert_eq!(
             rows,
             vec![
-                ("W-STATE-DUP", 7),      // alice again under locked
-                ("W-STATE-CONFLICT", 7), // bob vs the selected alice (L7 renewal)
-                ("W-STATE-ENTRY", 8),    // broken entry
-                ("W-STATE-EXPIRED", 9),  // carol: now == until (selected)
-                ("W-STATE-ENTRY", 10),   // lone \r: folded fragment
+                ("W-STATE-DUP", 7),     // alice again under locked
+                ("W-STATE-ENTRY", 8),   // broken entry
+                ("W-STATE-EXPIRED", 9), // carol: now == until (selected)
+                ("W-STATE-ENTRY", 10),  // lone \r: folded fragment
                 ("W-STATUS-NAME", 12),
                 ("W-STATE-RANGE", 14), // fred: starts after it ends
                 ("E-STATUS-DUP", 16),
-                ("W-STATE-CONFLICT", 17), // bob vs gina
-                ("W-STATE-CONFLICT", 17), // the selected alice vs gina
             ]
         );
         let expired = doc

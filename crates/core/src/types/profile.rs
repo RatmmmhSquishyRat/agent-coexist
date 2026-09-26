@@ -4,7 +4,7 @@
 //! fence get W-BODY. Property lines have no meaning here (§2.6.1): any
 //! non-blank line outside a fence is stray.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::sync::LazyLock;
 
 use regex::Regex;
@@ -43,9 +43,25 @@ pub(crate) fn suggested_section_name(title: &str) -> String {
 }
 
 pub(crate) fn scan(ctx: &mut ScanCtx, sections: &[Section]) -> Vec<ProfileSection> {
+    let suggestions: Vec<_> = sections
+        .iter()
+        .map(|sec| (!names::valid_section(&sec.title)).then(|| suggested_section_name(&sec.title)))
+        .collect();
+    // Reserve every stored folded heading, including later sections. A
+    // candidate is safe only if no stored heading or other repair uses it.
+    let mut unique_names: HashMap<&str, bool> = sections
+        .iter()
+        .map(|sec| (sec.title.as_str(), false))
+        .collect();
+    for suggested in suggestions.iter().flatten() {
+        unique_names
+            .entry(suggested.as_str())
+            .and_modify(|unique| *unique = false)
+            .or_insert(true);
+    }
     let mut seen: HashSet<&str> = HashSet::new();
     let mut out = Vec::with_capacity(sections.len());
-    for (si, sec) in sections.iter().enumerate() {
+    for (si, (sec, suggested)) in sections.iter().zip(&suggestions).enumerate() {
         let head_idx = ctx.idx_at(sec.head.start);
         let head_line = head_idx + 1;
         if !seen.insert(sec.title.as_str()) {
@@ -54,14 +70,15 @@ pub(crate) fn scan(ctx: &mut ScanCtx, sections: &[Section]) -> Vec<ProfileSectio
                     .with("name", names::display_text(&sec.title)),
             );
         }
-        let valid = names::valid_section(&sec.title);
-        if !valid {
-            ctx.push(
-                Diagnostic::new("W-SECTION-NAME", head_line)
-                    .with("name", names::display_text(&sec.title))
-                    .with("n", head_line.to_string())
-                    .with("suggested", suggested_section_name(&sec.title)),
-            );
+        let valid = suggested.is_none();
+        if let Some(suggested) = suggested {
+            let mut diagnostic = Diagnostic::new("W-SECTION-NAME", head_line)
+                .with("name", names::display_text(&sec.title))
+                .with("n", head_line.to_string());
+            if unique_names.get(suggested.as_str()) == Some(&true) {
+                diagnostic = diagnostic.with("suggested", suggested.clone());
+            }
+            ctx.push(diagnostic);
         }
         if sec.body.is_none() {
             ctx.push(
@@ -150,5 +167,49 @@ mod tests {
         assert_eq!(suggested_section_name("  --- Role ---  "), "Role----");
         assert_eq!(suggested_section_name("!!!"), "section");
         assert_eq!(suggested_section_name("a b c"), "a-b-c");
+    }
+
+    #[test]
+    fn preamble_stray_exempts_reader_comments_and_fences() {
+        let d = parse_profile("# a.agent-profile\n\njunk preamble\n\n## role\n\n```md\ndev\n```\n");
+        assert_eq!(
+            d.diagnostics
+                .iter()
+                .map(|x| (x.id, x.line))
+                .collect::<Vec<_>>(),
+            vec![("W-STRAY", 3)]
+        );
+        assert_eq!(d.profile.len(), 1);
+        assert_eq!(d.profile[0].name, "role");
+
+        let d = parse_profile("# a.agent-profile\n\n> note\n\n## role\n\n```md\ndev\n```\n");
+        assert_eq!(ids(&d), Vec::<&str>::new());
+
+        // fences in the preamble stay opaque: inner text is not W-STRAY
+        let d = parse_profile(
+            "# a.agent-profile\n\n```md\nhidden junk\n```\n\n## role\n\n```md\ndev\n```\n",
+        );
+        assert_eq!(ids(&d), Vec::<&str>::new());
+    }
+
+    #[test]
+    fn unterminated_last_section_line_is_stray_phantom_is_not() {
+        let d = parse_profile("# a.agent-profile\n\n## role\nhello");
+        assert_eq!(
+            d.diagnostics
+                .iter()
+                .map(|x| (x.id, x.line))
+                .collect::<Vec<_>>(),
+            vec![("W-BODY", 3), ("W-STRAY", 4)]
+        );
+
+        let d = parse_profile("# a.agent-profile\n\n## role\nhello\n");
+        let strays: Vec<_> = d
+            .diagnostics
+            .iter()
+            .filter(|x| x.id == "W-STRAY")
+            .map(|x| x.line)
+            .collect();
+        assert_eq!(strays, vec![4]);
     }
 }

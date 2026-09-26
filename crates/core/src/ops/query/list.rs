@@ -8,22 +8,37 @@
 //! leaves of (indent + stem chars) + 2)`, computed after collecting so
 //! the rows are built last.
 
+use std::ffi::OsString;
 use std::path::Path;
 
 use crate::consts;
 use crate::doc;
 use crate::error::Fault;
 use crate::fsx;
+use crate::names;
 use crate::ops::context::{self, Ctx};
 use crate::ops::ListParams;
 use crate::report::Report;
 
-use super::dir_error;
+use super::{dir_error, include_hints};
+
+/// Native directory identity; `display` is folded once for emit.
+struct DirKey {
+    native: OsString,
+    display: String,
+}
+
+impl DirKey {
+    fn new(native: OsString) -> Self {
+        let display = names::fold(&native.to_string_lossy());
+        Self { native, display }
+    }
+}
 
 /// A leaf that will be rendered (post type filtering).
 struct Leaf {
-    /// Directory components between DIR and the file, lexical.
-    components: Vec<String>,
+    /// Native directories between the requested DIR and the file.
+    dirs: Vec<DirKey>,
     stem: String,
     indent: usize,
     type_col: String,
@@ -47,9 +62,6 @@ pub fn list(ctx: &mut Ctx, p: &ListParams) -> Result<Report, Fault> {
         let mut sink = ctx.walk_sink();
         fsx::walk::scan(&p.dir, &p.walk, &mut sink)?
     };
-    // §8.4.1: the file counter counts files READ (the loop below,
-    // failures included), not files merely found during traversal.
-    ctx.progress(scanned.dirs, 0);
 
     let mut report = Report::new("list", object.clone());
     let ignore_value = if p.walk.no_ignore {
@@ -61,18 +73,15 @@ pub fn list(ctx: &mut Ctx, p: &ListParams) -> Result<Report, Fault> {
     };
     report.kv("ignore", vec![ignore_value]);
 
-    let dir_display = object;
     let mut leaves: Vec<Leaf> = Vec::new();
     for file in &scanned.files {
         ctx.file_read();
-        let file_display = context::display_file(file);
-        let components = relative_components(&file_display, &dir_display);
-        if components.is_empty() {
+        let Some((native_dirs, file_name)) = fsx::walk::relative_native_parts(file, &p.dir) else {
             continue;
-        }
-        let file_name = components.last().map(|c| c.as_str()).unwrap_or_default();
-        let stem = stem_of(file_name).to_string();
-        let indent = 2 + 2 * (components.len() - 1);
+        };
+        let stem = names::fold(stem_of(&file_name.to_string_lossy()));
+        let dirs: Vec<DirKey> = native_dirs.into_iter().map(DirKey::new).collect();
+        let indent = 2 + 2 * dirs.len();
         let kind = classify(ctx, file);
         // §7.1.8: `--type` is a union; non-matching leaves are hidden
         // entirely (no row, not counted). A leaf whose type could not be
@@ -91,7 +100,7 @@ pub fn list(ctx: &mut Ctx, p: &ListParams) -> Result<Report, Fault> {
             LeafKind::Busy => ("busy".to_string(), true),
         };
         leaves.push(Leaf {
-            components,
+            dirs,
             stem,
             indent,
             type_col,
@@ -106,17 +115,19 @@ pub fn list(ctx: &mut Ctx, p: &ListParams) -> Result<Report, Fault> {
         type_start = type_start.max(leaf.indent + leaf.stem.chars().count() + 2);
     }
 
-    let mut prev_dirs: Vec<String> = Vec::new();
+    let mut prev_dirs: Vec<OsString> = Vec::new();
     for leaf in &leaves {
-        let dirs = &leaf.components[..leaf.components.len() - 1];
         let mut common = 0usize;
-        while common < dirs.len() && common < prev_dirs.len() && prev_dirs[common] == dirs[common] {
+        while common < leaf.dirs.len()
+            && common < prev_dirs.len()
+            && prev_dirs[common] == leaf.dirs[common].native
+        {
             common += 1;
         }
-        for (i, dir) in dirs.iter().enumerate().skip(common) {
-            report.record(format!("{}/", dir), Vec::new(), 2 + 2 * i, 0);
+        for (i, dir) in leaf.dirs.iter().enumerate().skip(common) {
+            report.record(format!("{}/", dir.display), Vec::new(), 2 + 2 * i, 0);
         }
-        prev_dirs = dirs.to_vec();
+        prev_dirs = leaf.dirs.iter().map(|d| d.native.clone()).collect();
         report.record(
             leaf.stem.clone(),
             vec![leaf.type_col.clone()],
@@ -149,19 +160,7 @@ pub fn list(ctx: &mut Ctx, p: &ListParams) -> Result<Report, Fault> {
     // §10.1.3 / §8.2: include globs that matched nothing while ignore
     // rules were active (not counted, §8.1.10).
     if !p.walk.no_ignore {
-        for glob in &scanned.zero_includes {
-            report.record(
-                "include",
-                vec![
-                    glob.clone(),
-                    "matched 0 files; ignored directories are not reopened (pass --no-ignore)"
-                        .to_string(),
-                ],
-                2,
-                consts::KEY_WIDTH,
-            );
-            warn = true;
-        }
+        warn |= include_hints(&mut report, &scanned.zero_includes);
     }
 
     report.total(count);
@@ -187,27 +186,6 @@ fn classify(ctx: &Ctx, file: &Path) -> LeafKind {
     }
 }
 
-/// Lexical components of `file_display` relative to `dir_display`.
-fn relative_components(file_display: &str, dir_display: &str) -> Vec<String> {
-    let file = strip_dot_slash(file_display);
-    let dir = strip_dot_slash(dir_display);
-    let rel = if dir == "." {
-        file
-    } else {
-        let prefix = format!("{dir}/");
-        file.strip_prefix(&prefix).unwrap_or(file)
-    };
-    rel.split('/')
-        .filter(|component| !component.is_empty())
-        .map(str::to_string)
-        .collect()
-}
-
-/// Lexical `./` prefix strip so both displays compare on the same basis.
-fn strip_dot_slash(s: &str) -> &str {
-    s.strip_prefix("./").unwrap_or(s)
-}
-
 /// Stem of a collaboration file name: everything before the suffix
 /// (matched case-insensitively, §10.1.4; the display keeps the actual
 /// file name's stem bytes).
@@ -219,5 +197,142 @@ fn stem_of(file_name: &str) -> &str {
         &file_name[..file_name.len() - suffix.len()]
     } else {
         file_name
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ops::context::test_ctx;
+    use crate::report::Row;
+    use std::path::PathBuf;
+
+    fn scratch(tag: &str) -> PathBuf {
+        let dir = std::env::temp_dir()
+            .join("coexist-list-tests")
+            .join(format!(
+                "{}-{}-{}",
+                tag,
+                std::process::id(),
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap()
+                    .as_nanos()
+            ));
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    fn list_no_ignore(dir: &Path) -> Report {
+        let mut ctx = test_ctx(crate::time::parse("2026-09-25T12:00:00Z").unwrap());
+        list(
+            &mut ctx,
+            &ListParams {
+                dir: dir.to_path_buf(),
+                types: Vec::new(),
+                walk: fsx::walk::Options {
+                    no_ignore: true,
+                    ..Default::default()
+                },
+            },
+        )
+        .unwrap()
+    }
+
+    fn tree_rows(report: &Report) -> Vec<(usize, &str, Vec<&str>)> {
+        report
+            .rows
+            .iter()
+            .filter_map(|row| match row {
+                Row::Fields {
+                    key,
+                    values,
+                    indent,
+                    ..
+                } if key != "ignore" && key != "total" && key != "skipped" => Some((
+                    *indent,
+                    key.as_str(),
+                    values.iter().map(String::as_str).collect(),
+                )),
+                _ => None,
+            })
+            .collect()
+    }
+
+    fn write_post(dir: &Path, stem: &str) {
+        std::fs::write(
+            dir.join(format!("{stem}{}", consts::SUFFIX)),
+            format!("# {stem}.post\n"),
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn folded_sibling_directories_keep_separate_tree_groups() {
+        let dir = scratch("folded-tree-groups");
+        let double = dir.join("a  b");
+        let single = dir.join("a b");
+        std::fs::create_dir(&double).unwrap();
+        std::fs::create_dir(&single).unwrap();
+        write_post(&double, "one");
+        write_post(&double, "three");
+        write_post(&single, "four");
+        write_post(&single, "two");
+        let report = list_no_ignore(&dir);
+        assert_eq!(
+            tree_rows(&report),
+            vec![
+                (2, "a b/", vec![]),
+                (4, "one", vec!["post"]),
+                (4, "three", vec!["post"]),
+                (2, "a b/", vec![]),
+                (4, "four", vec!["post"]),
+                (4, "two", vec!["post"]),
+            ]
+        );
+        assert!(report.rows.iter().any(|row| match row {
+            Row::Fields { key, values, .. } => {
+                key == "total" && values.first().map(String::as_str) == Some("4")
+            }
+            _ => false,
+        }));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn list_tree_is_relative_to_the_literal_requested_dir() {
+        let parent = scratch("literal-root");
+        let dir = parent.join("room ");
+        std::fs::create_dir(&dir).unwrap();
+        write_post(&dir, "one");
+        let report = list_no_ignore(&dir);
+        assert_eq!(tree_rows(&report), vec![(2, "one", vec!["post"])]);
+        let _ = std::fs::remove_dir_all(&parent);
+    }
+
+    #[test]
+    fn relative_parts_skip_leading_curdir_and_keep_trailing_space_dir() {
+        let trailing = PathBuf::from("room ").join("one.agent-besties.md");
+        let (dirs, name) = fsx::walk::relative_native_parts(&trailing, Path::new("room "))
+            .expect("trailing-space DIR");
+        assert!(dirs.is_empty());
+        assert_eq!(name, OsString::from("one.agent-besties.md"));
+
+        let (dirs, name) = fsx::walk::relative_native_parts(
+            Path::new("./-/note.agent-besties.md"),
+            Path::new("-"),
+        )
+        .expect("dash DIR vs ./- file");
+        assert!(dirs.is_empty(), "extra dir level: {dirs:?}");
+        assert_eq!(name, OsString::from("note.agent-besties.md"));
+
+        let (dirs, name) = fsx::walk::relative_native_parts(
+            Path::new("-/note.agent-besties.md"),
+            Path::new("./-"),
+        )
+        .expect("./- DIR vs - file");
+        assert!(dirs.is_empty(), "extra dir level: {dirs:?}");
+        assert_eq!(name, OsString::from("note.agent-besties.md"));
     }
 }

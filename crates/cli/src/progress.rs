@@ -44,7 +44,7 @@ pub struct Progress {
 /// Build the progress sink for this invocation.
 ///
 /// `active` is the CLI's per-command decision (the traversing commands:
-/// `list`, `read-notification`, `check-state`, `state`). The sink is `None`
+/// `list`, `read-notification`, `check-state`, `state`, `profile`, `brief`). The sink is `None`
 /// unless `active` and stderr is a TTY; the handle is always returned and
 /// simply writes nothing when no line was ever drawn.
 pub fn make(active: bool) -> (Option<ProgressFn>, Progress) {

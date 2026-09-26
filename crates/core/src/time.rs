@@ -205,7 +205,10 @@ pub fn until(now: Time, secs: i64) -> Result<Time, Fault> {
 }
 
 /// Render TIME (§2.8.1): manual zero padding through the chrono
-/// accessors — no strftime padding involved.
+/// accessors — no strftime padding involved. Chrono stores a leap
+/// second as `second() == 59` with `nanosecond() >= 1_000_000_000`;
+/// the printed second uses that representation so an accepted `:60`
+/// is rewritten as `:60`, not the preceding non-leap second.
 pub fn format(t: Time) -> String {
     format!(
         "{:04}-{:02}-{:02}T{:02}:{:02}:{:02}Z",
@@ -214,7 +217,7 @@ pub fn format(t: Time) -> String {
         t.day(),
         t.hour(),
         t.minute(),
-        t.second()
+        t.second() + t.nanosecond() / 1_000_000_000
     )
 }
 
@@ -297,6 +300,34 @@ mod tests {
         assert!(parse("2026-09-17T09:12").is_err(), "too short");
         assert!(parse("").is_err());
         assert!(parse("not-a-time").is_err());
+    }
+
+    #[test]
+    fn rfc3339_leap_second_preserves_represented_second() {
+        // Legal RFC3339 leap second must round-trip as :60, not :59.
+        assert_eq!(
+            format(parse("2016-12-31T23:59:60Z").unwrap()),
+            "2016-12-31T23:59:60Z"
+        );
+        // Fractional flooring drops subseconds but keeps the leap second.
+        assert_eq!(
+            format(parse("2016-12-31T23:59:60.750Z").unwrap()),
+            "2016-12-31T23:59:60Z"
+        );
+        // Offset form of the same instant normalizes to UTC Z.
+        assert_eq!(
+            format(parse("2017-01-01T00:59:60+01:00").unwrap()),
+            "2016-12-31T23:59:60Z"
+        );
+        // The preceding ordinary second stays a distinct represented second.
+        assert_eq!(
+            format(parse("2016-12-31T23:59:59Z").unwrap()),
+            "2016-12-31T23:59:59Z"
+        );
+        assert_eq!(
+            format(parse("2016-12-31T23:59:59.750Z").unwrap()),
+            "2016-12-31T23:59:59Z"
+        );
     }
 
     #[test]

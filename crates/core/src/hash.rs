@@ -8,7 +8,7 @@
 //!   table strictly top to bottom; the state is derived from that order
 //!   alone.
 
-use std::fs::File;
+use std::fs::OpenOptions;
 use std::io::{self, Read};
 use std::path::{Path, PathBuf};
 
@@ -51,13 +51,13 @@ fn hex_encode(bytes: &[u8]) -> String {
     out
 }
 
-/// Read a target file exactly once (§4.4.2): the same bytes feed the
+/// Read a regular target file exactly once (§4.4.2): the same bytes feed the
 /// hasher and, when the target is within `MAX_TARGET_BYTES`, the in-memory
 /// content. Over the limit, the remaining bytes are streamed to the hasher
 /// with no size cap and `content` is `None`. Read errors propagate as the
 /// raw [`io::Error`] — callers embed `{err}` in `E-ENTRY-TARGET`.
 pub fn read_target(path: &Path) -> Result<Target, io::Error> {
-    let mut file = File::open(path)?;
+    let mut file = crate::fsx::open_regular(path, OpenOptions::new().read(true))?;
     let mut hasher = Sha256::new();
     let mut chunk = vec![0u8; HASH_CHUNK_SIZE];
     // In-memory cap: MAX_TARGET_BYTES + 1. Reading the extra byte is how
@@ -275,7 +275,7 @@ pub fn verify(brief_path: &Path, entry: &Entry) -> Verification {
         Err(err) if err.kind() == io::ErrorKind::NotFound => {
             return Verification {
                 diagnostics: vec![Diagnostic::new("W-ENTRY-STALE", entry.head_line)
-                    .with("title", names::display_text(&entry.title))
+                    .with("title", entry.title.clone())
                     .with("reason", "target missing")],
                 ..Verification::empty("stale", Some("target missing"))
             };
@@ -283,7 +283,7 @@ pub fn verify(brief_path: &Path, entry: &Entry) -> Verification {
         Err(err) => {
             return Verification {
                 diagnostics: vec![Diagnostic::new("E-ENTRY-TARGET", path_prop.line)
-                    .with("title", names::display_text(&entry.title))
+                    .with("title", entry.title.clone())
                     .with("target", names::display_text(&normalized))
                     .with("err", err.to_string())],
                 ..Verification::empty("unchecked", Some("target unreadable"))
@@ -336,7 +336,7 @@ pub fn verify(brief_path: &Path, entry: &Entry) -> Verification {
         return Verification {
             target: Some(target),
             diagnostics: vec![Diagnostic::new("W-ENTRY-STALE", entry.head_line)
-                .with("title", names::display_text(&entry.title))
+                .with("title", entry.title.clone())
                 .with("reason", "regex not found")],
             ..Verification::empty("stale", Some("regex not found"))
         };
@@ -378,7 +378,7 @@ pub fn verify(brief_path: &Path, entry: &Entry) -> Verification {
                     content_span,
                     groups,
                     diagnostics: vec![Diagnostic::new("W-ENTRY-SHIFTED", entry.head_line)
-                        .with("title", names::display_text(&entry.title))
+                        .with("title", entry.title.clone())
                         .with("target", names::display_text(&normalized))],
                 }
             }

@@ -25,16 +25,21 @@ jobs:
           components: rustfmt, clippy
 
       - name: Format check
-        run: cargo fmt --all -- --check
+        run: cargo fmt -p agent-coexist -p coexist-core -- --check
 
       - name: Clippy
-        run: cargo clippy --workspace --all-targets -- -D warnings
+        run: cargo clippy --workspace --all-targets --locked -- -D warnings
 
       - name: Tests
-        run: cargo test --workspace --release
+        run: cargo test --workspace --release --locked
+
+      # vendor/ignore is excluded from the workspace, so product tests do
+      # not cover the pinned patch. Run its library tests separately.
+      - name: Vendor ignore library tests
+        run: cargo test --manifest-path vendor/ignore/Cargo.toml --lib --release --locked --target-dir target/vendor-check
 
       - name: Release build
-        run: cargo build --release
+        run: cargo build --release --locked
 
       - name: Install into an isolated prefix
         shell: bash

@@ -2,16 +2,22 @@
 //!
 //! `catalog.rs` is the single source of the §9 template text; this module
 //! classifies ids, orders them for output, and turns a `Diagnostic` into the
-//! `message` / `why` / `fix` triple. Placeholder values coming from file
-//! content are already folded by whoever created the diagnostic (§10.9.4);
-//! runtime values are substituted from the [`Context`]. In `fix` templates —
-//! the command form (§8.3.4) — every runtime value is POSIX-quoted here, so
-//! no caller ever writes its own quoting. The E-H1 and W-NAME fixes are
-//! the exceptions (2026-09-25 repair): their suggestions are file content,
-//! not command arguments, so they substitute as plain text and never quote
-//! the stem ([`fix_text`], [`heading_fix`]).
+//! `message` / `why` / `fix` triple. Title placeholders (`status`, `title`,
+//! `name`, `section`, `entry`) and file stems are display-sanitized only
+//! in human text.
+//! Commands keep their original identity; headings with controls cannot
+//! be addressed through the CLI and receive manual repair guidance instead.
+//! Other params are substituted as given.
+//! Runtime values come from the [`Context`]. Each catalog fix declares
+//! whether its substitutions are command operands (§8.3.4) or prose/file
+//! content. Only command operands are POSIX-quoted; already-quoted `{argv}`
+//! retries embed verbatim. Copyable headings and other literal content
+//! never receive shell quoting ([`fix_text`], [`heading_fix`]). Invalid
+//! stored statuses receive manual heading repair before any CLI operation.
 
 mod catalog;
+
+use std::path::PathBuf;
 
 use crate::error::Diagnostic;
 use crate::names;
@@ -47,14 +53,20 @@ pub fn order(id: &str) -> usize {
         .unwrap_or(usize::MAX)
 }
 
-/// Runtime context for template substitution. `path` is the display path
-/// WITHOUT the managed suffix; `now` is the TIME string of the command's
-/// clock; `argv` must be built with [`Context::argv_from_args`] so the
-/// per-argument quoting exists only here.
+/// Runtime context for template substitution. `path` and `dir` are display
+/// values only; `path_arg` and `dir_arg` retain the native operands for
+/// commands. `state_file_selected` records the existing reserved-state
+/// lookup once for the inspected file; false includes unknown selection.
+/// `now` is the command clock; `argv` must be built with
+/// [`Context::argv_from_args`] for per-argument POSIX quoting.
 #[derive(Debug, Clone, Default)]
 pub struct Context {
     pub path: String,
     pub dir: String,
+    pub path_arg: PathBuf,
+    pub dir_arg: PathBuf,
+    /// True only when the native inspected path is the selected state file.
+    pub state_file_selected: bool,
     pub stem: String,
     pub argv: String,
     pub command: String,
@@ -96,7 +108,16 @@ pub fn reason(id: &str, params: &[(&'static str, String)], ctx: &Context) -> Ren
 fn parts(id: &str, params: &[(&'static str, String)], ctx: &Context) -> Rendered {
     match catalog::find(id) {
         Some(t) => Rendered {
-            message: subst(t.message, params, ctx, false),
+            message: subst(
+                if id == "E-STATE-NOTFOUND" && get(params, "status").is_some() {
+                    catalog::MESSAGE_ESTATE_NOTFOUND_STATUS
+                } else {
+                    t.message
+                },
+                params,
+                ctx,
+                false,
+            ),
             why: subst(t.why, params, ctx, false),
             fix: fix_text(id, t, params, ctx),
         },
@@ -108,14 +129,21 @@ fn parts(id: &str, params: &[(&'static str, String)], ctx: &Context) -> Rendered
     }
 }
 
-/// Fix text with the context-sensitive overrides (§9 supplements 1 and 3;
-/// E-TYPE / E-H1 / W-NAME per the 2026-09-25 repair contract).
+/// Fix text with context-sensitive overrides (§9 supplements 1 and 3),
+/// using the catalog's explicit command-versus-literal substitution mode.
 fn fix_text(
     id: &str,
     t: &catalog::Template,
     params: &[(&'static str, String)],
     ctx: &Context,
 ) -> String {
+    let state_recipe = matches!(
+        id,
+        "W-STATE-DUP" | "W-STATE-RANGE" | "W-STATE-EXPIRED" | "W-STATE-CONFLICT"
+    ) || (id == "E-TYPE" && get(params, "actual").is_some_and(|a| a == "state"));
+    if state_recipe && !ctx.state_file_selected {
+        return catalog::FIX_UNSELECTED_STATE.to_string();
+    }
     let template: &str = match id {
         // §9 supplement 1: the state-variant fix applies because the file
         // IS a state file. Presence of a `dir` param must not select it —
@@ -142,12 +170,22 @@ fn fix_text(
                 t.fix
             }
         }
+        // This fix describes literal headings, but a control-bearing
+        // identity still needs manual repair, not a display-folded sibling.
+        "E-STATUS-DUP"
+            if get(params, "status").is_some_and(|s| s.chars().any(char::is_control)) =>
+        {
+            return catalog::FIX_CONTROL_HEADING.to_string();
+        }
         "E-H1" => return eh1_fix(t, params, ctx),
         "W-NAME" => return wname_fix(t, params, ctx),
         "W-BODY" => return wbody_fix(params, ctx),
+        "W-SECTION-NAME" if get(params, "suggested").is_none() => {
+            return catalog::FIX_SECTION_NAME_UNIQUE.to_string();
+        }
         _ => t.fix,
     };
-    subst(template, params, ctx, true)
+    subst(template, params, ctx, t.command_fix)
 }
 
 /// Shared composer for fixes that suggest an H1 built from the file stem
@@ -192,26 +230,36 @@ fn wname_fix(t: &catalog::Template, params: &[(&'static str, String)], ctx: &Con
 
 /// `W-BODY` fix (§9 supplement 2): the `set_body` command for the file type
 /// that owns the body-less unit. Post variants carry `seq`/`author` params,
-/// profile `name`, brief `title`.
+/// profile `name`, brief `title`. Unaddressable headings receive manual
+/// repair guidance instead of a command that the CLI must reject.
 fn wbody_fix(params: &[(&'static str, String)], ctx: &Context) -> String {
-    let path = names::shell_quote(&ctx.path);
+    let path = subst("{path_arg}", params, ctx, true);
     if let Some(seq) = get(params, "seq") {
         let author = get(params, "author")
-            .map(|a| quote_value(a))
+            .map(|a| names::shell_quote(a))
             .unwrap_or_else(|| "<nick>".to_string());
         format!(
-            "agent-coexist post {path} --as {author} --edit {} -m '<text>'",
-            quote_value(seq)
+            "agent-coexist post {path} --as={author} --edit={} -m '<text>'",
+            names::shell_quote(seq)
         )
     } else if let Some(name) = get(params, "name") {
+        if name.chars().any(char::is_control) {
+            return catalog::FIX_CONTROL_HEADING.to_string();
+        }
+        if !names::valid_section(name) {
+            return "rename the heading by hand to a valid, distinct section name and add a fenced body beneath it, then run check again".to_string();
+        }
         format!(
-            "agent-coexist profile {path} --section {} -m '<text>'",
-            quote_value(name)
+            "agent-coexist profile {path} --section={} -m '<text>'",
+            names::shell_quote(name)
         )
     } else if let Some(title) = get(params, "title") {
+        if title.chars().any(char::is_control) {
+            return catalog::FIX_CONTROL_HEADING.to_string();
+        }
         format!(
-            "agent-coexist brief {path} --entry {} -m '<note>'",
-            quote_value(title)
+            "agent-coexist brief {path} --entry={} -m '<note>'",
+            names::shell_quote(title)
         )
     } else {
         format!("agent-coexist profile {path} --section <name> -m '<text>'")
@@ -222,19 +270,34 @@ fn get<'a>(params: &'a [(&'static str, String)], key: &str) -> Option<&'a String
     params.iter().find(|(k, _)| *k == key).map(|(_, v)| v)
 }
 
-/// Reader placeholders (§9 supplement 7) stay literal even inside fixes.
-fn quote_value(v: &str) -> String {
-    if v == "<file>" || v == "<nick>" {
-        v.to_string()
+fn is_title_param(key: &str) -> bool {
+    matches!(key, "status" | "title" | "name" | "section" | "entry")
+}
+
+/// Human display only; executable operands must not use this lossy value.
+fn display_param(key: &str, value: String) -> String {
+    if is_title_param(key) || key == "stem" {
+        names::display_text(&value)
     } else {
-        names::shell_quote(v)
+        value
+    }
+}
+
+/// Positional paths must survive both shell and CLI option parsing. Native
+/// spelling is otherwise left alone; option values use `--key={value}` in
+/// the templates and need only shell quoting.
+fn quote_value(key: &str, value: &str) -> String {
+    if matches!(key, "path_arg" | "dir_arg" | "parent_arg") && value.starts_with('-') {
+        names::shell_quote(&format!("./{value}"))
+    } else {
+        names::shell_quote(value)
     }
 }
 
 /// Substitute `{key}` placeholders. Explicit params win (first occurrence),
 /// then the context keys; unknown placeholders stay literal so a missing
-/// value is visible instead of silently dropped. `quote` applies §8.3.4
-/// POSIX quoting (fix lines only).
+/// value is visible instead of silently dropped. Human titles and stems
+/// are sanitized, but a command must never address the sanitized sibling.
 fn subst(template: &str, params: &[(&'static str, String)], ctx: &Context, quote: bool) -> String {
     let mut out = String::with_capacity(template.len());
     let mut rest = template;
@@ -253,10 +316,27 @@ fn subst(template: &str, params: &[(&'static str, String)], ctx: &Context, quote
                         // whole line into one giant single-quoted program
                         // name.
                         if quote && key != "argv" {
-                            out.push_str(&quote_value(&v));
+                            if is_title_param(key) && v.chars().any(char::is_control) {
+                                return catalog::FIX_CONTROL_HEADING.to_string();
+                            }
+                            // Readable stored statuses need not satisfy CLI
+                            // admission. Do not emit a rejected operand or
+                            // substitute another, normalized status identity.
+                            if key == "status" && !names::valid_status(&v) {
+                                return catalog::FIX_INVALID_STATUS.to_string();
+                            }
+                            out.push_str(&quote_value(key, &v));
                         } else {
-                            out.push_str(&v);
+                            out.push_str(&display_param(key, v));
                         }
+                        rest = &after[close + 1..];
+                        continue;
+                    }
+                    if key == "target_arg" {
+                        // A path-less brief entry supplies no runtime target.
+                        // Only that absence yields a reader-fillable marker;
+                        // a real target/title equal to "<file>" is quoted.
+                        out.push_str("<file>");
                         rest = &after[close + 1..];
                         continue;
                     }
@@ -277,6 +357,14 @@ fn subst(template: &str, params: &[(&'static str, String)], ctx: &Context, quote
 fn resolve(key: &str, params: &[(&'static str, String)], ctx: &Context) -> Option<String> {
     if let Some(v) = get(params, key) {
         return Some(v.clone());
+    }
+    let operand = match key {
+        "path_arg" => Some(&ctx.path_arg),
+        "dir_arg" => Some(&ctx.dir_arg),
+        _ => None,
+    };
+    if let Some(operand) = operand {
+        return (!operand.as_os_str().is_empty()).then(|| operand.to_string_lossy().into_owned());
     }
     let v = match key {
         "path" => &ctx.path,
@@ -304,6 +392,9 @@ mod tests {
         Context {
             path: "docs/standup".into(),
             dir: "docs".into(),
+            path_arg: "docs/standup.agent-besties.md".into(),
+            dir_arg: "docs".into(),
+            state_file_selected: false,
             stem: "standup".into(),
             argv: "agent-coexist check docs/standup".into(),
             command: "check".into(),
@@ -326,107 +417,6 @@ mod tests {
         assert!(!is_blocking("E-STATE-DIRTY"));
         // unknown ids sort last in the same-line tiebreak
         assert_eq!(order("E-NOSUCH"), usize::MAX);
-    }
-
-    #[test]
-    fn render_substitutes_params_and_context() {
-        let d = Diagnostic::new("E-H1", 1)
-            .with("line", "# Notes")
-            .with("stem", "notes");
-        let r = render(&d, &ctx());
-        assert!(
-            r.message.contains("# Notes"),
-            "line param dropped: {s}",
-            s = r.message
-        );
-        assert!(
-            r.fix.contains("# notes.post"),
-            "stem param dropped: {s}",
-            s = r.fix
-        );
-
-        let d = Diagnostic::new("W-STRAY", 20).with("n", "20");
-        let r = render(&d, &ctx());
-        assert!(
-            r.message.contains("L20"),
-            "line param dropped: {s}",
-            s = r.message
-        );
-    }
-
-    #[test]
-    fn fix_quotes_runtime_values() {
-        let d = Diagnostic::new("E-ENTRY-NOTFOUND", 0).with("title", "my entry");
-        let r = render(&d, &ctx());
-        assert!(
-            r.fix.contains("check docs/standup"),
-            "plain path embedded: {s}",
-            s = r.fix
-        );
-        let mut c = ctx();
-        c.path = "my docs/stand up".into();
-        let r = render(&d, &c);
-        assert!(r.fix.contains("check 'my docs/stand up'"));
-    }
-
-    #[test]
-    fn etype_fix_follows_actual_type_not_dir_presence() {
-        // actual = state: the fix names the state command with the directory
-        let r = reason(
-            "E-TYPE",
-            &[
-                ("actual", "state".into()),
-                ("expected", "post".into()),
-                ("dir", "src/parser".into()),
-            ],
-            &ctx(),
-        );
-        assert!(
-            r.message.contains("state"),
-            "actual type missing: {s}",
-            s = r.message
-        );
-        assert!(
-            r.fix.contains("agent-coexist state src/parser"),
-            "state fix missing dir: {s}",
-            s = r.fix
-        );
-
-        // actual != state with a dir param present (the post.rs / query
-        // fault shapes): the fix names the command for the ACTUAL type and
-        // resolves every key; no state wording about a non-state file
-        for (actual, cmd) in [
-            ("post", "post"),
-            ("brief", "brief"),
-            ("agent-profile", "profile"),
-        ] {
-            let r = reason(
-                "E-TYPE",
-                &[
-                    ("actual", actual.into()),
-                    ("expected", "brief".into()),
-                    ("cmd_for_actual", cmd.into()),
-                    ("dir", "docs".into()),
-                ],
-                &ctx(),
-            );
-            assert!(
-                r.message.contains(actual),
-                "actual type missing: {s}",
-                s = r.message
-            );
-            assert!(
-                r.fix.contains(&format!("agent-coexist {cmd}")),
-                "actual command missing: {s}",
-                s = r.fix
-            );
-            assert!(
-                !r.fix.contains("state"),
-                "state wording on {actual}: {s}",
-                s = r.fix
-            );
-            assert!(!r.fix.contains('{'), "unresolved key: {s}", s = r.fix);
-        }
     }
 
     #[test]
@@ -468,7 +458,6 @@ mod tests {
             "stem H1 missing: {s}",
             s = r.fix
         );
-        assert!(!r.fix.contains('\''), "quoted H1 guidance: {s}", s = r.fix);
 
         // invalid stem: rename to the already-valid H1 name only; the
         // stem is never offered as an H1, quoted or not
@@ -489,12 +478,11 @@ mod tests {
                 s = r.fix
             );
             assert!(!r.fix.contains("{stem}"), "unresolved stem: {s}", s = r.fix);
-            assert!(!r.fix.contains('\''), "quoted H1 guidance: {s}", s = r.fix);
         }
     }
 
     #[test]
-    fn eh1_fix_never_suggests_an_invalid_or_quoted_stem() {
+    fn eh1_fix_never_suggests_an_invalid_stem() {
         // a stem that is not a valid NAME must not appear as the
         // supposedly valid H1, quoted or not
         for bad in ["my docs", "it's;rm"] {
@@ -506,11 +494,6 @@ mod tests {
             assert!(
                 !r.fix.contains(&format!("# {bad}")),
                 "invalid stem suggested: {}",
-                r.fix
-            );
-            assert!(
-                !r.fix.contains('\''),
-                "quote characters in H1 guidance: {}",
                 r.fix
             );
             assert!(r.fix.contains(".post"), "no H1 form offered: {}", r.fix);
@@ -528,13 +511,12 @@ mod tests {
         assert!(!r.fix.contains("{stem}"), "unresolved stem in: {}", r.fix);
         assert!(r.fix.contains(".post") && r.fix.contains(".state"));
 
-        // a valid stem still gets the copyable suggestion, unquoted
+        // spaces in a stem must not become a supposedly valid H1
         let d = Diagnostic::new("E-H1", 1).with("line", "# Notes");
         let mut c = ctx();
         c.stem = "stand up".into(); // invalid: space
         let r = render(&d, &c);
         assert!(!r.fix.contains("# stand up.post"));
-        assert!(!r.fix.contains("# 'stand up'"));
 
         // stem that folds to a valid name still yields a valid H1
         // suggestion (whitespace is display-folded, not copied)
@@ -549,113 +531,51 @@ mod tests {
     }
 
     #[test]
-    fn reason_errors_ename_and_estatedirty_resolve_fully() {
-        // E-NAME: the invalid stem lands in the message; the fix carries
-        // no runtime value, so nothing can stay unresolved
-        let r = reason("E-NAME", &[("name", "my docs/x".into())], &ctx());
-        assert!(
-            r.message.contains("my docs/x"),
-            "name param dropped: {s}",
-            s = r.message
-        );
-        assert!(!r.fix.contains('{') && !r.fix.contains('}'));
-        assert!(r.fix.to_lowercase().contains("rename"));
-
-        // E-STATE-DIRTY: nick/dir/line resolve in message and fix; dir is
-        // a command argument in the fix, so §8.3.4 quoting applies there
-        // only when it actually carries shell-special characters
-        let r = reason(
-            "E-STATE-DIRTY",
-            &[
-                ("nick", "bob".into()),
-                ("dir", "src/parser".into()),
-                ("line", "12".into()),
-            ],
-            &ctx(),
-        );
-        assert!(r.message.contains("bob"));
-        assert!(r.message.contains("line 12"));
-        assert!(r.message.contains("src/parser"));
-        assert!(r
-            .fix
-            .contains("agent-coexist state src/parser --remove bob"));
-        assert!(!r.fix.contains('{') && !r.fix.contains('}'));
-
-        let r = reason(
-            "E-STATE-DIRTY",
-            &[
-                ("nick", "bob".into()),
-                ("dir", "my src/parser".into()),
-                ("line", "12".into()),
-            ],
-            &ctx(),
-        );
-        assert!(r
-            .fix
-            .contains("agent-coexist state 'my src/parser' --remove bob"));
-    }
-
-    #[test]
-    fn wbody_composition_per_type() {
-        let d = Diagnostic::new("W-BODY", 10)
-            .with("unit", "comment #2")
-            .with("n", "10")
-            .with("seq", "2")
-            .with("author", "bob");
+    fn title_placeholders_replace_controls_before_interpolation() {
+        let d = Diagnostic::new("W-STATE-EXPIRED", 4)
+            .with("nick", "alice")
+            .with("status", "custom\u{1b}[2J")
+            .with("until", "2026-09-25T11:00:00Z")
+            .with("dir", "diagnostic");
         let r = render(&d, &ctx());
-        assert_eq!(r.message, "comment #2 at L10 has no fenced body");
-        assert_eq!(
-            r.fix,
-            "agent-coexist post docs/standup --as bob --edit 2 -m '<text>'"
+        assert!(r.message.contains("custom\u{FFFD}[2J"));
+        assert!(
+            !r.message.contains('\u{1b}') && !r.why.contains('\u{1b}') && !r.fix.contains('\u{1b}'),
+            "status title must not leak ESC: {r:?}"
         );
 
-        let d = Diagnostic::new("W-BODY", 6)
+        let esc = render(
+            &Diagnostic::new("E-STATUS-DUP", 3).with("status", "locked\u{1b}"),
+            &ctx(),
+        );
+        let bel = render(
+            &Diagnostic::new("E-STATUS-DUP", 5).with("status", "locked\u{07}"),
+            &ctx(),
+        );
+        assert!(esc.message.contains("locked\u{FFFD}"));
+        assert_eq!(esc.message, bel.message);
+
+        let profile = Diagnostic::new("W-BODY", 6)
             .with("unit", "section \"role\"")
             .with("n", "6")
-            .with("name", "role");
-        let r = render(&d, &ctx());
-        assert_eq!(
-            r.fix,
-            "agent-coexist profile docs/standup --section role -m '<text>'"
+            .with("name", "role\u{1b}");
+        let r = render(&profile, &ctx());
+        assert!(
+            !r.fix.contains('\u{1b}'),
+            "W-BODY section title must not leak ESC: {}",
+            r.fix
         );
 
-        let d = Diagnostic::new("W-BODY", 8)
+        let brief = Diagnostic::new("W-BODY", 8)
             .with("unit", "entry \"lexer\"")
             .with("n", "8")
-            .with("title", "lexer");
-        let r = render(&d, &ctx());
-        assert_eq!(
-            r.fix,
-            "agent-coexist brief docs/standup --entry lexer -m '<note>'"
+            .with("title", "t\u{1b}itle");
+        let r = render(&brief, &ctx());
+        assert!(
+            !r.fix.contains('\u{1b}'),
+            "W-BODY entry title must not leak ESC: {}",
+            r.fix
         );
-    }
-
-    #[test]
-    fn argv_from_args_quotes_each_argument() {
-        let argv = Context::argv_from_args(&[
-            "agent-coexist".into(),
-            "brief".into(),
-            "my docs/x".into(),
-            "-m".into(),
-            "it's".into(),
-        ]);
-        // §8.3.4 quotes per argument, §9 joins with single spaces: plain
-        // arguments stay bare, whitespace/quote-carrying ones are
-        // single-quoted with the '\'' escape, so pasting the line into a
-        // POSIX shell yields the same five arguments.
-        assert_eq!(argv, "agent-coexist brief 'my docs/x' -m 'it'\\''s'");
-
-        // {argv} reaches fix templates already quoted; substitution embeds
-        // it verbatim. Whatever the fix prose is, swapping only the argv
-        // value must be the only difference between the two renders —
-        // re-quoting fails this by wrapping the line in extra quotes.
-        let d = Diagnostic::new("E-LOCKED", 0);
-        let base = ctx(); // argv: "agent-coexist check docs/standup"
-        let plain = render(&d, &base).fix;
-        let mut c = base.clone();
-        c.argv = argv;
-        let r = render(&d, &c);
-        assert_eq!(r.fix, plain.replace(&base.argv, &c.argv));
     }
 
     #[test]

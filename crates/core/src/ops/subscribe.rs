@@ -56,7 +56,7 @@ fn step(
     let subs = &doc.post.subscribers;
     let mut done = Done::empty();
     if p.cancel {
-        cancel_step(p, &doc, &bytes, subs, &mut done)
+        cancel_step(p, &doc, &bytes, subs, ctx.now, &mut done)
     } else {
         add_step(p, &doc, &bytes, subs, &mut done)
     }
@@ -64,11 +64,14 @@ fn step(
 
 /// `--cancel` removes only `--as` (§3.2.4): removing the last subscriber
 /// deletes the single property line (never reported as `removed-lines`).
+/// Non-authoritative duplicate property bytes are kept; the subscribers
+/// row is taken from the document after that deletion.
 fn cancel_step(
     p: &SubscribeParams,
     doc: &doc::Document,
     bytes: &[u8],
     subs: &[String],
+    now: crate::Time,
     done: &mut Done,
 ) -> Result<(Mutation, Step), Fault> {
     if !subs.contains(&p.nick) {
@@ -95,7 +98,11 @@ fn cancel_step(
         }];
         match guarded_apply(bytes, splices, doc.kind.as_ref().map(doc::Kind::as_str))? {
             Applied::Bytes(new_bytes) => {
-                done.kv("subscribers", vec!["none".to_string()]);
+                let after = match doc::parse(new_bytes.clone(), &p.path, now) {
+                    Ok(parsed) => parsed.post.subscribers,
+                    Err(_) => Vec::new(),
+                };
+                done.kv("subscribers", subs_value(&after));
                 Ok((
                     Mutation::Write(new_bytes),
                     Step::Done(mem::replace(done, Done::empty())),
@@ -252,6 +259,47 @@ mod tests {
         assert_eq!(report.status, crate::report::Status::Error);
         assert_eq!(report.exit, 1);
         assert!(!target.exists());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    fn field_values(report: &Report, key: &str) -> Vec<Vec<String>> {
+        report
+            .rows
+            .iter()
+            .filter_map(|row| match row {
+                crate::report::Row::Fields { key: k, values, .. } if k == key => {
+                    Some(values.clone())
+                }
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn cancel_last_authoritative_reports_surviving_duplicate() {
+        let dir = scratch("dup-cancel");
+        let target = dir.join("foo.agent-besties.md");
+        std::fs::write(
+            &target,
+            b"# foo.post\n\n- subscribers: alice\n- subscribers: bob\n",
+        )
+        .unwrap();
+        let p = SubscribeParams {
+            path: target.clone(),
+            nick: "alice".to_string(),
+            cancel: true,
+        };
+        let now = time::parse("2026-09-25T12:00:00Z").unwrap();
+        let mut ctx = test_ctx(now);
+        let report = run(&mut ctx, &p).unwrap();
+        let bytes = std::fs::read(&target).unwrap();
+        let parsed = doc::parse(bytes.clone(), &target, now).unwrap();
+        assert_eq!(
+            field_values(&report, "subscribers"),
+            vec![subs_value(&parsed.post.subscribers)]
+        );
+        assert_eq!(parsed.post.subscribers, vec!["bob".to_string()]);
+        assert_eq!(bytes.as_slice(), b"# foo.post\n\n- subscribers: bob\n");
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

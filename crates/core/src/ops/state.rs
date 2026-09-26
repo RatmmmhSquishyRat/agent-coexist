@@ -4,9 +4,13 @@
 //! `text::apply` splices only — every untouched byte is preserved. The
 //! declare form computes conflicts strictly after the write, flush and lock
 //! release (§6.4.1); state writes are never functional-lock blocked
-//! (§6.4.3). Business failures come back as [`Report`]s; only usage-class
-//! faults (from [`time::until`]) and OS-level I/O faults propagate.
+//! (§6.4.3). A post-write conflict-scan I/O fault stays a warning on the
+//! successful write report — the committed mutation is not rolled back or
+//! reported unwritten. Business failures come back as [`Report`]s; only
+//! usage-class faults (from [`time::until`]) and write-path OS-level I/O
+//! faults propagate.
 
+use std::collections::HashMap;
 use std::path::Path;
 
 use crate::consts;
@@ -18,6 +22,7 @@ use crate::names;
 use crate::report::{Report, Status};
 use crate::text::{self, Span, Splice};
 use crate::time;
+use crate::types::is_reader_comment;
 use crate::Time;
 
 use super::context::{self, Ctx};
@@ -85,22 +90,6 @@ fn declare(ctx: &mut Ctx, p: &super::StateDeclare) -> Result<Report, Fault> {
 
     let result = match outcome {
         Ok(r) => r,
-        Err(Fault::Reason {
-            id: "E-FILE-MISSING",
-            mut params,
-        }) => {
-            // Should not happen with create: true; render honestly.
-            if !params.iter().any(|(k, _)| *k == "dir") {
-                params.push(("dir", parent_display(&p.dir)));
-            }
-            return Ok(reason_report(
-                &dctx,
-                "state",
-                &object,
-                "E-FILE-MISSING",
-                params,
-            ));
-        }
         Err(Fault::Reason { id, params }) => {
             return Ok(reason_report(&dctx, "state", &object, id, params));
         }
@@ -123,7 +112,7 @@ fn declare(ctx: &mut Ctx, p: &super::StateDeclare) -> Result<Report, Fault> {
             report.kv(
                 "set",
                 vec![
-                    p.status.clone(),
+                    names::display_text(&p.status),
                     p.nick.clone(),
                     format!("{}..{}", time::format(now), time::format(until)),
                 ],
@@ -132,7 +121,7 @@ fn declare(ctx: &mut Ctx, p: &super::StateDeclare) -> Result<Report, Fault> {
                 report.kv(
                     "cleaned",
                     vec![
-                        c.status,
+                        names::display_text(&c.status),
                         c.nick,
                         format!("{}..{}", time::format(c.start), time::format(c.until)),
                     ],
@@ -143,21 +132,39 @@ fn declare(ctx: &mut Ctx, p: &super::StateDeclare) -> Result<Report, Fault> {
 
     // Conflict scan strictly after write + flush + lock release (§6.4.1);
     // state writes are never functional-lock blocked (§6.4.3).
-    let scope = shared::collect(ctx, &p.dir, &default_walk_options());
+    let scope = match shared::collect(ctx, &p.dir, &default_walk_options()) {
+        Ok(scope) => scope,
+        Err(Fault::Io { path, source, .. }) => {
+            report.kv(
+                "scan",
+                vec![context::display_file(&path), source.to_string()],
+            );
+            report.warn();
+            return Ok(report);
+        }
+        Err(_) => {
+            report.kv("scan", vec![object.clone(), "failed".to_string()]);
+            report.warn();
+            return Ok(report);
+        }
+    };
     for dir in &scope.canonicalize_failed {
-        report.kv("canonicalize", vec![dir.clone(), "failed".to_string()]);
+        report.kv(
+            "canonicalize",
+            vec![context::object_of_dir(dir), "failed".to_string()],
+        );
         report.warn();
     }
     let conflicts = shared::conflicts_with(&scope, now, &p.nick);
     let mut has_conflict = false;
-    for c in &conflicts {
+    for (c, _) in &conflicts {
         report.kv(
             "conflict",
             vec![
-                c.status.clone(),
-                c.nick.clone(),
+                c.status.to_string(),
+                c.nick.to_string(),
                 format!("{}..{}", time::format(c.start), time::format(c.until)),
-                c.dir_display.clone(),
+                c.dir_display.to_string(),
             ],
         );
         has_conflict = true;
@@ -165,25 +172,31 @@ fn declare(ctx: &mut Ctx, p: &super::StateDeclare) -> Result<Report, Fault> {
     if has_conflict {
         report.warn();
     }
-    let mut tail: Vec<(String, &'static str, String)> = Vec::new();
+    let mut tail: Vec<(&Path, &'static str, String)> = Vec::new();
     for (dir, issue) in &scope.issues {
         match issue {
             shared::ScanIssue::Busy => {
-                tail.push((dir.clone(), "skipped", "busy".to_string()));
+                tail.push((dir.as_path(), "skipped", "busy".to_string()));
             }
             shared::ScanIssue::Blocking(id) => {
-                tail.push((dir.clone(), "skipped", (*id).to_string()));
+                tail.push((dir.as_path(), "skipped", (*id).to_string()));
             }
             shared::ScanIssue::Partial { id, line } => {
-                tail.push((dir.clone(), "partial", format!("{id} L{line}")));
+                tail.push((dir.as_path(), "partial", format!("{id} L{line}")));
             }
         }
     }
     for dir in &scope.unreadable_dirs {
-        tail.push((dir.clone(), "skipped", "unreadable".to_string()));
+        tail.push((dir.as_path(), "skipped", "unreadable".to_string()));
     }
-    tail.sort_by(|a, b| a.0.cmp(&b.0));
-    tail.dedup_by(|a, b| *a == *b);
+    tail.sort();
+    tail.dedup();
+    // Display paths may collide; rendering changes ordering, never identity.
+    let mut tail: Vec<_> = tail
+        .into_iter()
+        .map(|(dir, key, detail)| (context::object_of_dir(dir), key, detail))
+        .collect();
+    tail.sort();
     if !tail.is_empty() {
         for (dir, key, detail) in tail {
             report.kv(key, vec![dir, detail]);
@@ -296,9 +309,8 @@ fn plan_declare(
 
         if sec.clean_lines.is_empty() {
             if is_target {
-                let h2 = &d.sections[sec.section].head;
-                let after = past_terminator(source, h2);
-                let (at, prefix) = h2_insert_point(source, after);
+                let section = &d.sections[sec.section];
+                let (at, prefix) = h2_insert_point(source, section);
                 let mut bytes = prefix.as_bytes().to_vec();
                 bytes.extend_from_slice(&serialize_line(&merged));
                 splices.push(Splice {
@@ -359,7 +371,7 @@ fn remove(ctx: &mut Ctx, p: &super::StateRemove) -> Result<Report, Fault> {
     // creates files (§6.4.2, §7.3.2).
     let target = match fsx::walk::state_file(&p.dir)? {
         Some(f) => f,
-        None => return Ok(state_notfound(&dctx, &object, &p.nick)),
+        None => return Ok(state_notfound(&dctx, &object, &p.nick, p.status.as_deref())),
     };
     let now = ctx.now;
     let file_for_parse = target.clone();
@@ -408,7 +420,7 @@ fn remove(ctx: &mut Ctx, p: &super::StateRemove) -> Result<Report, Fault> {
             id: "E-FILE-MISSING",
             ..
         }) => {
-            return Ok(state_notfound(&dctx, &object, &p.nick));
+            return Ok(state_notfound(&dctx, &object, &p.nick, p.status.as_deref()));
         }
         Err(Fault::Reason { id, params }) => {
             return Ok(reason_report(&dctx, "state", &object, id, params));
@@ -419,7 +431,9 @@ fn remove(ctx: &mut Ctx, p: &super::StateRemove) -> Result<Report, Fault> {
 
     let mut report = Report::new("state", object.clone());
     match result.value {
-        RemoveOut::NotFound => return Ok(state_notfound(&dctx, &object, &p.nick)),
+        RemoveOut::NotFound => {
+            return Ok(state_notfound(&dctx, &object, &p.nick, p.status.as_deref()));
+        }
         RemoveOut::Dirty { line } => {
             // The nick still has a parseable declaration on a dirty line
             // of a selected section: point at the actual line for manual
@@ -449,14 +463,17 @@ fn remove(ctx: &mut Ctx, p: &super::StateRemove) -> Result<Report, Fault> {
                 report.kv(
                     "cleaned",
                     vec![
-                        c.status,
+                        names::display_text(&c.status),
                         c.nick,
                         format!("{}..{}", time::format(c.start), time::format(c.until)),
                     ],
                 );
             }
             for row in rows {
-                report.kv("removed", vec![row.status, p.nick.clone()]);
+                report.kv(
+                    "removed",
+                    vec![names::display_text(&row.status), p.nick.clone()],
+                );
                 if let Some((a, b)) = row.removed_lines {
                     report.kv("removed-lines", vec![format!("L{a}..L{b}")]);
                 }
@@ -583,10 +600,9 @@ fn plan_remove(
         }
         let mut survivors: Vec<(String, Time, Time)> = Vec::new();
         for e in sec.entries.iter().filter(|e| e.clean) {
-            if has_target && e.nick == nick {
-                continue; // the removal itself
-            }
             if !e.valid(now) {
+                // §6.4.2: expired selected-target declarations are
+                // recorded as cleaned before the removal itself.
                 cleaned.push(CleanedEntry {
                     status: sec.status.clone(),
                     nick: e.nick.clone(),
@@ -594,6 +610,9 @@ fn plan_remove(
                     until: e.until,
                 });
                 continue;
+            }
+            if has_target && e.nick == nick {
+                continue; // the removal itself
             }
             survivors.push((e.nick.clone(), e.start, e.until));
         }
@@ -661,7 +680,9 @@ fn plan_remove(
         return Ok(RemovePlan::NotFound);
     }
     let bytes = text::apply(source, splices)?;
-    let delete_file = is_state_skeleton(&bytes);
+    // Parsing already validated the H1. All splices start after it, so
+    // its following offset is unchanged and its grammar need not be repeated.
+    let delete_file = is_state_skeleton(&bytes[d.preamble.start..]);
     Ok(RemovePlan::Write {
         bytes,
         rows,
@@ -678,12 +699,16 @@ fn plan_remove(
 /// (§2.7.2 — a removal never sweeps unknown hand-written content).
 fn section_reduces_to_head(source: &[u8], clean: &[Span], span: &Span, head_end: usize) -> bool {
     let mut i = head_end.min(span.end);
+    let mut c = 0;
     while i < span.end {
         let content_end = line_content_end(source, i);
-        if !is_blank_content(&source[i..content_end])
-            && !clean.iter().any(|s| s.start <= i && content_end <= s.end)
-        {
-            return false;
+        if !is_blank_content(line_content(source, i, content_end)) {
+            while c < clean.len() && clean[c].start <= i && content_end > clean[c].end {
+                c += 1;
+            }
+            if !(c < clean.len() && clean[c].start <= i && content_end <= clean[c].end) {
+                return false;
+            }
         }
         i = if content_end < source.len() {
             content_end + 1
@@ -785,14 +810,14 @@ fn cmd_for_kind(kind: &str) -> &'static str {
     }
 }
 
-fn state_notfound(dctx: &diag::Context, object: &str, nick: &str) -> Report {
-    reason_report(
-        dctx,
-        "state",
-        object,
-        "E-STATE-NOTFOUND",
-        vec![("nick", nick.to_string()), ("dir", object.to_string())],
-    )
+fn state_notfound(dctx: &diag::Context, object: &str, nick: &str, status: Option<&str>) -> Report {
+    let mut params = Vec::with_capacity(2 + usize::from(status.is_some()));
+    params.push(("nick", nick.to_string()));
+    params.push(("dir", object.to_string()));
+    if let Some(status) = status {
+        params.push(("status", status.to_string()));
+    }
+    reason_report(dctx, "state", object, "E-STATE-NOTFOUND", params)
 }
 
 /// DIR validation for both forms (§6.4.1): must exist and be a directory;
@@ -806,7 +831,13 @@ fn check_dir(ctx: &Ctx, dir: &Path) -> Result<Option<Report>, Fault> {
             "state",
             &object,
             "E-DIR-MISSING",
-            vec![("dir", object.clone()), ("parent", parent_display(dir))],
+            vec![
+                ("dir", object.clone()),
+                (
+                    "parent_arg",
+                    context::parent_dir(dir).to_string_lossy().into_owned(),
+                ),
+            ],
         ))),
         Err(e) => Err(Fault::io("stat", dir.to_path_buf(), e)),
         Ok(md) if !md.is_dir() => Ok(Some(reason_report(
@@ -817,17 +848,13 @@ fn check_dir(ctx: &Ctx, dir: &Path) -> Result<Option<Report>, Fault> {
             vec![
                 ("path", object.clone()),
                 ("cmd", "state".to_string()),
-                ("parent", parent_display(dir)),
+                (
+                    "parent_arg",
+                    context::parent_dir(dir).to_string_lossy().into_owned(),
+                ),
             ],
         ))),
         Ok(_) => Ok(None),
-    }
-}
-
-fn parent_display(dir: &Path) -> String {
-    match dir.parent() {
-        Some(p) if !p.as_os_str().is_empty() => names::fold(&fsx::walk::display_path(p)),
-        _ => ".".to_string(),
     }
 }
 
@@ -867,13 +894,16 @@ fn serialize_line(entries: &[(String, Time, Time)]) -> Vec<u8> {
 /// order (§6.2.4, §6.4.1).
 fn merge_dupes(entries: Vec<(String, Time, Time)>) -> Vec<(String, Time, Time)> {
     let mut out: Vec<(String, Time, Time)> = Vec::new();
+    let mut at: HashMap<String, usize> = HashMap::new();
     for (nick, start, until) in entries {
-        if let Some(slot) = out.iter_mut().find(|m| m.0 == nick) {
+        if let Some(&idx) = at.get(&nick) {
+            let slot = &mut out[idx];
             if until > slot.2 {
                 slot.1 = start;
                 slot.2 = until;
             }
         } else {
+            at.insert(nick.clone(), out.len());
             out.push((nick, start, until));
         }
     }
@@ -893,12 +923,21 @@ fn line_content_end(source: &[u8], from: usize) -> usize {
     i
 }
 
-/// Blank line content (§1): empty or only U+0020 and tabs; a trailing `\r`
-/// of a CRLF terminator does not count.
-fn is_blank_content(mut c: &[u8]) -> bool {
-    if c.ends_with(b"\r") {
-        c = &c[..c.len() - 1];
+/// Bytes of the line starting at `start` up to `content_end` (`\n` or EOF),
+/// with a CRLF terminator's CR removed. A standalone CR is left in place
+/// as unknown content (§2.1.2).
+fn line_content(source: &[u8], start: usize, content_end: usize) -> &[u8] {
+    let c = &source[start..content_end];
+    if c.ends_with(b"\r") && content_end < source.len() && source[content_end] == b'\n' {
+        &c[..c.len() - 1]
+    } else {
+        c
     }
+}
+
+/// Blank line content (§1): empty or only U+0020 and tabs. A standalone
+/// CR is not a terminator and is not blank.
+fn is_blank_content(c: &[u8]) -> bool {
     c.iter().all(|&b| b == b' ' || b == b'\t')
 }
 
@@ -929,18 +968,28 @@ fn past_terminator(source: &[u8], span: &Span) -> usize {
 /// Insertion point after an H2 with no clean lines (§6.4.1): after the
 /// blank line following the H2, or right after the H2 terminator with a
 /// blank line added when there is none (or nothing follows at all).
-fn h2_insert_point(source: &[u8], after: usize) -> (usize, &'static str) {
+/// Only the chosen section is inspected; the next H2 is outside its bounds.
+/// Unterminated opaque body text stays after the insertion boundary. In
+/// particular, inserting before a lone CR never turns it into a CRLF or
+/// activates a previously opaque heading.
+fn h2_insert_point(source: &[u8], section: &doc::Section) -> (usize, &'static str) {
+    let source = &source[..section.span.end];
+    let after = past_terminator(source, &section.head);
     if after >= source.len() {
-        return (after, "\n");
+        let gap = if source.ends_with(b"\n") {
+            "\n"
+        } else {
+            "\n\n"
+        };
+        return (after, gap);
     }
     let content_end = line_content_end(source, after);
-    if is_blank_content(&source[after..content_end]) {
-        let past = if content_end < source.len() {
-            content_end + 1
+    if is_blank_content(line_content(source, after, content_end)) {
+        if content_end < source.len() {
+            (content_end + 1, "")
         } else {
-            content_end
-        };
-        (past, "")
+            (content_end, "\n")
+        }
     } else {
         (after, "\n")
     }
@@ -966,61 +1015,63 @@ fn preceded_by_blank(source: &[u8], start: usize) -> bool {
     is_blank_content(&source[ls..i])
 }
 
-/// Whether only H1, `> ` comment lines and blanks remain (§6.4.2): the
-/// file is deleted on the held lock.
+/// Whether only reader comments and blanks remain after the already
+/// validated H1 (§6.4.2): the file is deleted on the held lock.
 fn is_state_skeleton(bytes: &[u8]) -> bool {
-    let mut rest = bytes;
-    if rest.starts_with(b"\xEF\xBB\xBF") {
-        rest = &rest[3..];
-    }
-    let mut seen_h1 = false;
     let mut i = 0usize;
-    while i < rest.len() {
-        let content_end = line_content_end(rest, i);
-        let mut line = &rest[i..content_end];
-        if line.ends_with(b"\r") {
-            line = &line[..line.len() - 1];
+    while i < bytes.len() {
+        let content_end = line_content_end(bytes, i);
+        let line = line_content(bytes, i, content_end);
+        if !is_blank_content(line) && !is_reader_comment(line) {
+            return false;
         }
-        if !is_blank_content(line) {
-            if !seen_h1 {
-                if trim_blank(line) == b"# .state" {
-                    seen_h1 = true;
-                } else {
-                    return false;
-                }
-            } else if !line.starts_with(b"> ") {
-                return false;
-            }
-        }
-        i = if content_end < rest.len() {
+        i = if content_end < bytes.len() {
             content_end + 1
         } else {
             content_end
         };
     }
-    seen_h1
-}
-
-fn trim_blank(line: &[u8]) -> &[u8] {
-    let mut start = 0;
-    let mut end = line.len();
-    while start < end && (line[start] == b' ' || line[start] == b'\t') {
-        start += 1;
-    }
-    while end > start && (line[end - 1] == b' ' || line[end - 1] == b'\t') {
-        end -= 1;
-    }
-    &line[start..end]
+    true
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ops::{ProfileAction, ProfileParams, StateDeclare, StateRemove};
+    use crate::report::Row;
+    use std::path::PathBuf;
 
     const NOW: &str = "2026-09-17T10:00:00Z";
 
     fn now() -> Time {
         crate::time::parse(NOW).unwrap()
+    }
+
+    fn scratch(tag: &str) -> PathBuf {
+        let dir = std::env::temp_dir()
+            .join("coexist-state-tests")
+            .join(format!(
+                "{}-{}-{}",
+                tag,
+                std::process::id(),
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.as_nanos())
+                    .unwrap_or(0)
+            ));
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    fn row_values(report: &Report, key: &str) -> Vec<Vec<String>> {
+        report
+            .rows
+            .iter()
+            .filter_map(|r| match r {
+                Row::Fields { key: k, values, .. } if k == key => Some(values.clone()),
+                _ => None,
+            })
+            .collect()
     }
 
     fn plan(src: &str, nick: &str, filter: Option<&str>) -> Result<RemovePlan, Fault> {
@@ -1053,6 +1104,229 @@ mod tests {
             .iter()
             .map(|c| (c.status.as_str(), c.nick.as_str()))
             .collect()
+    }
+
+    #[test]
+    fn declaration_before_unterminated_next_heading_locks_the_requested_status() {
+        let dir = scratch("section-boundary");
+        let file = dir.join("state.agent-besties.md");
+        std::fs::write(&file, b"# .state\n\n## locked\n## observing").unwrap();
+        let mut ctx = context::test_ctx(now());
+        let report = run(
+            &mut ctx,
+            &StateParams::Declare(StateDeclare {
+                dir: dir.clone(),
+                nick: "alice".into(),
+                status: "locked".into(),
+                for_secs: Some(7200),
+            }),
+        )
+        .unwrap();
+        assert_eq!(report.exit, 0, "{report:?}");
+        assert_eq!(
+            std::fs::read(&file).unwrap(),
+            b"# .state\n\n## locked\n\nalice 2026-09-17T10:00:00Z..2026-09-17T12:00:00Z\n## observing"
+        );
+
+        let target = dir.join("probe.agent-besties.md");
+        let blocked = crate::ops::profile::run(
+            &mut ctx,
+            &ProfileParams {
+                path: target.clone(),
+                as_nick: Some("bob".into()),
+                section: Some("role".into()),
+                action: ProfileAction::SetBody("dev".into()),
+            },
+        )
+        .unwrap();
+        assert_eq!(blocked.status, Status::Error, "{blocked:?}");
+        assert_eq!(blocked.exit, 3, "{blocked:?}");
+        assert!(!target.exists());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn removing_last_entry_preserves_cr_tainted_reader_comment() {
+        let dir = scratch("cr-comment");
+        let file = dir.join("state.agent-besties.md");
+        std::fs::write(
+            &file,
+            concat!(
+                "# .state\n\n> preserve\rthis\n\n## locked\n",
+                "alice 2026-09-17T09:00:00Z..2026-09-17T12:00:00Z\n",
+            ),
+        )
+        .unwrap();
+        let report = run(
+            &mut context::test_ctx(now()),
+            &StateParams::Remove(StateRemove {
+                dir: dir.clone(),
+                nick: "alice".into(),
+                as_nick: None,
+                status: None,
+            }),
+        )
+        .unwrap();
+        assert_eq!(report.exit, 0, "{report:?}");
+        assert_eq!(
+            std::fs::read(&file).unwrap(),
+            b"# .state\n\n> preserve\rthis\n\n"
+        );
+        assert!(row_values(&report, "deleted").is_empty());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn removing_last_entry_deletes_skeleton_with_unicode_h1_padding() {
+        let dir = scratch("h1-padding");
+        let file = dir.join("state.agent-besties.md");
+        std::fs::write(
+            &file,
+            concat!(
+                "# .state\u{a0}\n\n## observing\n",
+                "alice 2026-09-17T09:00:00Z..2026-09-17T12:00:00Z\n",
+            ),
+        )
+        .unwrap();
+        let report = run(
+            &mut context::test_ctx(now()),
+            &StateParams::Remove(StateRemove {
+                dir: dir.clone(),
+                nick: "alice".into(),
+                as_nick: None,
+                status: None,
+            }),
+        )
+        .unwrap();
+        assert_eq!(report.exit, 0, "{report:?}");
+        assert!(!file.exists());
+        assert_eq!(row_values(&report, "deleted").len(), 1);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn state_write_reports_sanitize_retained_status_titles_only_for_display() {
+        let dir = scratch("status-display");
+        let file = dir.join("state.agent-besties.md");
+        std::fs::write(
+            &file,
+            concat!(
+                "# .state\n\n## custom\x1b[2J\n",
+                "alice 2026-09-17T09:00:00Z..2026-09-17T11:00:00Z, ",
+                "bob 2026-09-17T08:00:00Z..2026-09-17T09:30:00Z\n",
+                "keep this note\n",
+            ),
+        )
+        .unwrap();
+        let declared = run(
+            &mut context::test_ctx(now()),
+            &StateParams::Declare(StateDeclare {
+                dir: dir.clone(),
+                nick: "carol".into(),
+                status: "observing".into(),
+                for_secs: Some(7200),
+            }),
+        )
+        .unwrap();
+        assert_eq!(declared.exit, 0, "{declared:?}");
+        assert_eq!(
+            row_values(&declared, "cleaned"),
+            vec![vec![
+                "custom\u{fffd}[2J".to_string(),
+                "bob".to_string(),
+                "2026-09-17T08:00:00Z..2026-09-17T09:30:00Z".to_string(),
+            ]]
+        );
+        assert!(std::fs::read(&file).unwrap().starts_with(
+            concat!(
+                "# .state\n\n## custom\x1b[2J\n",
+                "alice 2026-09-17T09:00:00Z..2026-09-17T11:00:00Z\n",
+                "keep this note\n",
+            )
+            .as_bytes()
+        ));
+
+        let removed = run(
+            &mut context::test_ctx(time::parse("2026-09-17T11:00:00Z").unwrap()),
+            &StateParams::Remove(StateRemove {
+                dir: dir.clone(),
+                nick: "alice".into(),
+                as_nick: Some("carol".into()),
+                status: None,
+            }),
+        )
+        .unwrap();
+        assert_eq!(removed.exit, 0, "{removed:?}");
+        assert_eq!(
+            row_values(&removed, "cleaned"),
+            vec![vec![
+                "custom\u{fffd}[2J".to_string(),
+                "alice".to_string(),
+                "2026-09-17T09:00:00Z..2026-09-17T11:00:00Z".to_string(),
+            ]]
+        );
+        assert_eq!(
+            row_values(&removed, "removed"),
+            vec![vec!["custom\u{fffd}[2J".to_string(), "alice".to_string()]]
+        );
+        assert_eq!(
+            row_values(&removed, "removed-other"),
+            vec![vec!["alice".to_string()]]
+        );
+        assert!(std::fs::read(&file)
+            .unwrap()
+            .starts_with(b"# .state\n\n## custom\x1b[2J\nkeep this note\n"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn declare_keeps_the_write_when_post_write_conflict_scan_hits_a_fatal_ignore() {
+        let dir = scratch("declare-scan-fatal");
+        std::fs::write(dir.join(".ignore"), "{broken\n").unwrap();
+        let child = dir.join("child");
+        std::fs::create_dir(&child).unwrap();
+        std::fs::write(
+            child.join("state.agent-besties.md"),
+            concat!(
+                "# .state\n\n## locked\n",
+                "alice 2026-09-25T11:00:00Z..2026-09-25T14:00:00Z\n",
+            ),
+        )
+        .unwrap();
+        let mut ctx = context::test_ctx(time::parse("2026-09-25T12:00:00Z").unwrap());
+        let report = run(
+            &mut ctx,
+            &StateParams::Declare(StateDeclare {
+                dir: dir.clone(),
+                nick: "bob".into(),
+                status: "observing".into(),
+                for_secs: None,
+            }),
+        )
+        .expect("committed write must not fail as if unwritten");
+        assert_eq!(report.exit, 0, "{report:?}");
+        assert_eq!(report.status, Status::Warn);
+        let set = row_values(&report, "set");
+        assert_eq!(set.len(), 1);
+        assert_eq!(set[0][0], "observing");
+        assert_eq!(set[0][1], "bob");
+        assert!(
+            row_values(&report, "skipped")
+                .iter()
+                .all(|row| { row.get(1).map(String::as_str) != Some("unreadable") }),
+            "must not label the readable root unreadable: {report:?}"
+        );
+        let scans = row_values(&report, "scan");
+        assert_eq!(scans.len(), 1, "{report:?}");
+        assert_eq!(scans[0][0], context::display_file(&dir.join(".ignore")));
+        assert_ne!(scans[0][1], "unreadable");
+        assert!(!scans[0][1].is_empty());
+        let written = std::fs::read_to_string(dir.join("state.agent-besties.md")).unwrap();
+        assert!(
+            written.contains("bob 2026-09-25T12:00:00Z..2026-09-25T20:00:00Z"),
+            "committed observing line missing: {written:?}"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     // -- E-STATE-DIRTY: honest refusal before any splice --
@@ -1273,5 +1547,123 @@ mod tests {
                 "bob 2026-09-17T09:00:00Z..2026-09-17T13:00:00Z, junk\n",
             )
         );
+    }
+
+    #[test]
+    fn opaque_cr_heading_cannot_capture_a_declared_lock() {
+        let dir = scratch("opaque-cr-heading");
+        let file = dir.join("state.agent-besties.md");
+        std::fs::write(&file, b"# .state\n\n## locked\n## observing\r").unwrap();
+        let mut ctx = context::test_ctx(now());
+        let report = run(
+            &mut ctx,
+            &StateParams::Declare(StateDeclare {
+                dir: dir.clone(),
+                nick: "alice".into(),
+                status: "locked".into(),
+                for_secs: Some(7200),
+            }),
+        )
+        .unwrap();
+        assert_eq!(report.exit, 0, "{report:?}");
+        let stored = std::fs::read(&file).unwrap();
+        assert!(stored.ends_with(b"## observing\r"));
+        let parsed = doc::parse(stored, &file, now()).unwrap();
+        assert_eq!(
+            parsed
+                .state
+                .iter()
+                .flat_map(|section| section
+                    .entries
+                    .iter()
+                    .map(move |entry| { (section.status.as_str(), entry.nick.as_str()) }))
+                .collect::<Vec<_>>(),
+            vec![("locked", "alice")]
+        );
+
+        let target = dir.join("probe.agent-besties.md");
+        let blocked = crate::ops::profile::run(
+            &mut ctx,
+            &ProfileParams {
+                path: target.clone(),
+                as_nick: Some("bob".into()),
+                section: Some("role".into()),
+                action: ProfileAction::SetBody("dev".into()),
+            },
+        )
+        .unwrap();
+        assert_eq!(blocked.status, Status::Error, "{blocked:?}");
+        assert_eq!(blocked.exit, 3, "{blocked:?}");
+        assert!(!target.exists());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn remove_preserves_lone_cr_and_keeps_section() {
+        let mut src = concat!(
+            "# .state\n",
+            "\n",
+            "## locked\n",
+            "\n",
+            "alice 2026-09-17T09:00:00Z..2026-09-17T12:00:00Z\n",
+        )
+        .as_bytes()
+        .to_vec();
+        src.push(b'\r');
+        match plan_remove(
+            &src,
+            Path::new("state.agent-besties.md"),
+            now(),
+            "alice",
+            None,
+        )
+        .unwrap()
+        {
+            RemovePlan::Write {
+                bytes,
+                rows,
+                cleaned,
+                delete_file,
+            } => {
+                assert!(!delete_file);
+                assert!(cleaned.is_empty());
+                assert_eq!(rows.len(), 1);
+                assert_eq!(rows[0].status, "locked");
+                assert_eq!(rows[0].removed_lines, None);
+                assert!(bytes.contains(&b'\r'));
+                assert!(!bytes.windows(5).any(|w| w == b"alice"));
+                assert!(bytes.windows(10).any(|w| w == b"## locked\n"));
+            }
+            other => panic!("expected a write plan, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn remove_reports_cleaned_for_expired_selected_target() {
+        let src = concat!(
+            "# .state\n",
+            "\n",
+            "## locked\n",
+            "\n",
+            "alice 2026-09-17T09:00:00Z..2026-09-17T09:30:00Z\n",
+        );
+        match plan(src, "alice", None).unwrap() {
+            RemovePlan::Write {
+                rows,
+                cleaned,
+                delete_file,
+                ..
+            } => {
+                assert!(delete_file);
+                assert_eq!(rows.len(), 1);
+                assert_eq!(rows[0].status, "locked");
+                assert_eq!(cleaned.len(), 1);
+                assert_eq!(cleaned[0].status, "locked");
+                assert_eq!(cleaned[0].nick, "alice");
+                assert_eq!(time::format(cleaned[0].start), "2026-09-17T09:00:00Z");
+                assert_eq!(time::format(cleaned[0].until), "2026-09-17T09:30:00Z");
+            }
+            other => panic!("expected a write plan, got {other:?}"),
+        }
     }
 }

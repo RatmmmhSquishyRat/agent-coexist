@@ -4,8 +4,8 @@
 //! collaboration files (`*.agent-besties.md`). It implements the lock
 //! protocol of spec §10.2:
 //!
-//! * reads: open (read-only) → shared lock → read all bytes (bounded by
-//!   `MAX_MANAGED_FILE_BYTES`) → release. Never reads without holding the
+//! * reads: open a regular file (read-only) → shared lock → read all bytes
+//!   (bounded by `MAX_MANAGED_FILE_BYTES`) → release. Never reads without holding the
 //!   lock.
 //! * writes: open (read+write) or `create_new` → exclusive lock → same-file
 //!   identity re-check → read all bytes → run the caller's plan → identity
@@ -108,7 +108,7 @@ pub fn read(path: &Path, wait_ms: u64, cancel: Option<&AtomicBool>) -> Result<Ve
                 return Err(Fault::Cancelled);
             }
         }
-        match File::open(path) {
+        match open_regular(path, OpenOptions::new().read(true)) {
             Ok(file) => match file.try_lock_shared() {
                 Ok(()) => match read_all_bounded(&file) {
                     Ok(bytes) => {
@@ -165,10 +165,17 @@ pub fn read_stable_optional(
                 return Err(Fault::Cancelled);
             }
         }
-        match File::open(path) {
+        match open_regular(path, OpenOptions::new().read(true)) {
             Err(e) if e.kind() == io::ErrorKind::NotFound => {
-                // Real absence requires the parent directory to still be valid;
-                // a deleted parent is an error, not "absent".
+                // Following a dangling symlink also returns NotFound. A
+                // surviving entry (including a replacement) is not absence.
+                if !matches!(
+                    std::fs::symlink_metadata(path),
+                    Err(error) if error.kind() == io::ErrorKind::NotFound
+                ) {
+                    return Err(Fault::io("open", path.to_path_buf(), e));
+                }
+                // A deleted parent is an error, not "absent".
                 return match parent_is_valid_dir(path) {
                     Ok(true) => Ok(None),
                     Ok(false) => Err(Fault::io("open", path.to_path_buf(), e)),
@@ -304,8 +311,9 @@ struct CreatedDir {
 ///   deadline, creating forms take over (`created = true`), non-creating
 ///   forms get `Diagnostics([E-H1])`;
 /// * same-file identity re-check after locking, with bounded reopen
-///   (`OPEN_RETRIES`, only identity changes count), and again after a
-///   successful plan before Write/Delete; a changed path then gets E-LOCKED;
+///   (`OPEN_RETRIES`, shared with create collisions and pending deletes),
+///   and again after a successful plan before Write/Delete; a changed path
+///   then gets E-LOCKED;
 /// * held-lock deletion for `Mutation::Delete`;
 /// * creation rollback on pre-write and zero-byte write failures only when
 ///   this call holds the exclusive lock, the created file still matches
@@ -324,12 +332,12 @@ pub fn mutate<T>(
     mut plan: impl FnMut(Vec<u8>, bool) -> Result<(Mutation, T), Fault>,
 ) -> Result<WriteResult<T>, Fault> {
     let deadline = Deadline::new(policy.wait_ms);
-    let mut identity_reopens = 0usize;
+    let mut reopens = 0usize;
     let mut created_dirs = Vec::new();
     let mut parents_ensured = false;
 
     loop {
-        match OpenOptions::new().read(true).write(true).open(path) {
+        match open_regular(path, OpenOptions::new().read(true).write(true)) {
             Ok(file) => {
                 // Without this lock an adopter may still be preparing its
                 // first byte. Preserve the file and all created directories.
@@ -338,8 +346,8 @@ pub fn mutate<T>(
                     Ok(true) => {}
                     Ok(false) => {
                         drop(file);
-                        identity_reopens += 1;
-                        if identity_reopens > consts::OPEN_RETRIES {
+                        reopens += 1;
+                        if reopens > consts::OPEN_RETRIES {
                             return Err(fail_with_rollback(
                                 Fault::reason("E-LOCKED"),
                                 None,
@@ -434,8 +442,8 @@ pub fn mutate<T>(
                             Ok(true) => {}
                             Ok(false) => {
                                 drop(file);
-                                identity_reopens += 1;
-                                if identity_reopens > consts::OPEN_RETRIES {
+                                reopens += 1;
+                                if reopens > consts::OPEN_RETRIES {
                                     return Err(fail_with_rollback(
                                         Fault::reason("E-LOCKED"),
                                         None,
@@ -481,11 +489,29 @@ pub fn mutate<T>(
                             &mut plan,
                         );
                     }
-                    Err(e2) if e2.kind() == io::ErrorKind::AlreadyExists => continue,
+                    Err(e2) if e2.kind() == io::ErrorKind::AlreadyExists => {
+                        // Reopen for a concurrent creator even with no wait
+                        // budget. A dangling symlink can repeat NotFound /
+                        // AlreadyExists forever, so this also consumes the
+                        // bounded lifecycle reopen budget. Sleeps never reset
+                        // or exceed the original deadline.
+                        reopens += 1;
+                        if reopens > consts::OPEN_RETRIES {
+                            return Err(fail_with_rollback(
+                                Fault::io("create", path.to_path_buf(), e2),
+                                None,
+                                path,
+                                false,
+                                created_dirs,
+                            ));
+                        }
+                        sleep_one_poll(&deadline);
+                        continue;
+                    }
                     Err(e2) if cfg!(windows) && is_win_error(&e2, WIN_ERROR_ACCESS_DENIED) => {
                         // Possible pending delete: bounded retry (§10.2.6).
-                        identity_reopens += 1;
-                        if identity_reopens > consts::OPEN_RETRIES {
+                        reopens += 1;
+                        if reopens > consts::OPEN_RETRIES {
                             return Err(fail_with_rollback(
                                 Fault::io("create", path.to_path_buf(), e2),
                                 None,
@@ -514,8 +540,8 @@ pub fn mutate<T>(
                 }
             }
             Err(e) if cfg!(windows) && is_win_error(&e, WIN_ERROR_ACCESS_DENIED) => {
-                identity_reopens += 1;
-                if identity_reopens > consts::OPEN_RETRIES {
+                reopens += 1;
+                if reopens > consts::OPEN_RETRIES {
                     return Err(fail_with_rollback(
                         Fault::io("open", path.to_path_buf(), e),
                         None,
@@ -585,8 +611,10 @@ fn run_plan<T>(
             Mutation::Unchanged => Ok((value, initial, false)),
             Mutation::Delete => {
                 // Held lock and fresh identity check, never truncation.
+                // Unlink checks directory permissions: Unix EACCES here is
+                // not the mandatory-lock contention recognized during I/O.
                 std::fs::remove_file(path).map_err(|e| {
-                    if is_write_stage_busy(&e) {
+                    if is_win_error(&e, WIN_ERROR_LOCK_VIOLATION) {
                         Fault::reason("E-LOCKED")
                     } else {
                         Fault::io("delete", path.to_path_buf(), e)
@@ -729,6 +757,45 @@ fn is_current_created_dir(dir: &CreatedDir) -> Result<bool, Fault> {
 // internals
 // ---------------------------------------------------------------------------
 
+/// Open an existing regular file, following symlinks to regular files.
+/// Unix opens must be nonblocking before descriptor validation: a pathname
+/// metadata precheck alone can race with replacement by a FIFO. O_NOCTTY also
+/// prevents an unsupported terminal device from becoming our controlling TTY.
+pub(crate) fn open_regular(path: &Path, options: &mut OpenOptions) -> io::Result<File> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.custom_flags(libc::O_NONBLOCK | libc::O_NOCTTY);
+    }
+    let file = options.open(path)?;
+    if !file.metadata()?.is_file() {
+        return Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            "path does not name a regular file",
+        ));
+    }
+    Ok(file)
+}
+
+/// Identity checks also open replaceable paths, including directories. They
+/// must not wait for a FIFO writer if a non-cooperating actor swaps the path.
+/// Keep same-file's metadata-only, directory-capable open on Windows.
+fn open_identity(path: &Path) -> io::Result<same_file::Handle> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        let file = OpenOptions::new()
+            .read(true)
+            .custom_flags(libc::O_NONBLOCK | libc::O_NOCTTY)
+            .open(path)?;
+        same_file::Handle::from_file(file)
+    }
+    #[cfg(not(unix))]
+    {
+        same_file::Handle::from_path(path)
+    }
+}
+
 /// Execute one step of the write sequence, mapping lock violations to
 /// `E-LOCKED` and everything else to `Fault::Io`.
 fn write_step(path: &Path, step: impl FnOnce() -> io::Result<()>) -> Result<(), Fault> {
@@ -862,7 +929,7 @@ fn is_win_error(e: &io::Error, code: i32) -> bool {
 /// `Ok(false)` means deleted/replaced (including Windows pending-delete at
 /// open); other errors propagate as real I/O failures.
 fn same_file_identity(file: &File, path: &Path) -> Result<bool, Fault> {
-    match same_file::Handle::from_path(path) {
+    match open_identity(path) {
         Ok(current) => {
             let mine = file
                 .try_clone()
@@ -918,8 +985,8 @@ fn ensure_parents(path: &Path, created: &mut Vec<CreatedDir>) -> Result<(), Faul
     for dir in missing.into_iter().rev() {
         match std::fs::create_dir(&dir) {
             Ok(()) => {
-                let identity = same_file::Handle::from_path(&dir)
-                    .map_err(|e| Fault::io("open", dir.clone(), e))?;
+                let identity =
+                    open_identity(&dir).map_err(|e| Fault::io("open", dir.clone(), e))?;
                 created.push(CreatedDir {
                     path: dir,
                     identity,
@@ -998,6 +1065,81 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    #[cfg(any(unix, windows))]
+    #[test]
+    fn mutate_dangling_symlink_retries_are_bounded() {
+        const CHILD_DIR: &str = "COEXIST_FSX_DANGLING_SYMLINK_CHILD_DIR";
+        if let Some(dir) = std::env::var_os(CHILD_DIR) {
+            let dir = PathBuf::from(dir);
+            let target = dir.join("x.agent-besties.md");
+            // Zero budget exercises fastfail; a practically unlimited budget
+            // must still stop at the lifecycle retry cap, not spin forever.
+            for wait_ms in [0, u64::MAX] {
+                let err = mutate::<()>(&target, policy(wait_ms, true, true), |_, _| {
+                    panic!("a surviving dangling symlink must never reach the plan")
+                })
+                .unwrap_err();
+                match err {
+                    Fault::Io { action, source, .. } => {
+                        assert_eq!(action, "create");
+                        assert_eq!(source.kind(), io::ErrorKind::AlreadyExists);
+                    }
+                    other => panic!("unexpected fault: {other:?}"),
+                }
+            }
+            std::fs::write(dir.join("checked"), b"").unwrap();
+            return;
+        }
+
+        let dir = scratch("dangling-symlink");
+        let target = dir.join("x.agent-besties.md");
+        let referent = Path::new("missing.agent-besties.md");
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(referent, &target).unwrap();
+        #[cfg(windows)]
+        if let Err(error) = std::os::windows::fs::symlink_file(referent, &target) {
+            if error.raw_os_error() == Some(1314) {
+                // Windows runners without symlink privilege cannot exercise
+                // this filesystem input; do not replace it with a mock.
+                std::fs::remove_dir_all(&dir).unwrap();
+                return;
+            }
+            panic!("could not create dangling symlink: {error}");
+        }
+        // Isolate the historical infinite loop in a killable process. A
+        // regression must fail this test rather than strand the test runner.
+        let mut child = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "fsx::tests::mutate_dangling_symlink_retries_are_bounded",
+                "--nocapture",
+            ])
+            .env(CHILD_DIR, &dir)
+            .spawn()
+            .unwrap();
+        let start = Instant::now();
+        let status = loop {
+            if let Some(status) = child.try_wait().unwrap() {
+                break Some(status);
+            }
+            if start.elapsed() >= Duration::from_secs(10) {
+                child.kill().unwrap();
+                child.wait().unwrap();
+                break None;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        };
+        let checked = dir.join("checked").is_file();
+        let link = std::fs::read_link(&target);
+        let referent_state = std::fs::symlink_metadata(dir.join(referent));
+        std::fs::remove_dir_all(&dir).unwrap();
+        assert!(status.is_some(), "dangling-symlink mutation did not finish");
+        assert!(status.unwrap().success(), "child mutation checks failed");
+        assert!(checked, "child did not exercise the mutation");
+        assert_eq!(link.unwrap(), referent);
+        assert_eq!(referent_state.unwrap_err().kind(), io::ErrorKind::NotFound);
+    }
+
     #[test]
     fn mutate_splices_existing_content() {
         let dir = scratch("splice");
@@ -1042,6 +1184,51 @@ mod tests {
         assert!(!res.created);
         assert!(!target.exists());
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn mutate_delete_preserves_unlink_permission_error_and_bytes() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = scratch("delete-permission");
+        let target = dir.join("x.agent-besties.md");
+        let original =
+            b"# .state\n\n## locked\n\nalice 2026-09-25T11:00:00Z..2026-09-25T13:00:00Z\n";
+        std::fs::write(&target, original).unwrap();
+        let original_perms = std::fs::metadata(&dir).unwrap().permissions();
+        let mut readonly_perms = original_perms.clone();
+        readonly_perms.set_mode(0o500);
+        let probe = dir.join("unlink-probe");
+        std::fs::write(&probe, b"probe").unwrap();
+        std::fs::set_permissions(&dir, readonly_perms.clone()).unwrap();
+        let precondition = std::fs::remove_file(&probe);
+        std::fs::set_permissions(&dir, original_perms.clone()).unwrap();
+        let denied = match precondition {
+            Ok(()) => {
+                // Root/capabilities can bypass parent directory permissions.
+                std::fs::remove_dir_all(&dir).unwrap();
+                return;
+            }
+            Err(error) if error.kind() == io::ErrorKind::PermissionDenied => error,
+            Err(error) => panic!("unexpected unlink precondition failure: {error}"),
+        };
+        std::fs::remove_file(&probe).unwrap();
+        std::fs::set_permissions(&dir, readonly_perms).unwrap();
+        let outcome = mutate(&target, policy(0, false, false), |_, _| {
+            Ok((Mutation::Delete, ()))
+        });
+        // Restore access before inspecting failures or cleaning the fixture.
+        std::fs::set_permissions(&dir, original_perms).unwrap();
+        match outcome.unwrap_err() {
+            Fault::Io { action, source, .. } => {
+                assert_eq!(action, "delete");
+                assert_eq!(source.kind(), io::ErrorKind::PermissionDenied);
+                assert_eq!(source.raw_os_error(), denied.raw_os_error());
+            }
+            other => panic!("unexpected fault: {other:?}"),
+        }
+        assert_eq!(std::fs::read(&target).unwrap(), original);
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]
@@ -1130,6 +1317,108 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    #[cfg(unix)]
+    fn make_fifo(path: &Path) {
+        use std::os::unix::ffi::OsStrExt;
+        let path = std::ffi::CString::new(path.as_os_str().as_bytes()).unwrap();
+        // SAFETY: path is a live, NUL-terminated pathname for this call.
+        let result = unsafe { libc::mkfifo(path.as_ptr(), 0o600) };
+        assert_eq!(result, 0, "mkfifo failed: {}", io::Error::last_os_error());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn fifo_reads_and_replacement_checks_are_bounded() {
+        use std::os::unix::fs::FileTypeExt;
+        const CHILD_DIR: &str = "COEXIST_FSX_FIFO_CHILD_DIR";
+        if let Some(dir) = std::env::var_os(CHILD_DIR) {
+            let dir = PathBuf::from(dir);
+            let target = dir.join("pipe.agent-besties.md");
+            // No writer is ever opened. Each public read boundary must reject
+            // the object, not block or return a successful empty snapshot.
+            for fault in [
+                read(&target, 0, None).unwrap_err(),
+                read_stable_optional(&target, None).unwrap_err(),
+                mutate::<()>(&target, policy(0, false, false), |_, _| {
+                    panic!("a FIFO must not reach a mutation plan")
+                })
+                .unwrap_err(),
+            ] {
+                assert!(matches!(
+                    fault,
+                    Fault::Io { source, .. } if source.kind() == io::ErrorKind::Unsupported
+                ));
+            }
+            assert_eq!(
+                crate::hash::read_target(&target).unwrap_err().kind(),
+                io::ErrorKind::Unsupported
+            );
+
+            // A successful initial open is not enough: rollback reopens the
+            // path for identity after the plan can replace it with a FIFO.
+            let replaced = dir.join("created/notes.agent-besties.md");
+            let fault = mutate::<()>(&replaced, policy(0, true, true), |_, _| {
+                std::fs::remove_file(&replaced).unwrap();
+                make_fifo(&replaced);
+                Err(Fault::reason("E-FLOCKED"))
+            })
+            .unwrap_err();
+            assert!(matches!(
+                fault,
+                Fault::Reason {
+                    id: "E-FLOCKED",
+                    ..
+                }
+            ));
+            assert!(std::fs::symlink_metadata(&replaced)
+                .unwrap()
+                .file_type()
+                .is_fifo());
+            assert!(dir.join("created").is_dir());
+            std::fs::write(dir.join("checked"), b"").unwrap();
+            return;
+        }
+
+        let dir = scratch("fifo-reads");
+        let target = dir.join("pipe.agent-besties.md");
+        make_fifo(&target);
+        // Keep a historical blocking open from stranding the test runner.
+        let mut child = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "fsx::tests::fifo_reads_and_replacement_checks_are_bounded",
+                "--nocapture",
+            ])
+            .env(CHILD_DIR, &dir)
+            .spawn()
+            .unwrap();
+        let start = Instant::now();
+        let status = loop {
+            if let Some(status) = child.try_wait().unwrap() {
+                break Some(status);
+            }
+            if start.elapsed() >= Duration::from_secs(10) {
+                child.kill().unwrap();
+                child.wait().unwrap();
+                break None;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        };
+        let checked = dir.join("checked").is_file();
+        let still_fifo = std::fs::symlink_metadata(&target)
+            .unwrap()
+            .file_type()
+            .is_fifo();
+        std::fs::remove_dir_all(&dir).unwrap();
+        assert!(
+            status.is_some(),
+            "FIFO read or identity check did not finish"
+        );
+        assert!(status.unwrap().success(), "child FIFO checks failed");
+        assert!(checked, "child did not exercise the FIFO boundaries");
+        assert!(still_fifo, "unsupported input was changed");
+    }
+
     #[test]
     fn read_missing_file_is_real_io_not_busy() {
         let dir = scratch("read-missing");
@@ -1208,43 +1497,6 @@ mod tests {
         assert!(matches!(err, Fault::Reason { id: "E-LOCKED", .. }));
         assert!(!target.exists());
         assert_eq!(std::fs::read(&detached).unwrap(), b"original");
-        std::fs::remove_dir_all(&dir).unwrap();
-    }
-
-    #[test]
-    fn failed_creation_lock_preserves_adopted_empty_file_and_directories() {
-        let dir = scratch("contested-creation");
-        let target = dir.join("a/b/x.agent-besties.md");
-        let mut created_dirs = Vec::new();
-        ensure_parents(&target, &mut created_dirs).unwrap();
-        let creator = OpenOptions::new()
-            .read(true)
-            .write(true)
-            .create_new(true)
-            .open(&target)
-            .unwrap();
-        // Another writer adopts the empty creation before its creator
-        // acquires a lock, then pauses before supplying initial content.
-        let mut adopter = lock_exclusive_until(
-            OpenOptions::new()
-                .read(true)
-                .write(true)
-                .open(&target)
-                .unwrap(),
-            &target,
-            &Deadline::new(0),
-        )
-        .unwrap();
-        let err = lock_exclusive_until(creator, &target, &Deadline::new(0)).unwrap_err();
-        assert!(matches!(err, Fault::Reason { id: "E-LOCKED", .. }));
-        // This is the consuming lock-failure path used by mutate: it
-        // cannot produce a LockedFile that could authorize rollback.
-        drop(created_dirs);
-        assert!(target.exists());
-        assert!(dir.join("a/b").is_dir());
-        adopter.0.write_all(b"adopted").unwrap();
-        drop(adopter);
-        assert_eq!(std::fs::read(&target).unwrap(), b"adopted");
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
@@ -1417,6 +1669,66 @@ mod tests {
             other => panic!("unexpected fault: {other:?}"),
         }
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[cfg(any(unix, windows))]
+    #[test]
+    fn stable_read_rejects_dangling_replacement_without_faking_removal() {
+        #[cfg(unix)]
+        use std::os::unix::fs::symlink as symlink_file;
+        #[cfg(windows)]
+        use std::os::windows::fs::symlink_file;
+
+        let dir = scratch("stable-dangling");
+        let target = dir.join("notes.agent-besties.md");
+        let referent = dir.join("ordinary.agent-besties.md");
+        let bytes = b"# notes.post\n";
+        std::fs::write(&target, bytes).unwrap();
+        assert_eq!(
+            read_stable_optional(&target, None).unwrap(),
+            Some(bytes.to_vec())
+        );
+
+        // Following a symlink to an ordinary file remains supported by all
+        // three read entry points; rejecting every symlink is not the fix.
+        std::fs::rename(&target, &referent).unwrap();
+        if let Err(error) = symlink_file("ordinary.agent-besties.md", &target) {
+            #[cfg(windows)]
+            if error.raw_os_error() == Some(1314) {
+                std::fs::remove_dir_all(&dir).unwrap();
+                return;
+            }
+            panic!("could not create file symlink: {error}");
+        }
+        assert_eq!(read(&target, 0, None).unwrap(), bytes);
+        assert_eq!(
+            read_stable_optional(&target, None).unwrap(),
+            Some(bytes.to_vec())
+        );
+        assert_eq!(
+            crate::hash::read_target(&target)
+                .unwrap()
+                .content
+                .as_deref(),
+            Some("# notes.post\n")
+        );
+
+        std::fs::remove_file(&target).unwrap();
+        symlink_file("missing.agent-besties.md", &target).unwrap();
+        assert!(matches!(
+            read_stable_optional(&target, None),
+            Err(Fault::Io { source, .. }) if source.kind() == io::ErrorKind::NotFound
+        ));
+        assert_eq!(
+            std::fs::read_link(&target).unwrap(),
+            Path::new("missing.agent-besties.md")
+        );
+        assert_eq!(std::fs::read(&referent).unwrap(), bytes);
+
+        // Only removing the actual directory entry restores genuine absence.
+        std::fs::remove_file(&target).unwrap();
+        assert!(read_stable_optional(&target, None).unwrap().is_none());
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]

@@ -4,22 +4,23 @@
 //! One subtree walk reads every managed file once; post files yield
 //! mention / reply / subscribed records, state files (plus the ancestor
 //! state files, §10.6.2) yield `state` records from all parseable
-//! declarations of others. Conflicts, `expiring` and `expired` are
-//! computed on the scope assembled from those same state files — the
-//! tree is never walked twice. Records sort per §10.6.5; `skipped` /
-//! `partial` rows follow them and precede `total`.
+//! declarations of others. Raw declarations also retain own expiry history;
+//! current expiring rows use each file's selected view, and conflicts use
+//! only reserved directory metadata. The tree is never walked twice.
+//! Records sort per §10.6.5; `skipped` /
+//! `partial` rows follow them; scope warnings precede `total`.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
-use super::{dir_error, sort_diagnostics};
+use super::{dir_error, include_hints, sort_diagnostics};
 use crate::consts;
 use crate::doc;
 use crate::error::{Diagnostic, Fault};
 use crate::fsx;
 use crate::names;
 use crate::ops::context::{self, Ctx};
-use crate::ops::shared::{self, ScanIssue, StateEntryRec, StateFileInfo};
+use crate::ops::shared::{self, ScanIssue, StateFileInfo};
 use crate::ops::ReadNotificationParams;
 use crate::report::Report;
 use crate::time;
@@ -32,10 +33,9 @@ const SKIP_CLASS: [&str; 4] = ["E-UTF8", "E-TOO-LARGE", "E-H1", "E-FENCE"];
 /// reads through `shared::read_state_file`) classify one file the same
 /// way: `E-STATUS-DUP` sections still parse, and `W-STATE-ENTRY` marks
 /// declaration text that could not be incorporated — losing it silently
-/// would turn an unreadable lock into a clean `ok`. A file found by the
-/// state-file name whose H1 names another type is not rejected here as
-/// a post/brief/profile: its H1 kind governs the walk (`shared` reports
-/// `E-TYPE` for it on the state-scope reader only).
+/// would turn an unreadable lock into a clean `ok`. Reserved state metadata
+/// is classified through `shared` during this same walk, independently of
+/// real post events carried by a wrong-kind reserved file.
 const PARTIAL_CLASS: [&str; 4] = ["E-HEAD", "E-SEQ-DUP", "E-STATUS-DUP", "W-STATE-ENTRY"];
 
 /// One notification record before ordering.
@@ -51,6 +51,26 @@ struct Event {
     values: Vec<String>,
 }
 
+/// Scan incompleteness keeps its native source independently of its display
+/// object: both different directories and different post files can display alike.
+struct AuxRecord {
+    source: PathBuf,
+    path: String,
+    key: &'static str,
+    cause: String,
+}
+
+impl AuxRecord {
+    fn new(source: &Path, path: &str, key: &'static str, cause: String) -> Self {
+        Self {
+            source: source.to_path_buf(),
+            path: path.to_string(),
+            key,
+            cause,
+        }
+    }
+}
+
 pub fn read_notification(ctx: &mut Ctx, p: &ReadNotificationParams) -> Result<Report, Fault> {
     fsx::walk::validate(&p.walk)?;
     let object = context::object_of_dir(&p.dir);
@@ -61,8 +81,6 @@ pub fn read_notification(ctx: &mut Ctx, p: &ReadNotificationParams) -> Result<Re
         let mut sink = ctx.walk_sink();
         fsx::walk::scan(&p.dir, &p.walk, &mut sink)?
     };
-    // §8.4.1: count files read, not files found.
-    ctx.progress(scanned.dirs, 0);
 
     let mut report = Report::new("read-notification", object.clone());
     report.kv("as", vec![p.nick.clone()]);
@@ -71,113 +89,127 @@ pub fn read_notification(ctx: &mut Ctx, p: &ReadNotificationParams) -> Result<Re
     let now = ctx.now;
     let since = p.since;
     let mut events: Vec<Event> = Vec::new();
-    // (path key, row kind, cause columns) — sorted by path before output.
-    let mut aux: Vec<(String, &'static str, Vec<String>)> = Vec::new();
+    let mut aux: Vec<AuxRecord> = Vec::new();
     let mut tie: u64 = 0;
     let mut state_infos: Vec<StateFileInfo> = Vec::new();
-    let mut seen_state: Vec<PathBuf> = Vec::new();
-    // DIR's own reserved state file, found by name. The ancestor chain
-    // includes DIR itself; only a walk outcome that completed the
-    // *state-metadata* check (State kind, undecidable H1, or a read/
-    // parse skip) accounts for it. A walk that treated the reserved
-    // name as a post/brief/profile did not: the ancestor pass still
-    // reports exactly one E-TYPE skip while those walk events stand.
+    let mut seen_state: HashSet<PathBuf> = HashSet::new();
     let root = std::fs::canonicalize(&p.dir).unwrap_or_else(|_| p.dir.clone());
-    let root_state = fsx::walk::state_file(&root).ok().flatten();
-    let mut root_state_accounted = false;
 
     for file in &scanned.files {
         ctx.file_read();
         let path_key = context::object_of_path(file);
-        let is_root_state = root_state.as_ref().is_some_and(|rs| {
-            file.file_name() == rs.file_name() && canonical_of(file) == canonical_of(rs)
-        });
+        let parent = file.parent().unwrap_or_else(|| Path::new("."));
+        let is_reserved = match shared::is_reserved_state_file(file) {
+            Ok(reserved) => reserved,
+            Err(_) => {
+                let source = shared::directory_identity(parent);
+                aux.push(AuxRecord::new(
+                    &source,
+                    &context::object_of_dir(parent),
+                    "skipped",
+                    "unreadable".to_string(),
+                ));
+                false
+            }
+        };
+        let (issue_source, issue_path) = if is_reserved {
+            // Root, ancestor and descendant metadata share a native source
+            // identity, even when H1 names another kind.
+            let source = state_source_path(file);
+            seen_state.insert(source.clone());
+            (source, context::object_of_dir(parent))
+        } else {
+            (file.clone(), path_key.clone())
+        };
         match fsx::read(file, consts::SCAN_READ_WAIT_MS, None) {
             Err(Fault::Reason { .. }) => {
-                aux.push((path_key, "skipped", vec!["busy".to_string()]));
-                if is_root_state {
-                    root_state_accounted = true;
-                }
+                aux.push(AuxRecord::new(
+                    &issue_source,
+                    &issue_path,
+                    "skipped",
+                    "busy".to_string(),
+                ));
             }
             Err(Fault::Diagnostics(diags)) => {
                 let id = blocking_id(&diags).unwrap_or("E-TOO-LARGE");
-                aux.push((path_key, "skipped", vec![id.to_string()]));
-                if is_root_state {
-                    root_state_accounted = true;
-                }
+                aux.push(AuxRecord::new(
+                    &issue_source,
+                    &issue_path,
+                    "skipped",
+                    id.to_string(),
+                ));
             }
             Err(_) => {
-                aux.push((path_key, "skipped", vec!["unreadable".to_string()]));
-                if is_root_state {
-                    root_state_accounted = true;
-                }
+                aux.push(AuxRecord::new(
+                    &issue_source,
+                    &issue_path,
+                    "skipped",
+                    "unreadable".to_string(),
+                ));
             }
             Ok(bytes) => match doc::parse(bytes, file, now) {
                 Err(Fault::Diagnostics(diags)) => {
                     let id = blocking_id(&diags).unwrap_or("E-UTF8");
-                    aux.push((path_key, "skipped", vec![id.to_string()]));
-                    if is_root_state {
-                        root_state_accounted = true;
-                    }
+                    aux.push(AuxRecord::new(
+                        &issue_source,
+                        &issue_path,
+                        "skipped",
+                        id.to_string(),
+                    ));
                 }
                 Err(f) => return Err(f),
-                Ok(parsed) => match parsed.kind {
-                    None => {
-                        let id = blocking_id(&parsed.diagnostics).unwrap_or("E-H1");
-                        aux.push((path_key, "skipped", vec![id.to_string()]));
-                        if is_root_state {
-                            root_state_accounted = true;
-                        }
-                    }
-                    Some(doc::Kind::Post) => {
-                        if let Some(d) = first_diag(&parsed.diagnostics, &SKIP_CLASS) {
-                            aux.push((path_key, "skipped", vec![d.id.to_string()]));
-                        } else {
-                            if let Some(d) = first_diag(&parsed.diagnostics, &PARTIAL_CLASS) {
-                                aux.push((
-                                    path_key.clone(),
-                                    "partial",
-                                    vec![format!("{} L{}", d.id, d.line)],
-                                ));
-                            }
-                            post_events(&parsed, &p.nick, since, now, &path_key, &mut events);
-                        }
-                    }
-                    Some(doc::Kind::State) => {
-                        if let Some(d) = first_diag(&parsed.diagnostics, &SKIP_CLASS) {
-                            aux.push((path_key, "skipped", vec![d.id.to_string()]));
-                        } else {
-                            if let Some(d) = first_diag(&parsed.diagnostics, &PARTIAL_CLASS) {
-                                aux.push((
-                                    path_key.clone(),
-                                    "partial",
-                                    vec![format!("{} L{}", d.id, d.line)],
-                                ));
-                            }
-                            let info = build_state_info(file, &parsed);
+                Ok(parsed) => {
+                    if is_reserved || parsed.kind == Some(doc::Kind::State) {
+                        let info = shared::state_file_info(file, &parsed);
+                        append_state_issue(&mut aux, &issue_source, &issue_path, &info.issue);
+                        if parsed.kind == Some(doc::Kind::State) {
+                            // Misnamed .state files still provide their real
+                            // history and parse diagnostics, never directory locks.
                             state_events(&info, &p.nick, since, now, &mut events, &mut tie);
+                        }
+                        if is_reserved {
                             state_infos.push(info);
                         }
-                        if is_root_state {
-                            root_state_accounted = true;
-                        }
                     }
-                    // brief / agent-profile: not notification candidates.
-                    Some(_) => {}
-                },
+                    match parsed.kind {
+                        None if !is_reserved => {
+                            let id = blocking_id(&parsed.diagnostics).unwrap_or("E-H1");
+                            aux.push(AuxRecord::new(
+                                &issue_source,
+                                &issue_path,
+                                "skipped",
+                                id.to_string(),
+                            ));
+                        }
+                        Some(doc::Kind::Post) => {
+                            if let Some(d) = first_diag(&parsed.diagnostics, &SKIP_CLASS) {
+                                aux.push(AuxRecord::new(
+                                    &issue_source,
+                                    &issue_path,
+                                    "skipped",
+                                    d.id.to_string(),
+                                ));
+                            } else {
+                                if let Some(d) = first_diag(&parsed.diagnostics, &PARTIAL_CLASS) {
+                                    aux.push(AuxRecord::new(
+                                        &issue_source,
+                                        &issue_path,
+                                        "partial",
+                                        format!("{} L{}", d.id, d.line),
+                                    ));
+                                }
+                                post_events(&parsed, &p.nick, since, now, &path_key, &mut events);
+                            }
+                        }
+                        _ => {}
+                    }
+                }
             },
         }
     }
 
-    // A completed state-metadata walk of DIR's reserved file is
-    // authoritative; the ancestor pass must not re-read it. A walk that
-    // only saw a post/brief/profile at that name is not: shared's
-    // state-scope reader still emits the E-TYPE skip.
-    if root_state_accounted {
-        if let Some(rs) = &root_state {
-            seen_state.push(canonical_of(rs));
-        }
-    }
+    // Reserved metadata already attempted by the walk is authoritative,
+    // including wrong-kind and unreadable outcomes. Do not reread it.
     for ancestor in fsx::walk::ancestors(&root) {
         let state_file = match fsx::walk::state_file(&ancestor) {
             Ok(Some(file)) => file,
@@ -185,144 +217,60 @@ pub fn read_notification(ctx: &mut Ctx, p: &ReadNotificationParams) -> Result<Re
             Err(Fault::Io { .. }) => {
                 // §10.1.6: an unreadable ancestor is reported, not fatal.
                 let dir_display = context::object_of_dir(&ancestor);
-                aux.push((dir_display, "skipped", vec!["unreadable".to_string()]));
+                let source = shared::directory_identity(&ancestor);
+                aux.push(AuxRecord::new(
+                    &source,
+                    &dir_display,
+                    "skipped",
+                    "unreadable".to_string(),
+                ));
                 continue;
             }
             Err(f) => return Err(f),
         };
-        let canonical = canonical_of(&state_file);
+        let canonical = state_source_path(&state_file);
         if seen_state.contains(&canonical) {
             continue;
         }
-        seen_state.push(canonical);
-        ctx.file_read();
         let info = shared::read_state_file(ctx, &state_file);
-        let dir_display = info.display_dir.clone();
-        match &info.issue {
-            Some(ScanIssue::Busy) => {
-                aux.push((dir_display, "skipped", vec!["busy".to_string()]));
-            }
-            Some(ScanIssue::Blocking(id)) => {
-                aux.push((dir_display, "skipped", vec![id.to_string()]));
-            }
-            Some(ScanIssue::Partial { id, line }) => {
-                aux.push((dir_display, "partial", vec![format!("{id} L{line}")]));
-            }
-            None => {}
-        }
+        append_state_issue(&mut aux, &canonical, &info.display_dir, &info.issue);
+        seen_state.insert(canonical);
         state_events(&info, &p.nick, since, now, &mut events, &mut tie);
         state_infos.push(info);
     }
 
     // §10.1.5: unreadable directories of the subtree walk.
-    let unreadable: Vec<String> = scanned
-        .unreadable_dirs
-        .iter()
-        .map(|dir| context::display_file(dir))
-        .collect();
-    for dir_display in &unreadable {
-        aux.push((
-            dir_display.clone(),
+    let unreadable = scanned.unreadable_dirs;
+    for dir in &unreadable {
+        let source = shared::directory_identity(dir);
+        aux.push(AuxRecord::new(
+            &source,
+            &context::object_of_dir(dir),
             "skipped",
-            vec!["unreadable".to_string()],
+            "unreadable".to_string(),
         ));
     }
 
     // Conflicts and own-entry records on the assembled scope.
     let scope = shared::assemble(&root, state_infos, unreadable);
-    let files: Vec<&StateFileInfo> = scope_files(&scope);
-
-    let own_locks: Vec<(&StateFileInfo, &StateEntryRec)> = files
-        .iter()
-        .flat_map(|file| {
-            file.entries
-                .iter()
-                .filter(move |entry| {
-                    entry.nick == p.nick && entry.status == "locked" && entry.valid(now)
-                })
-                .map(move |entry| (*file, entry))
-        })
-        .collect();
-    for rec in &shared::conflicts_with(&scope, now, &p.nick) {
-        // "overlaps your lock on <dir>": the own valid locked entry this
-        // record conflicts with — the deepest overlapping declaration.
-        let source_dir = files
-            .iter()
-            .find(|file| file.display_dir == rec.dir_display)
-            .map(|file| file.dir.clone());
-        let own_dir = match &source_dir {
-            Some(source) => own_locks
-                .iter()
-                .filter(|(file, _)| overlaps(&file.dir, source))
-                .max_by_key(|(file, _)| file.dir.components().count())
-                .map(|(file, _)| file.display_dir.clone()),
-            None => None,
-        }
-        .unwrap_or_else(|| rec.dir_display.clone());
+    for (rec, own_dir) in shared::conflicts_with(&scope, now, &p.nick) {
         events.push(Event {
             when: rec.start,
-            path_key: rec.dir_display.clone(),
+            path_key: rec.dir_display.to_string(),
             kind_rank: 4,
-            tie,
+            tie: rec.source_order as u64,
             key: "conflict",
             values: vec![
                 time::format(rec.start),
-                rec.dir_display.clone(),
-                rec.status.clone(),
-                rec.nick.clone(),
+                rec.dir_display.to_string(),
+                names::display_text(rec.status),
+                rec.nick.to_string(),
                 format!("overlaps your lock on {own_dir}"),
             ],
         });
-        tie += 1;
     }
 
-    for file in &files {
-        for entry in &file.entries {
-            if entry.nick != p.nick {
-                continue;
-            }
-            // §10.6.3: expiring needs no window (own valid entries within
-            // EXPIRING_WINDOW of ending); expired uses until ∈ [since, now).
-            if entry.valid(now) && (entry.until - now).num_seconds() <= consts::EXPIRING_WINDOW {
-                let minutes = (entry.until - now).num_seconds().max(0) / 60;
-                events.push(Event {
-                    when: entry.until,
-                    path_key: file.display_dir.clone(),
-                    kind_rank: 5,
-                    tie,
-                    key: "expiring",
-                    values: vec![
-                        time::format(entry.until),
-                        file.display_dir.clone(),
-                        entry.status.clone(),
-                        entry.nick.clone(),
-                        format!("ends in {minutes}m"),
-                    ],
-                });
-                tie += 1;
-            }
-            if entry.until >= since && entry.until < now {
-                let at = time::format(entry.until);
-                events.push(Event {
-                    when: entry.until,
-                    path_key: file.display_dir.clone(),
-                    kind_rank: 6,
-                    tie,
-                    key: "expired",
-                    values: vec![
-                        at.clone(),
-                        file.display_dir.clone(),
-                        entry.status.clone(),
-                        entry.nick.clone(),
-                        format!("expired at {at}"),
-                    ],
-                });
-                tie += 1;
-            }
-        }
-    }
-
-    // §10.6.5 ordering; `skipped` / `partial` after the records.
+    // §10.6.5 ordering; auxiliary scope warnings follow the records.
     events.sort_by(|a, b| {
         a.when
             .cmp(&b.when)
@@ -337,34 +285,29 @@ pub fn read_notification(ctx: &mut Ctx, p: &ReadNotificationParams) -> Result<Re
 
     dedup_aux(&mut aux);
     let aux_count = aux.len();
-    for (path, key, causes) in aux {
-        let mut values = vec![path];
-        values.extend(causes);
-        report.record(key, values, 2, consts::KIND_WIDTH);
+    for row in aux {
+        report.record(row.key, vec![row.path, row.cause], 2, consts::KIND_WIDTH);
     }
 
-    // §10.1.3 / §8.2: include globs that matched nothing (not counted).
-    if !p.walk.no_ignore {
-        for glob in &scanned.zero_includes {
-            report.record(
-                "include",
-                vec![
-                    glob.clone(),
-                    "matched 0 files; ignored directories are not reopened (pass --no-ignore)"
-                        .to_string(),
-                ],
-                2,
-                consts::KEY_WIDTH,
-            );
-        }
+    // §10.5.2: lexical identity fallback warns, but is metadata rather
+    // than a notification or skipped/partial record (§8.1.10).
+    for dir in &scope.canonicalize_failed {
+        report.record(
+            "canonicalize",
+            vec![context::object_of_dir(dir), "failed".to_string()],
+            2,
+            consts::KIND_WIDTH,
+        );
     }
+    let include_warn = include_hints(&mut report, &scanned.zero_includes);
 
     report.total(record_count + aux_count);
-    // §8.1.11: conflict rows (row-keyed), skipped / partial rows, and
-    // the include hint all warn.
+    // §8.1.11: conflict rows (row-keyed), skipped / partial rows, scope
+    // warnings, and the include hint all warn.
     if events.iter().any(|event| event.key == "conflict")
         || aux_count > 0
-        || (!p.walk.no_ignore && !scanned.zero_includes.is_empty())
+        || !scope.canonicalize_failed.is_empty()
+        || include_warn
     {
         report.warn();
     }
@@ -430,8 +373,8 @@ fn post_events(
     }
 }
 
-/// `state` records of one state file: others' declarations, any status,
-/// expired included, `start` in the window (§10.6.3).
+/// Historical state/expired rows use every parseable declaration. Only
+/// current expiring rows use the effective (latest-until) view (§10.6.3).
 fn state_events(
     info: &StateFileInfo,
     nick: &str,
@@ -441,13 +384,34 @@ fn state_events(
     tie: &mut u64,
 ) {
     for entry in &info.entries {
-        if entry.nick == nick || !(entry.start >= since && entry.start < now) {
+        if entry.nick == nick {
+            if entry.until >= since && entry.until < now {
+                let at = time::format(entry.until);
+                events.push(Event {
+                    when: entry.until,
+                    path_key: info.display_dir.clone(),
+                    kind_rank: 6,
+                    tie: *tie,
+                    key: "expired",
+                    values: vec![
+                        at.clone(),
+                        info.display_dir.clone(),
+                        names::display_text(&entry.status),
+                        entry.nick.clone(),
+                        format!("expired at {at}"),
+                    ],
+                });
+                *tie += 1;
+            }
+            continue;
+        }
+        if !(entry.start >= since && entry.start < now) {
             continue;
         }
         let mut values = vec![
             time::format(entry.start),
             info.display_dir.clone(),
-            entry.status.clone(),
+            names::display_text(&entry.status),
             entry.nick.clone(),
             format!("until {}", time::format(entry.until)),
         ];
@@ -464,62 +428,51 @@ fn state_events(
         });
         *tie += 1;
     }
-}
-
-/// Build the scope member for a state file parsed by this command (the
-/// single read of the file; §10.5.6 issue classes applied).
-fn build_state_info(file: &Path, parsed: &doc::Document) -> StateFileInfo {
-    let parent = file.parent().unwrap_or_else(|| Path::new("")).to_path_buf();
-    let dir = std::fs::canonicalize(&parent).unwrap_or(parent.clone());
-    let display_dir = context::object_of_dir(&parent);
-    let mut entries: Vec<StateEntryRec> = Vec::new();
-    for section in &parsed.state {
-        for decl in &section.entries {
-            entries.push(StateEntryRec {
-                status: section.status.clone(),
-                nick: decl.nick.clone(),
-                start: decl.start,
-                until: decl.until,
+    for entry in info.effective_entries() {
+        if entry.nick == nick
+            && entry.valid(now)
+            && (entry.until - now).num_seconds() <= consts::EXPIRING_WINDOW
+        {
+            let minutes = (entry.until - now).num_seconds().max(0) / 60;
+            events.push(Event {
+                when: entry.until,
+                path_key: info.display_dir.clone(),
+                kind_rank: 5,
+                tie: *tie,
+                key: "expiring",
+                values: vec![
+                    time::format(entry.until),
+                    info.display_dir.clone(),
+                    names::display_text(&entry.status),
+                    entry.nick.clone(),
+                    format!("ends in {minutes}m"),
+                ],
             });
+            *tie += 1;
         }
     }
-    let mut issue = None;
-    let sorted = sort_diagnostics(parsed.diagnostics.clone());
-    if let Some(d) = sorted.iter().find(|d| SKIP_CLASS.contains(&d.id)) {
-        issue = Some(ScanIssue::Blocking(d.id));
-        entries.clear();
-    } else if let Some(d) = sorted.iter().find(|d| PARTIAL_CLASS.contains(&d.id)) {
-        issue = Some(ScanIssue::Partial {
-            id: d.id,
-            line: d.line,
-        });
-    }
-    StateFileInfo {
-        file: file.to_path_buf(),
-        dir,
-        display_dir,
-        entries,
-        issue,
-    }
 }
 
-fn scope_files(scope: &shared::StateScope) -> Vec<&StateFileInfo> {
-    let mut files: Vec<&StateFileInfo> = Vec::new();
-    if let Some(file) = &scope.self_file {
-        files.push(file);
-    }
-    files.extend(scope.ancestors.iter());
-    files.extend(scope.descendants.iter());
-    files
+fn append_state_issue(
+    aux: &mut Vec<AuxRecord>,
+    source: &Path,
+    path: &str,
+    issue: &Option<ScanIssue>,
+) {
+    let (key, cause) = match issue {
+        Some(ScanIssue::Busy) => ("skipped", "busy".to_string()),
+        Some(ScanIssue::Blocking(id)) => ("skipped", id.to_string()),
+        Some(ScanIssue::Partial { id, line }) => ("partial", format!("{id} L{line}")),
+        None => return,
+    };
+    aux.push(AuxRecord::new(source, path, key, cause));
 }
 
-/// §10.5.3 directory relation on canonicalized paths.
-fn overlaps(a: &Path, b: &Path) -> bool {
-    a == b || a.starts_with(b) || b.starts_with(a)
-}
-
-fn canonical_of(path: &Path) -> PathBuf {
-    std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf())
+fn state_source_path(file: &Path) -> PathBuf {
+    // A symlink's directory owns its state declaration, not its referent's
+    // directory. Canonicalize the parent only when deduplicating reads.
+    let parent = file.parent().unwrap_or_else(|| Path::new("."));
+    shared::directory_identity(parent).join(file.file_name().unwrap_or_default())
 }
 
 fn first_diag(diags: &[Diagnostic], class: &[&str]) -> Option<Diagnostic> {
@@ -535,21 +488,31 @@ fn blocking_id(diags: &[Diagnostic]) -> Option<&'static str> {
         .map(|d| d.id)
 }
 
-/// Sort the auxiliary rows (path-major, §10.6.5 tail order) and drop
-/// exact duplicates only: the same path with a different row kind or
-/// cause is real information and stays (§10.1.5 — an unreadable
-/// directory and a busy file can share a display path).
-fn dedup_aux(aux: &mut Vec<(String, &'static str, Vec<String>)>) {
-    aux.sort();
-    aux.dedup();
+/// Deduplicate only repeat encounters of the same native source and cause,
+/// then order the displayed rows (§10.6.5). Distinct sources remain distinct
+/// records even when their display paths, row kinds and causes all match.
+fn dedup_aux(aux: &mut Vec<AuxRecord>) {
+    aux.sort_by(|a, b| {
+        a.source
+            .cmp(&b.source)
+            .then_with(|| a.key.cmp(b.key))
+            .then_with(|| a.cause.cmp(&b.cause))
+    });
+    aux.dedup_by(|a, b| a.source == b.source && a.key == b.key && a.cause == b.cause);
+    aux.sort_by(|a, b| {
+        a.path
+            .cmp(&b.path)
+            .then_with(|| a.key.cmp(b.key))
+            .then_with(|| a.cause.cmp(&b.cause))
+    });
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ops::context::Ctx;
+    use crate::ops::context::{test_ctx, Ctx};
     use crate::ops::ReadNotificationParams;
-    use crate::report::Row;
+    use crate::report::{Row, Status};
 
     fn scratch(tag: &str) -> PathBuf {
         let dir = std::env::temp_dir()
@@ -601,6 +564,7 @@ mod tests {
         let skipped = value_rows(&report, "skipped");
         assert_eq!(skipped.len(), 1, "rows: {skipped:?}");
         assert_eq!(skipped[0][1], "E-H1");
+        assert_eq!(value_rows(&report, "total")[0][0], "1");
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -628,58 +592,328 @@ mod tests {
     }
 
     #[test]
-    fn reserved_name_post_keeps_mention_and_one_etype_skip() {
-        // A valid post at the reserved state-file name is walked as a
-        // post (its mention is a real notification) but is not a
-        // completed state-metadata check: the ancestor pass reports
-        // exactly one E-TYPE skip for the reserved name.
+    fn reserved_name_post_is_diagnosed_from_subtree_root_and_ancestor() {
         let dir = scratch("reserved-name-post-etype");
-        let now = crate::time::now().unwrap();
-        let when = crate::time::format(now - chrono::Duration::minutes(30));
+        let sub = dir.join("sub");
+        let child = sub.join("child");
+        std::fs::create_dir_all(&child).unwrap();
         std::fs::write(
-            dir.join("state.agent-besties.md"),
-            format!("# state.post\n\n## #1 bob ({when})\n\n```md\n@alice hello\n```\n").as_bytes(),
+            sub.join("state.agent-besties.md"),
+            concat!(
+                "# state.post\n\n## #1 bob (2026-09-25T11:30:00Z)\n\n```md\n@alice hello\n```\n",
+                "\n## #malformed\n\n```md\nunparsed comment\n```\n",
+            ),
         )
         .unwrap();
-        let mut ctx = Ctx::new("agent-coexist read-notification".to_string(), None).unwrap();
-        let p = params(&dir, &ctx);
-        let report = read_notification(&mut ctx, &p).unwrap();
-        let mentions = value_rows(&report, "mention");
-        assert_eq!(mentions.len(), 1, "mentions: {mentions:?}");
-        assert_eq!(mentions[0][2], "bob");
-        let skipped = value_rows(&report, "skipped");
-        assert_eq!(skipped.len(), 1, "skipped: {skipped:?}");
-        assert_eq!(skipped[0][1], "E-TYPE");
+        let now = time::parse("2026-09-25T12:00:00Z").unwrap();
+        for (root, post_visible) in [(&dir, true), (&sub, true), (&child, false)] {
+            let mut ctx = test_ctx(now);
+            let p = params(root, &ctx);
+            let report = read_notification(&mut ctx, &p).unwrap();
+            let skipped = value_rows(&report, "skipped");
+            assert_eq!(skipped.len(), 1, "skipped: {skipped:?}");
+            assert_eq!(
+                skipped[0],
+                vec![context::object_of_dir(&sub), "E-TYPE".to_string()]
+            );
+            let mentions = value_rows(&report, "mention");
+            let partial = value_rows(&report, "partial");
+            if post_visible {
+                assert_eq!(mentions.len(), 1);
+                assert_eq!(mentions[0][2], "bob");
+                // The post's malformed remainder is a different cause, not
+                // a duplicate of the reserved-name metadata type failure.
+                assert_eq!(partial.len(), 1);
+                assert!(partial[0][1].starts_with("E-HEAD "));
+            } else {
+                assert!(mentions.is_empty());
+                assert!(partial.is_empty());
+            }
+        }
         let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
-    fn aux_dedup_keeps_distinct_causes_for_the_same_path() {
-        let mut aux = vec![
-            ("notes".to_string(), "skipped", vec!["busy".to_string()]),
+    fn latest_state_does_not_erase_history_or_revive_superseded_locks() {
+        let dir = scratch("effective-history");
+        std::fs::write(
+            dir.join("state.agent-besties.md"),
+            concat!(
+                "# .state\n\n## locked\n",
+                "alice 2026-09-25T11:00:00Z..2026-09-25T13:00:00Z\n",
+                "alice 2026-09-25T15:00:00Z..2026-09-25T14:00:00Z\n",
+                "bob 2026-09-25T10:00:00Z..2026-09-25T11:30:00Z\n",
+                "bob 2026-09-25T11:00:00Z..2026-09-25T12:10:00Z\n",
+                "bob 2026-09-25T11:00:00Z..2026-09-25T16:00:00Z\n",
+            ),
+        )
+        .unwrap();
+        let mut ctx = test_ctx(time::parse("2026-09-25T12:00:00Z").unwrap());
+        let mut p = params(&dir, &ctx);
+        p.nick = "bob".to_string();
+        let report = read_notification(&mut ctx, &p).unwrap();
+        let history = value_rows(&report, "state");
+        assert_eq!(history.len(), 1);
+        assert_eq!(history[0][3], "alice");
+        let expired = value_rows(&report, "expired");
+        assert_eq!(expired.len(), 1);
+        assert_eq!(expired[0][0], "2026-09-25T11:30:00Z");
+        assert!(value_rows(&report, "conflict").is_empty());
+        assert!(value_rows(&report, "expiring").is_empty());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn misnamed_history_cannot_shadow_metadata_or_reorder_conflicts() {
+        let dir = scratch("misnamed-state-history");
+        let sub = dir.join("sub");
+        std::fs::create_dir(&sub).unwrap();
+        std::fs::write(
+            sub.join("a.agent-besties.md"),
+            concat!(
+                "# .state\n\n## observing\n",
+                "alice 2026-09-25T10:00:00Z..2026-09-25T11:30:00Z\n",
+                "bob 2026-09-25T11:00:00Z..2026-09-25T13:00:00Z\n",
+                "unparseable declaration\n",
+            ),
+        )
+        .unwrap();
+        std::fs::write(
+            sub.join("state.agent-besties.md"),
+            concat!(
+                "# .state\n\n## locked\n",
+                "alice 2026-09-25T10:00:00Z..2026-09-25T16:00:00Z\n",
+                "bob 2026-09-25T11:00:00Z..2026-09-25T15:00:00Z\n",
+                "carol 2026-09-25T11:00:00Z..2026-09-25T13:00:00Z\n",
+            ),
+        )
+        .unwrap();
+        for root in [&dir, &sub] {
+            let mut ctx = test_ctx(time::parse("2026-09-25T12:00:00Z").unwrap());
+            let p = params(root, &ctx);
+            let report = read_notification(&mut ctx, &p).unwrap();
+            let conflicts = value_rows(&report, "conflict");
+            assert_eq!(
+                conflicts
+                    .iter()
+                    .map(|row| row[3].as_str())
+                    .collect::<Vec<_>>(),
+                vec!["bob", "carol"]
+            );
+            let history = value_rows(&report, "state");
+            assert!(history
+                .iter()
+                .any(|row| row[2] == "observing" && row[3] == "bob"));
+            let expired = value_rows(&report, "expired");
+            assert_eq!(expired.len(), 1);
+            assert_eq!(expired[0][2], "observing");
+            let partial = value_rows(&report, "partial");
+            assert_eq!(partial.len(), 1);
+            assert_eq!(
+                partial[0][0],
+                context::object_of_path(&sub.join("a.agent-besties.md"))
+            );
+            assert!(partial[0][1].starts_with("W-STATE-ENTRY "));
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn conflicts_choose_deepest_last_own_lock_without_changing_report_order() {
+        let dir = scratch("deepest-own-lock");
+        let left = dir.join("left");
+        let left_own = left.join("deep");
+        let left_child = left_own.join("child");
+        let lonely = dir.join("lonely");
+        let right_own = dir.join("right/deep");
+        for (path, declarations) in [
             (
-                "notes".to_string(),
-                "skipped",
-                vec!["unreadable".to_string()],
+                &dir,
+                concat!(
+                    "alice 2026-09-25T11:00:00Z..2026-09-25T14:00:00Z\n",
+                    "bob 2026-09-25T11:00:00Z..2026-09-25T15:00:00Z\n",
+                    "carol 2026-09-25T11:00:00Z..2026-09-25T13:00:00Z\n",
+                ),
+            ),
+            (&left, "dave 2026-09-25T11:00:00Z..2026-09-25T14:00:00Z\n"),
+            (
+                &left_own,
+                "alice 2026-09-25T11:00:00Z..2026-09-25T14:00:00Z\n",
             ),
             (
-                "notes".to_string(),
-                "partial",
-                vec!["E-STATUS-DUP L3".to_string()],
+                &left_child,
+                "erin 2026-09-25T11:00:00Z..2026-09-25T14:00:00Z\n",
             ),
             (
-                "notes".to_string(),
-                "skipped",
-                vec!["unreadable".to_string()],
+                &lonely,
+                "grace 2026-09-25T11:00:00Z..2026-09-25T14:00:00Z\n",
             ),
-        ];
-        dedup_aux(&mut aux);
-        // only the exact duplicate is dropped; the distinct causes for
-        // the same path all stay visible
-        assert_eq!(aux.len(), 3);
-        assert_eq!(aux[0].1, "partial");
-        assert_eq!(aux[0].2, vec!["E-STATUS-DUP L3".to_string()]);
-        assert_eq!(aux[1].2, vec!["busy".to_string()]);
-        assert_eq!(aux[2].2, vec!["unreadable".to_string()]);
+            (
+                &right_own,
+                concat!(
+                    "alice 2026-09-25T11:00:00Z..2026-09-25T14:00:00Z\n",
+                    "frank 2026-09-25T11:00:00Z..2026-09-25T14:00:00Z\n",
+                ),
+            ),
+        ] {
+            std::fs::create_dir_all(path).unwrap();
+            std::fs::write(
+                path.join("state.agent-besties.md"),
+                format!("# .state\n\n## locked\n{declarations}"),
+            )
+            .unwrap();
+        }
+        let mut ctx = test_ctx(time::parse("2026-09-25T12:00:00Z").unwrap());
+        let mut p = params(&dir, &ctx);
+        p.walk.no_ignore = true;
+        let report = read_notification(&mut ctx, &p).unwrap();
+        let expected: Vec<_> = [
+            (&dir, "bob", &right_own),
+            (&dir, "carol", &right_own),
+            (&left, "dave", &left_own),
+            (&left_child, "erin", &left_own),
+            (&lonely, "grace", &dir),
+            (&right_own, "frank", &right_own),
+        ]
+        .into_iter()
+        .map(|(path, nick, own)| {
+            vec![
+                "2026-09-25T11:00:00Z".to_string(),
+                context::object_of_dir(path),
+                "locked".to_string(),
+                nick.to_string(),
+                format!("overlaps your lock on {}", context::object_of_dir(own)),
+            ]
+        })
+        .collect();
+        assert_eq!(value_rows(&report, "conflict"), expected);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn folded_sibling_paths_keep_the_actual_own_lock_location() {
+        let dir = scratch("folded-own-lock-path");
+        let unrelated = dir.join("a  b");
+        let conflicting = dir.join("a b");
+        let own = conflicting.join("deep");
+        for (path, nick) in [
+            (&unrelated, "charlie"),
+            (&conflicting, "bob"),
+            (&own, "alice"),
+        ] {
+            std::fs::create_dir_all(path).unwrap();
+            std::fs::write(
+                path.join("state.agent-besties.md"),
+                format!(
+                    "# .state\n\n## locked\n{nick} 2026-09-25T11:00:00Z..2026-09-25T14:00:00Z\n"
+                ),
+            )
+            .unwrap();
+        }
+        let mut ctx = test_ctx(time::parse("2026-09-25T12:00:00Z").unwrap());
+        let mut p = params(&dir, &ctx);
+        p.walk.no_ignore = true;
+        let report = read_notification(&mut ctx, &p).unwrap();
+        let conflicts = value_rows(&report, "conflict");
+        assert_eq!(conflicts.len(), 1);
+        assert_eq!(conflicts[0][1], context::object_of_dir(&conflicting));
+        assert_eq!(conflicts[0][3], "bob");
+        assert_eq!(
+            conflicts[0][4],
+            format!("overlaps your lock on {}", context::object_of_dir(&own))
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn colliding_canonicalize_warnings_preserve_history_without_inflating_total() {
+        let dir = scratch("canonicalize-after-read");
+        let a = dir.join("a  b");
+        let b = dir.join("a b");
+        let last = dir.join("z");
+        for source in [&a, &b] {
+            std::fs::create_dir(source).unwrap();
+            std::fs::write(
+                source.join("state.agent-besties.md"),
+                "# .state\n\n## observing\nbob 2026-09-25T11:30:00Z..2026-09-25T14:00:00Z\n",
+            )
+            .unwrap();
+        }
+        std::fs::create_dir(&last).unwrap();
+        std::fs::write(last.join("notes.agent-besties.md"), "# notes.post\n").unwrap();
+        let removed = [a.clone(), b.clone()];
+        let mut ctx = Ctx::new(
+            String::new(),
+            Some(Box::new(move |_, files| {
+                // Both native sources have already contributed history;
+                // invalidate only their later directory-identity lookup.
+                if files == 3 {
+                    for source in &removed {
+                        std::fs::remove_dir_all(source).unwrap();
+                    }
+                }
+            })),
+        )
+        .unwrap();
+        ctx.now = time::parse("2026-09-25T12:00:00Z").unwrap();
+        let mut p = params(&dir, &ctx);
+        p.walk.no_ignore = true;
+        let report = read_notification(&mut ctx, &p).unwrap();
+        assert!(!a.exists() && !b.exists());
+        assert_eq!(report.status, Status::Warn);
+        let warnings = value_rows(&report, "canonicalize");
+        assert_eq!(warnings.len(), 2);
+        assert_eq!(warnings[0], warnings[1]);
+        let history = value_rows(&report, "state");
+        assert_eq!(history.len(), 2);
+        assert!(history.iter().all(|row| row[3] == "bob"));
+        assert_eq!(value_rows(&report, "total")[0][0], "2");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn state_history_and_expiry_titles_are_sanitized_only_for_output() {
+        let dir = scratch("status-title-controls");
+        let file = dir.join("state.agent-besties.md");
+        let source = concat!(
+            "# .state\n\n## custom\u{1b}[2J\n",
+            "bob 2026-09-25T11:00:00Z..2026-09-25T14:00:00Z\n",
+            "alice 2026-09-25T10:00:00Z..2026-09-25T11:30:00Z\n",
+            "alice 2026-09-25T11:00:00Z..2026-09-25T12:10:00Z\n",
+        );
+        std::fs::write(&file, source).unwrap();
+        let mut ctx = test_ctx(time::parse("2026-09-25T12:00:00Z").unwrap());
+        let mut p = params(&dir, &ctx);
+        p.walk.no_ignore = true;
+        let report = read_notification(&mut ctx, &p).unwrap();
+        for kind in ["state", "expired", "expiring"] {
+            let rows = value_rows(&report, kind);
+            assert_eq!(rows.len(), 1, "{kind}");
+            assert_eq!(rows[0][2], "custom\u{FFFD}[2J", "{kind}");
+        }
+        assert_eq!(std::fs::read(&file).unwrap(), source.as_bytes());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn colliding_post_and_state_failures_remain_separate_records() {
+        let dir = scratch("colliding-source-failures");
+        for name in ["a  b", "a b"] {
+            let child = dir.join(name);
+            std::fs::create_dir(&child).unwrap();
+            std::fs::write(child.join("state.agent-besties.md"), b"# invalid\n").unwrap();
+            std::fs::write(dir.join(format!("{name}.agent-besties.md")), b"# invalid\n").unwrap();
+        }
+        let mut ctx = test_ctx(time::parse("2026-09-25T12:00:00Z").unwrap());
+        let mut p = params(&dir, &ctx);
+        p.walk.no_ignore = true;
+        let report = read_notification(&mut ctx, &p).unwrap();
+        assert_eq!(report.status, Status::Warn);
+        let skipped = value_rows(&report, "skipped");
+        assert_eq!(skipped.len(), 4);
+        assert!(skipped.iter().all(|row| row == &skipped[0]));
+        assert_eq!(skipped[0][1], "E-H1");
+        assert_eq!(value_rows(&report, "total")[0][0], "4");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

@@ -33,9 +33,10 @@ impl Status {
 ///
 /// - `Fields`: `indent` spaces, then the key left-padded (by Unicode scalar
 ///   count) to `width` columns (no padding when the key is already longer),
-///   then two spaces, then the values joined by two spaces. A row with no
-///   values renders as indent + key only. This makes every row splittable on
-///   `/ {2,}/` (spec §8.1.4).
+///   then two spaces, then the values joined by two spaces. An empty key or
+///   value renders as `/` so it remains a column under `/ {2,}/`. A row with
+///   no values renders as indent + key only, not a synthetic value column.
+///   This makes every row splittable on `/ {2,}/` (spec §8.1.4).
 /// - `Text`: a line with the key alone, then one `    | ` prefixed line per
 ///   content line, verbatim, never folded or truncated (spec §8.1.7).
 /// - `Diagnostic`: the raw diagnostic; the renderer renders message / why /

@@ -17,11 +17,11 @@
 //! post-filter on the collected managed files only — they can never reopen a
 //! directory pruned by ignore rules.
 
-use std::ffi::OsStr;
+use std::ffi::{OsStr, OsString};
 use std::io::ErrorKind;
-use std::path::{Component, Path, PathBuf};
+use std::path::{Component, Path, PathBuf, Prefix};
 
-use globset::GlobBuilder;
+use globset::{Candidate, GlobBuilder};
 use ignore::WalkBuilder;
 
 use crate::error::Fault;
@@ -83,21 +83,34 @@ struct Pattern {
 }
 
 impl Pattern {
-    /// `rel` is the file's path relative to the scan root (`/`-joined),
-    /// `name` its file name, `anc_dirs` / `anc_names` the ancestor
-    /// directories of `rel` as accumulated relative paths / bare names.
-    fn matches(&self, rel: &str, name: &str, anc_dirs: &[String], anc_names: &[String]) -> bool {
+    /// `rel` is the file's path relative to the scan root (`/`-joined native
+    /// components), `name` its file name, `anc_dirs` / `anc_names` the
+    /// ancestor directories of `rel` as accumulated relative paths / bare
+    /// names. Construct byte candidates explicitly: globset's Path-based
+    /// candidate constructor is lossy on non-Unix platforms.
+    fn matches(
+        &self,
+        rel: &Path,
+        name: &OsStr,
+        anc_dirs: &[PathBuf],
+        anc_names: &[OsString],
+    ) -> bool {
         if self.dir_only {
             if self.anchored {
-                anc_dirs.iter().any(|d| self.matcher.is_match(d))
+                anc_dirs.iter().any(|d| self.matches_native(d.as_os_str()))
             } else {
-                anc_names.iter().any(|n| self.matcher.is_match(n))
+                anc_names.iter().any(|n| self.matches_native(n.as_os_str()))
             }
         } else if self.anchored {
-            self.matcher.is_match(rel)
+            self.matches_native(rel.as_os_str())
         } else {
-            self.matcher.is_match(name)
+            self.matches_native(name)
         }
+    }
+
+    fn matches_native(&self, path: &OsStr) -> bool {
+        self.matcher
+            .is_match_candidate(&Candidate::from_bytes(path.as_encoded_bytes()))
     }
 }
 
@@ -168,11 +181,12 @@ pub fn validate(opts: &Options) -> Result<(), Fault> {
 ///
 /// Skips `.git` directories case-insensitively on every platform (§10.1.1).
 /// On Windows additionally skips junctions — reparse-point directory
-/// entries, which are not reliably `is_symlink()` — and symlinks whose
-/// target is a directory; directory symlinks are never entered, so directory
-/// loops are impossible. On Unix the walker already refuses to follow
-/// symlinks, so file symlinks are kept and treated as files (§10.1.1). A
-/// `None` file type is treated as non-directory (no special skip).
+/// entries, which are not reliably `is_symlink()`. Symlinks whose target is
+/// a directory are skipped at the entry layer on every platform, so a
+/// managed-suffix directory link is never collected as a file and directory
+/// loops are impossible. File symlinks are kept and treated as files
+/// (§10.1.1). A `None` file type is treated as non-directory (no special
+/// skip).
 fn entry_is_enterable(entry: &ignore::DirEntry) -> bool {
     let file_type = entry.file_type();
     let is_dir = file_type.is_some_and(|ft| ft.is_dir());
@@ -192,24 +206,35 @@ fn entry_is_enterable(entry: &ignore::DirEntry) -> bool {
                 }
             }
         }
-        if file_type.is_some_and(|ft| ft.is_symlink()) {
-            // Directory symlinks are never entered; file symlinks are kept.
-            // A broken symlink (metadata fails) is kept and simply never
-            // matches anything the callers care about.
-            if let Ok(target) = std::fs::metadata(entry.path()) {
-                if target.is_dir() {
-                    return false;
-                }
+    }
+    if file_type.is_some_and(|ft| ft.is_symlink()) {
+        // Directory-target symlinks are skipped here on every platform so a
+        // managed-suffix directory link is never collected as a file. File
+        // symlinks are kept. A broken symlink (metadata fails) is kept and
+        // simply never matches anything the callers care about.
+        if let Ok(target) = std::fs::metadata(entry.path()) {
+            if target.is_dir() {
+                return false;
             }
         }
     }
     true
 }
 
+/// `true` when the yielded entry is a directory the walk entered.
+///
+/// Depth zero is the already-validated scan root. The dependency still
+/// yields that entry with symlink `file_type` for an explicit linked
+/// directory, so classification must not use `file_type` alone: the root
+/// is never a managed-file leaf and is counted once as a directory.
+fn is_entered_directory(entry: &ignore::DirEntry) -> bool {
+    entry.depth() == 0 || entry.file_type().is_some_and(|ft| ft.is_dir())
+}
+
 /// `true` when `name` (a whole file name) ends with the managed suffix,
 /// compared ASCII-case-insensitively (§10.1.4).
-fn has_managed_suffix(name: &str) -> bool {
-    let name_bytes = name.as_bytes();
+fn has_managed_suffix(name: &OsStr) -> bool {
+    let name_bytes = name.as_encoded_bytes();
     let suffix_bytes = crate::consts::SUFFIX.as_bytes();
     name_bytes.len() >= suffix_bytes.len()
         && name_bytes[name_bytes.len() - suffix_bytes.len()..].eq_ignore_ascii_case(suffix_bytes)
@@ -235,30 +260,46 @@ enum WalkErrorFact {
 fn is_io_cause(err: &ignore::Error) -> bool {
     match err {
         ignore::Error::Io(_) => true,
-        ignore::Error::WithLineNumber { err, .. } | ignore::Error::WithDepth { err, .. } => {
-            is_io_cause(err)
-        }
+        ignore::Error::WithLineNumber { err, .. }
+        | ignore::Error::WithDepth { err, .. }
+        | ignore::Error::WithPath { err, .. } => is_io_cause(err),
         ignore::Error::Partial(errors) => !errors.is_empty() && errors.iter().all(is_io_cause),
         _ => false,
     }
 }
 
+/// Only access failures can come from an unenterable containing directory;
+/// invalid bytes or unsupported source objects remain fatal source errors.
+fn is_directory_access_error(err: &ignore::Error) -> bool {
+    match err {
+        ignore::Error::Partial(errors) => {
+            !errors.is_empty() && errors.iter().all(is_directory_access_error)
+        }
+        _ => err.io_error().is_some_and(|err| {
+            matches!(
+                err.kind(),
+                ErrorKind::PermissionDenied | ErrorKind::NotFound | ErrorKind::NotADirectory
+            )
+        }),
+    }
+}
+
 /// Flatten an `ignore::Error` recursively: `Partial` unwraps to each inner,
-/// `WithLineNumber` / `WithDepth` unwrap to their inner; a `WithPath` whose
-/// cause is I/O — and `Loop` — is an unreadable-directory fact, while every
-/// other shape is fatal (keeping the path the error carries, if any).
+/// `WithLineNumber` / `WithDepth` unwrap to their inner. Only directory
+/// traversal I/O (tagged by the walker with its depth) and loops are
+/// unreadable-directory facts. Ignore/config source I/O and parse errors
+/// are fatal, keeping their actual source path.
 fn classify_error(err: &ignore::Error) -> Vec<WalkErrorFact> {
     match err {
         ignore::Error::Partial(errors) => errors.iter().flat_map(classify_error).collect(),
         ignore::Error::WithLineNumber { err, .. } => classify_error(err),
         ignore::Error::WithDepth { err, .. } => classify_error(err),
         ignore::Error::WithPath { path, err } => {
-            if is_io_cause(err) {
+            if matches!(&**err, ignore::Error::WithDepth { err, .. } if is_io_cause(err)) {
                 vec![WalkErrorFact::Unreadable(path.clone())]
             } else {
-                // E.g. a .gitignore line that failed to parse: the crate
-                // read the file but its rules are unusable — never hide
-                // that behind an empty-looking result.
+                // Source rules could not be read or compiled. Never turn
+                // that into an empty-looking successful scan.
                 vec![WalkErrorFact::Fatal {
                     path: Some(path.clone()),
                     message: format!("{}", &**err),
@@ -277,7 +318,11 @@ fn classify_error(err: &ignore::Error) -> Vec<WalkErrorFact> {
 ///
 /// `progress` receives cumulative `(dirs_entered, managed_files_found)` and
 /// is invoked whenever either counter increments (§8.4 rendering belongs to
-/// the caller; this function never prints). Hidden entries are traversed,
+/// the caller; this function never prints). `managed_files_found` is an
+/// enumeration count, not §8.4.1's `<m>` (files actually read, failures
+/// included): callers feeding the progress display keep their own read
+/// counter (`ops::context::Ctx::walk_sink` preserves it across the walk).
+/// Hidden entries are traversed,
 /// `.git` directories and never-entered link directories are pruned, ignore
 /// rules prune subtrees unless disabled, unreadable directories are recorded
 /// and skipped (§10.1.5), and every other walk error — a malformed ignore
@@ -301,7 +346,16 @@ pub fn scan(
         ));
     }
 
-    let mut builder = WalkBuilder::new(root);
+    // WalkBuilder treats a bare `-` as stdin. Always pass a filesystem
+    // absolute path, without resolving symlinks or changing the caller's
+    // lexical paths in the result/report.
+    let walk_root =
+        std::path::absolute(root).map_err(|e| Fault::io("scan", root.to_path_buf(), e))?;
+    let original_path = |path: &Path| match path.strip_prefix(&walk_root) {
+        Ok(relative) => root.join(relative),
+        Err(_) => path.to_path_buf(),
+    };
+    let mut builder = WalkBuilder::new(&walk_root);
     builder.hidden(false).require_git(false).follow_links(false);
     if opts.no_ignore {
         builder
@@ -323,15 +377,14 @@ pub fn scan(
 
     struct Found {
         path: PathBuf,
-        rel: String,
-        name: String,
+        rel: PathBuf,
+        name: OsString,
     }
 
     let mut dirs: usize = 0;
     let mut found: usize = 0;
     let mut managed: Vec<Found> = Vec::new();
     let mut unreadable_dirs: Vec<PathBuf> = Vec::new();
-    let mut entered_dirs: Vec<PathBuf> = Vec::new();
 
     // Absorb classified walk errors: unreadable-directory facts accumulate
     // and scanning continues; any fatal fact aborts the scan. The first
@@ -340,12 +393,13 @@ pub fn scan(
         let mut fatal: Option<Fault> = None;
         for fact in facts {
             match fact {
-                WalkErrorFact::Unreadable(path) => unreadable_dirs.push(path),
+                WalkErrorFact::Unreadable(path) => unreadable_dirs.push(original_path(&path)),
                 WalkErrorFact::Fatal { path, message } => {
                     if fatal.is_none() {
                         fatal = Some(Fault::io(
                             "scan",
-                            path.unwrap_or_else(|| root.to_path_buf()),
+                            path.map(|p| original_path(&p))
+                                .unwrap_or_else(|| root.to_path_buf()),
                             std::io::Error::new(ErrorKind::InvalidData, message),
                         ));
                     }
@@ -358,27 +412,40 @@ pub fn scan(
     // Sequential walk: the ignore crate surfaces every problem through the
     // iterator or the per-entry deferred error, never by printing; both
     // channels go through the same classifier.
-    for entry in builder.build() {
+    let mut walker = builder.build();
+    for entry in walker.by_ref() {
         match entry {
             Ok(e) => {
                 if let Some(err) = e.error() {
+                    // A directory we cannot enter can also deny attempts to
+                    // open its optional ignore files. Keep that failure at
+                    // the unreadable-directory boundary, not as a fatal
+                    // source failure. Probe only after an actual I/O error.
+                    if is_entered_directory(&e)
+                        && is_directory_access_error(err)
+                        && std::fs::read_dir(e.path()).is_err()
+                    {
+                        let _ = absorb_walk_errors(vec![WalkErrorFact::Unreadable(
+                            e.path().to_path_buf(),
+                        )]);
+                        continue;
+                    }
                     if let Some(fault) = absorb_walk_errors(classify_error(err)) {
                         return Err(fault);
                     }
                 }
-                if e.file_type().is_some_and(|ft| ft.is_dir()) {
+                if is_entered_directory(&e) {
                     dirs += 1;
-                    entered_dirs.push(e.path().to_path_buf());
                     progress(dirs, found);
                 } else {
-                    let name = e.file_name().to_string_lossy().into_owned();
-                    if has_managed_suffix(&name) {
+                    let name = e.file_name();
+                    if has_managed_suffix(name) {
                         found += 1;
-                        let rel = relative_forward_slashed(e.path(), root);
+                        let rel = relative_forward_slashed(e.path(), &walk_root);
                         managed.push(Found {
-                            path: e.path().to_path_buf(),
+                            path: original_path(e.path()),
                             rel,
-                            name,
+                            name: name.to_os_string(),
                         });
                         progress(dirs, found);
                     }
@@ -417,6 +484,7 @@ pub fn scan(
         .collect();
     files.sort();
     unreadable_dirs.sort();
+    unreadable_dirs.dedup();
 
     let zero_includes = if !opts.include.is_empty() && files.is_empty() && !opts.no_ignore {
         opts.include.clone()
@@ -427,7 +495,17 @@ pub fn scan(
     let mut ignore_sources = if opts.no_ignore {
         vec!["--no-ignore".to_string()]
     } else {
-        detect_ignore_sources(root, &entered_dirs)
+        let sources = walker.ignore_sources();
+        [
+            (sources.git_ignore, ".gitignore"),
+            (sources.ignore, ".ignore"),
+            (sources.git_exclude, "exclude"),
+            (sources.git_global, "global"),
+        ]
+        .into_iter()
+        .filter(|(loaded, _)| *loaded)
+        .map(|(_, name)| name.to_string())
+        .collect()
     };
     if ignore_sources.is_empty() {
         ignore_sources.push("none".to_string());
@@ -442,196 +520,43 @@ pub fn scan(
     })
 }
 
+/// Join path components with `/` while keeping each component's native
+/// `OsStr` bytes. Anchored glob matching uses this form so a Windows `\` in
+/// the original path becomes `/` without a lossy Unicode conversion.
+fn forward_joined<'a, I>(components: I) -> PathBuf
+where
+    I: IntoIterator<Item = &'a OsStr>,
+{
+    let mut out = OsString::new();
+    for component in components {
+        if !out.is_empty() {
+            out.push("/");
+        }
+        out.push(component);
+    }
+    PathBuf::from(out)
+}
+
 /// `entry_path` relative to `root`, components joined with `/` (the form
 /// §10.1.3 anchored patterns match against).
-fn relative_forward_slashed(entry_path: &Path, root: &Path) -> String {
+fn relative_forward_slashed(entry_path: &Path, root: &Path) -> PathBuf {
     let rel = entry_path.strip_prefix(root).unwrap_or(entry_path);
-    let mut out = String::new();
-    for component in rel.components() {
-        if !out.is_empty() {
-            out.push('/');
-        }
-        out.push_str(&component.as_os_str().to_string_lossy());
-    }
-    out
+    forward_joined(rel.components().map(|c| c.as_os_str()))
 }
 
 /// Ancestor directories of a `/`-joined relative file path, both as
-/// accumulated relative path strings (for anchored directory patterns) and
-/// as bare component names (for slash-free directory patterns). The file's
+/// accumulated relative paths (for anchored directory patterns) and as
+/// bare component names (for slash-free directory patterns). The file's
 /// own last component is not an ancestor.
-fn relative_ancestors(rel: &str) -> (Vec<String>, Vec<String>) {
-    let components: Vec<&str> = rel.split('/').filter(|c| !c.is_empty()).collect();
+fn relative_ancestors(rel: &Path) -> (Vec<PathBuf>, Vec<OsString>) {
+    let components: Vec<&OsStr> = rel.components().map(|c| c.as_os_str()).collect();
     let mut dirs = Vec::with_capacity(components.len());
     let mut names = Vec::with_capacity(components.len());
-    let mut accumulated = String::new();
-    for component in components.iter().take(components.len().saturating_sub(1)) {
-        if !accumulated.is_empty() {
-            accumulated.push('/');
-        }
-        accumulated.push_str(component);
-        dirs.push(accumulated.clone());
-        names.push((*component).to_string());
+    for end in 1..components.len() {
+        dirs.push(forward_joined(components[..end].iter().copied()));
+        names.push(components[end - 1].to_os_string());
     }
     (dirs, names)
-}
-
-/// Determine which ignore source kinds were actually in play (§10.1.2,
-/// §8.2's `ignore` key). Candidate directories are the root itself, every
-/// directory the walk entered, and — mirroring the ignore crate's parent
-/// reading — the *physical* ancestors of the root: the crate canonicalizes
-/// the root and walks that chain near→far, and skips parent reading
-/// entirely when canonicalization fails. Fixed report order `.gitignore`,
-/// `.ignore`, `exclude`, `global`; a source counts only when the crate
-/// could actually load it.
-fn detect_ignore_sources(root: &Path, entered_dirs: &[PathBuf]) -> Vec<String> {
-    let mut has_gitignore = false;
-    let mut has_ignore = false;
-    let mut has_exclude = false;
-
-    let mut candidates: Vec<PathBuf> = Vec::with_capacity(entered_dirs.len() + 8);
-    candidates.push(root.to_path_buf());
-    candidates.extend(entered_dirs.iter().cloned());
-    if let Ok(physical_root) = root.canonicalize() {
-        // Near→far physical ancestors, the root itself excluded: the walk
-        // already read the root's own ignore files.
-        for ancestor in physical_root.ancestors().skip(1) {
-            candidates.push(ancestor.to_path_buf());
-        }
-    }
-
-    for dir in &candidates {
-        if probe_readable(&dir.join(".gitignore")) {
-            has_gitignore = true;
-        }
-        if probe_readable(&dir.join(".ignore")) {
-            has_ignore = true;
-        }
-        let git_dir = dir.join(".git");
-        // Only a real .git directory with a loadable info/exclude counts;
-        // the `.git` *file* used by worktrees/submodules does not.
-        if path_is_dir(&git_dir) && probe_readable(&git_dir.join("info").join("exclude")) {
-            has_exclude = true;
-        }
-    }
-
-    let mut sources = Vec::new();
-    if has_gitignore {
-        sources.push(".gitignore".to_string());
-    }
-    if has_ignore {
-        sources.push(".ignore".to_string());
-    }
-    if has_exclude {
-        sources.push("exclude".to_string());
-    }
-    if global_ignore_in_play() {
-        sources.push("global".to_string());
-    }
-    sources
-}
-
-/// A source counts only when the ignore crate could actually read it: the
-/// file opens and yields to a read attempt. EOF still counts (the file was
-/// read, it is just empty); an I/O failure at open or read does not.
-fn probe_readable(path: &Path) -> bool {
-    use std::io::Read;
-    match std::fs::File::open(path) {
-        Ok(mut file) => {
-            let mut byte = [0u8; 1];
-            file.read(&mut byte).is_ok()
-        }
-        Err(_) => false,
-    }
-}
-
-fn path_is_dir(path: &Path) -> bool {
-    std::fs::metadata(path).map(|m| m.is_dir()).unwrap_or(false)
-}
-
-/// Mirror the ignore crate's global-gitignore discovery (§10.1.2):
-/// `core.excludesFile` from `$HOME/.gitconfig`, falling back to the XDG git
-/// config, and only then the default `git/ignore` locations. An empty
-/// `XDG_CONFIG_HOME` counts as unset, exactly like the crate.
-fn global_ignore_in_play() -> bool {
-    if let Some(excludes_file) = gitconfig_excludes_file() {
-        if probe_readable(&excludes_file) {
-            return true;
-        }
-    }
-    if let Some(ignore_file) = default_global_ignore_file() {
-        if probe_readable(&ignore_file) {
-            return true;
-        }
-    }
-    false
-}
-
-fn gitconfig_excludes_file() -> Option<PathBuf> {
-    // Same precedence as the ignore crate: $HOME/.gitconfig first, then the
-    // XDG git config — a home config that simply lacks the key does not
-    // stop the search.
-    if let Some(home) = home() {
-        if let Ok(bytes) = std::fs::read(home.join(".gitconfig")) {
-            if let Some(path) = parse_excludes_file(&bytes) {
-                return Some(path);
-            }
-        }
-    }
-    let config_dir = match std::env::var_os("XDG_CONFIG_HOME") {
-        Some(value) if !value.is_empty() => PathBuf::from(value),
-        _ => home()?.join(".config"),
-    };
-    let bytes = std::fs::read(config_dir.join("git").join("config")).ok()?;
-    parse_excludes_file(&bytes)
-}
-
-/// Home directory the way the ignore crate resolves it (`env::home_dir`:
-/// `USERPROFILE`-aware on Windows), so "global" detection agrees with what
-/// the crate actually read.
-fn home() -> Option<PathBuf> {
-    std::env::home_dir()
-}
-
-/// Naive gitconfig scan for `core.excludesFile`, matching the ignore crate:
-/// the first `excludesfile = <path>` line wins (key compared
-/// case-insensitively, optional surrounding quotes stripped, `~` expanded).
-fn parse_excludes_file(data: &[u8]) -> Option<PathBuf> {
-    for line in data.split(|&b| b == b'\n') {
-        let line = String::from_utf8_lossy(line);
-        let mut parts = line.split('=');
-        let key = parts.next().unwrap_or("").trim();
-        if !key.eq_ignore_ascii_case("excludesfile") {
-            continue;
-        }
-        if let Some(value) = parts.next() {
-            let value = value.trim().trim_matches('"').trim();
-            if value.is_empty() {
-                continue;
-            }
-            return Some(expand_tilde(value));
-        }
-    }
-    None
-}
-
-fn expand_tilde(value: &str) -> PathBuf {
-    if let Some(home) = home() {
-        if value == "~" {
-            return home;
-        }
-        if let Some(rest) = value.strip_prefix("~/") {
-            return home.join(rest);
-        }
-    }
-    PathBuf::from(value)
-}
-
-fn default_global_ignore_file() -> Option<PathBuf> {
-    match std::env::var_os("XDG_CONFIG_HOME") {
-        Some(value) if !value.is_empty() => Some(PathBuf::from(value).join("git").join("ignore")),
-        _ => home().map(|home| home.join(".config").join("git").join("ignore")),
-    }
 }
 
 /// `path` itself first, then every parent, near to far (§10.5.2, §10.1.6).
@@ -643,6 +568,18 @@ pub fn ancestors(path: &Path) -> Vec<PathBuf> {
     path.ancestors().map(Path::to_path_buf).collect()
 }
 
+/// `true` when `name` (a whole file name) is the state file name: exact
+/// `state.agent-besties.md` on Linux, ASCII-case-insensitive on Windows and
+/// macOS (§10.1.6 — the same platform rule [`state_file`] locates by; the
+/// `W-NAME-STATE` judgement belongs to `check`).
+pub fn is_state_file_name(name: &OsStr) -> bool {
+    if cfg!(any(windows, target_os = "macos")) {
+        name.eq_ignore_ascii_case(STATE_FILE_NAME)
+    } else {
+        name.eq(OsStr::new(STATE_FILE_NAME))
+    }
+}
+
 /// Locate the state file inside `dir` (§10.1.6): exact `state.agent-besties.md`
 /// on Linux, ASCII-case-insensitive on Windows and macOS. At most one hit is
 /// expected per directory; if several case variants coexist, the first in
@@ -650,16 +587,10 @@ pub fn ancestors(path: &Path) -> Vec<PathBuf> {
 /// `W-NAME-STATE` judgement belongs to `check`, not here).
 pub fn state_file(dir: &Path) -> Result<Option<PathBuf>, Fault> {
     let entries = std::fs::read_dir(dir).map_err(|e| Fault::io("scan", dir.to_path_buf(), e))?;
-    let case_insensitive = cfg!(any(windows, target_os = "macos"));
     for entry in entries {
         let entry = entry.map_err(|e| Fault::io("scan", dir.to_path_buf(), e))?;
         let name = entry.file_name();
-        let hit = if case_insensitive {
-            name.as_os_str().eq_ignore_ascii_case(STATE_FILE_NAME)
-        } else {
-            name.as_os_str().eq(OsStr::new(STATE_FILE_NAME))
-        };
-        if hit {
+        if is_state_file_name(&name) {
             return Ok(Some(dir.join(name)));
         }
     }
@@ -668,11 +599,29 @@ pub fn state_file(dir: &Path) -> Result<Option<PathBuf>, Fault> {
 
 fn components_joined(path: &Path) -> String {
     let mut out = String::new();
+    let mut separator = false;
     for component in path.components() {
-        if !out.is_empty() {
-            out.push('/');
+        match component {
+            Component::Prefix(_) => {
+                out.extend(component.as_os_str().to_string_lossy().chars().map(|c| {
+                    if c == '\\' {
+                        '/'
+                    } else {
+                        c
+                    }
+                }))
+            }
+            Component::RootDir => out.push('/'),
+            _ => {
+                if separator {
+                    out.push('/');
+                }
+                out.push_str(&component.as_os_str().to_string_lossy());
+            }
         }
-        out.push_str(&component.as_os_str().to_string_lossy());
+        // A drive-relative prefix is followed directly by its first name;
+        // a root has already supplied the separator.
+        separator = !matches!(component, Component::Prefix(_) | Component::RootDir);
     }
     out
 }
@@ -681,9 +630,17 @@ fn forward_slashed(path: &Path) -> String {
     path.to_string_lossy().replace('\\', "/")
 }
 
-/// Number of leading volume components (`Prefix` / `RootDir`) of an
-/// absolute path: 1 on Unix (`/`), 2 on Windows (drive or UNC prefix plus
-/// root).
+/// Compare volume identities without folding native directory components.
+fn display_prefix_identity(prefix: Prefix<'_>) -> Prefix<'_> {
+    match prefix {
+        Prefix::VerbatimDisk(drive) => Prefix::Disk(drive),
+        Prefix::VerbatimUNC(server, share) => Prefix::UNC(server, share),
+        prefix => prefix,
+    }
+}
+
+/// Number of leading volume components (`Prefix` / `RootDir`). A bare
+/// verbatim UNC share is rooted even though its iterator omits `RootDir`.
 fn volume_component_count(components: &[Component<'_>]) -> usize {
     components
         .iter()
@@ -691,17 +648,17 @@ fn volume_component_count(components: &[Component<'_>]) -> usize {
         .count()
 }
 
-/// Lexical display form of `path` (§8.1.9): everything the CLI prints is
-/// relative to the current working directory with `/` separators, `.` for
-/// the current directory itself, `..` allowed. Same-volume paths outside
-/// the cwd relativize through the longest common component prefix — one
-/// `..` per cwd component below it, then the remaining path components
-/// (paths under the cwd are the zero-`..` case). Relativization is
-/// impossible only across volumes — a mismatch at the `Prefix` / `RootDir`
-/// level (different drive, UNC vs local on Windows) — or when the current
-/// directory cannot be read; then the path is shown as given with `\`
-/// normalized to `/`. Purely lexical: never canonicalizes, never touches
-/// the disk for relative paths, and must never be written into files.
+/// Lexical display form of `path` (§8.1.9), with `/` separators, `.` for
+/// the current directory itself, and `..` allowed. Relative inputs keep
+/// their native prefix/root category, without consulting a per-drive cwd.
+/// Same-volume absolute paths relativize through the longest common
+/// component prefix — one `..` per cwd component below it, then the
+/// remaining path components (paths under the cwd are the zero-`..` case).
+/// Ordinary/verbatim drive or UNC prefixes share their native identity;
+/// directory components still compare exactly. Across volumes, or when
+/// the current directory cannot be read, the path is shown as given with
+/// `\` normalized to `/`. Purely lexical: never canonicalizes, never
+/// touches the disk for relative paths, and must never be written into files.
 pub fn display_path(path: &Path) -> String {
     if path.as_os_str().is_empty() {
         return ".".to_string();
@@ -713,25 +670,33 @@ pub fn display_path(path: &Path) -> String {
         Ok(cwd) => cwd,
         Err(_) => return forward_slashed(path),
     };
+    display_absolute_path(path, &cwd)
+}
+
+fn display_absolute_path(path: &Path, cwd: &Path) -> String {
     let path_components: Vec<Component<'_>> = path.components().collect();
     let cwd_components: Vec<Component<'_>> = cwd.components().collect();
 
-    // Longest common component prefix of the two absolute paths.
-    let mut common = 0;
-    while common < path_components.len()
-        && common < cwd_components.len()
-        && path_components[common] == cwd_components[common]
-    {
-        common += 1;
-    }
-    // The common prefix must reach past both volumes' identity components;
-    // otherwise the paths sit on different volumes and no relative form
-    // exists.
-    if common < volume_component_count(&path_components)
-        || common < volume_component_count(&cwd_components)
-    {
+    let same_volume = match (path_components.first(), cwd_components.first()) {
+        (Some(Component::Prefix(path)), Some(Component::Prefix(cwd))) => {
+            display_prefix_identity(path.kind()) == display_prefix_identity(cwd.kind())
+        }
+        (Some(Component::RootDir), Some(Component::RootDir)) => true,
+        _ => false,
+    };
+    if !same_volume {
         return forward_slashed(path);
     }
+
+    // Absolute paths already have roots. Compare their volume identities
+    // above, then skip each spelling's root separators independently.
+    let path_components = &path_components[volume_component_count(&path_components)..];
+    let cwd_components = &cwd_components[volume_component_count(&cwd_components)..];
+    let common = path_components
+        .iter()
+        .zip(cwd_components)
+        .take_while(|(path, cwd)| path == cwd)
+        .count();
 
     let mut parts: Vec<String> =
         Vec::with_capacity((cwd_components.len() - common) + (path_components.len() - common));
@@ -747,6 +712,42 @@ pub fn display_path(path: &Path) -> String {
     } else {
         joined
     }
+}
+
+/// Native components of `file` relative to the requested `dir`.
+///
+/// Ancestry uses Path/OsStr identity. Leading `Component::CurDir` on
+/// either side is a spelling of the same relative root (`-` vs `./-`),
+/// not a directory level. Folding happens only at emit.
+pub(crate) fn relative_native_parts(file: &Path, dir: &Path) -> Option<(Vec<OsString>, OsString)> {
+    let file_comps: Vec<_> = file
+        .components()
+        .skip_while(|c| matches!(c, Component::CurDir))
+        .collect();
+    let dir_comps: Vec<_> = dir
+        .components()
+        .skip_while(|c| matches!(c, Component::CurDir))
+        .collect();
+    let rel = if dir_comps.is_empty() {
+        file_comps.as_slice()
+    } else if file_comps.starts_with(&dir_comps) {
+        &file_comps[dir_comps.len()..]
+    } else {
+        return None;
+    };
+    let mut dirs = Vec::new();
+    let mut file_name: Option<OsString> = None;
+    for component in rel {
+        match component {
+            Component::Normal(name) => {
+                if let Some(prev) = file_name.replace(name.to_os_string()) {
+                    dirs.push(prev);
+                }
+            }
+            _ => return None,
+        }
+    }
+    Some((dirs, file_name?))
 }
 
 /// Append the managed suffix to the file name unless it is already there
@@ -765,31 +766,6 @@ pub fn managed_path(path: &Path) -> PathBuf {
     let mut with_suffix = path.as_os_str().to_os_string();
     with_suffix.push(crate::consts::SUFFIX);
     PathBuf::from(with_suffix)
-}
-
-/// Strip one trailing managed suffix from the file name, then [`display_path`]
-/// the result (the inverse of §2.4.3 for the first output line's object).
-/// When the whole file name was the suffix, the directory part is displayed
-/// (`.` for a bare name).
-pub fn object_path(path: &Path) -> String {
-    let mut stripped = path.to_path_buf();
-    if let Some(name) = path.file_name() {
-        let name_bytes = name.as_encoded_bytes();
-        let suffix_bytes = crate::consts::SUFFIX.as_bytes();
-        if name_bytes.ends_with(suffix_bytes) {
-            let stem = &name_bytes[..name_bytes.len() - suffix_bytes.len()];
-            if stem.is_empty() {
-                stripped.pop();
-            } else {
-                // SUFFIX is exactly two dot segments (`.agent-besties.md`);
-                // clearing the extension twice peels both natively at the
-                // OsStr level, so native name bytes stay opaque.
-                stripped.set_extension("");
-                stripped.set_extension("");
-            }
-        }
-    }
-    display_path(&stripped)
 }
 
 /// Create `dir` (and missing parents) if needed (§7.3.2). Only the creation
@@ -832,6 +808,34 @@ mod tests {
             exclude: exclude.into_iter().map(String::from).collect(),
             no_ignore: true,
         }
+    }
+
+    #[test]
+    fn literal_dash_root_is_a_directory_not_stdin() {
+        const CHILD: &str = "COEXIST_WALK_DASH_CHILD";
+        if std::env::var_os(CHILD).is_some() {
+            let result = scan(Path::new("-"), &opts(vec![], vec![]), &mut sink)
+                .expect("scan literal dash directory");
+            assert_eq!(
+                result.files,
+                vec![PathBuf::from("-").join("note.agent-besties.md")]
+            );
+            assert_eq!(result.dirs, 1);
+            return;
+        }
+        let root = scratch("dash-root");
+        touch(&root, "-/note.agent-besties.md");
+        let result = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "fsx::walk::tests::literal_dash_root_is_a_directory_not_stdin",
+            ])
+            .current_dir(&root)
+            .env(CHILD, "1")
+            .status()
+            .expect("spawn isolated cwd child");
+        let _ = fs::remove_dir_all(&root);
+        assert!(result.success(), "literal dash directory scan failed");
     }
 
     #[test]
@@ -947,8 +951,10 @@ mod tests {
     }
 
     #[test]
-    fn display_path_relativizes_and_falls_back() {
+    fn display_path_relativizes_absolute_and_relative_paths() {
         assert_eq!(display_path(Path::new("")), ".");
+        assert_eq!(display_path(Path::new(".")), ".");
+        assert_eq!(display_path(Path::new("./a/../b")), "./a/../b");
         let relative = PathBuf::from("a").join("b").join("c");
         assert_eq!(display_path(&relative), "a/b/c");
 
@@ -962,11 +968,57 @@ mod tests {
             .expect("cwd has a parent")
             .join("coexist-display-outside");
         assert_eq!(display_path(&sibling), "../coexist-display-outside");
+    }
 
-        #[cfg(windows)]
-        {
-            let other_drive = Path::new(r"Z:\w\f.md");
-            assert_eq!(display_path(other_drive), "Z:/w/f.md");
+    #[cfg(windows)]
+    #[test]
+    fn display_path_preserves_windows_relative_categories() {
+        for (path, expected) in [
+            ("C:alice", "C:alice"),
+            ("C:", "C:"),
+            (r"C:.\alice", "C:alice"),
+            (r"C:..\alice", "C:../alice"),
+            (r"\alice", "/alice"),
+            (r"\", "/"),
+        ] {
+            assert_eq!(display_path(Path::new(path)), expected, "{path}");
+        }
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn absolute_display_uses_native_volume_identity() {
+        for (path, cwd, expected) in [
+            (r"\\?\C:\work\repo\alice", r"C:\work\repo", "alice"),
+            (r"C:\work\repo\alice", r"\\?\C:\work\repo", "alice"),
+            (r"\\?\C:\work\alice", r"C:\work\repo", "../alice"),
+            (r"\\?\C:\", r"C:\work\repo", "../.."),
+            (
+                r"\\?\UNC\server\share\work\alice",
+                r"\\server\share\work",
+                "alice",
+            ),
+            (
+                r"\\server\share\work\alice",
+                r"\\?\UNC\server\share\work",
+                "alice",
+            ),
+            (r"\\?\UNC\server\share", r"\\server\share\work", ".."),
+            (r"\\server\share", r"\\?\UNC\server\share", "."),
+            (
+                r"\\?\UNC\server\other\alice",
+                r"\\server\share\work",
+                "//?/UNC/server/other/alice",
+            ),
+            (r"Z:\w\f.md", r"C:\work", "Z:/w/f.md"),
+            (r"\\?\Z:\w\f.md", r"C:\work", "//?/Z:/w/f.md"),
+            (r"\\?\C:\WORK\alice", r"C:\work\repo", "../../WORK/alice"),
+        ] {
+            assert_eq!(
+                display_absolute_path(Path::new(path), Path::new(cwd)),
+                expected,
+                "{path} from {cwd}",
+            );
         }
     }
 
@@ -1010,6 +1062,22 @@ mod tests {
         }
         let _ = fs::remove_dir_all(&exact);
         let _ = fs::remove_dir_all(&cased);
+    }
+
+    #[test]
+    fn is_state_file_name_matches_platform_case_rules() {
+        use std::ffi::OsStr;
+
+        assert!(is_state_file_name(OsStr::new(STATE_FILE_NAME)));
+        assert!(!is_state_file_name(OsStr::new("state.agent-besties.mdx")));
+        assert!(!is_state_file_name(OsStr::new("other.agent-besties.md")));
+        // A case variant matches only under the Windows/macOS rule — the
+        // same platform predicate state_file locates with (§10.1.6).
+        if cfg!(any(windows, target_os = "macos")) {
+            assert!(is_state_file_name(OsStr::new("STATE.Agent-Besties.MD")));
+        } else {
+            assert!(!is_state_file_name(OsStr::new("STATE.Agent-Besties.MD")));
+        }
     }
 
     /// Lexically relativize `absolute` against the cwd (`..` segments
@@ -1148,5 +1216,450 @@ mod tests {
         assert_eq!(display_path(&sibling), "../coexist-display-sibling");
         let aunt = grandparent.join("coexist-display-aunt");
         assert_eq!(display_path(&aunt), "../../coexist-display-aunt");
+    }
+
+    #[cfg(any(unix, windows))]
+    #[test]
+    fn include_exclude_keep_native_path_identity() {
+        #[cfg(unix)]
+        let native_name = {
+            use std::os::unix::ffi::OsStringExt;
+            OsString::from_vec(b"r\xFF".to_vec())
+        };
+        #[cfg(windows)]
+        let native_name = {
+            use std::os::windows::ffi::OsStringExt;
+            OsString::from_wide(&[0x0072, 0xD800])
+        };
+
+        let root = scratch("native-glob");
+        let raw_dir = root.join(native_name);
+        let fffd_dir = root.join("r\u{FFFD}");
+        if fs::create_dir_all(&raw_dir).is_err() {
+            // Some filesystems refuse non-Unicode names; without two
+            // distinct native identities the conflation cannot occur.
+            let _ = fs::remove_dir_all(&root);
+            return;
+        }
+        fs::create_dir_all(&fffd_dir).expect("create U+FFFD dir");
+        fs::write(raw_dir.join("note.agent-besties.md"), b"# note.post\n")
+            .expect("write non-Unicode note");
+        fs::write(fffd_dir.join("note.agent-besties.md"), b"# note.post\n")
+            .expect("write U+FFFD note");
+
+        let excluded =
+            scan(&root, &opts(vec![], vec!["r\u{FFFD}/"]), &mut sink).expect("exclude scan ok");
+        assert_eq!(excluded.files, vec![raw_dir.join("note.agent-besties.md")]);
+
+        let included =
+            scan(&root, &opts(vec!["r\u{FFFD}/*"], vec![]), &mut sink).expect("include scan ok");
+        assert_eq!(included.files, vec![fffd_dir.join("note.agent-besties.md")]);
+
+        // Built-in sources use Gitignore's matcher, not the explicit-filter
+        // adapter above. It must preserve the same two native identities.
+        let mut builder = ignore::gitignore::GitignoreBuilder::new(&root);
+        builder
+            .add_line(None, "r\u{FFFD}/")
+            .expect("valid ignore line");
+        let matcher = builder.build().expect("compile ignore rules");
+        assert!(matcher.matched(&raw_dir, true).is_none());
+        assert!(matcher.matched(&fffd_dir, true).is_ignore());
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn managed_directory_symlink_is_not_a_leaf() {
+        let root = scratch("dirlink");
+        fs::create_dir_all(root.join("real")).expect("create real dir");
+        std::os::unix::fs::symlink("real", root.join("link.agent-besties.md"))
+            .expect("create managed-suffix directory symlink");
+
+        let res = scan(&root, &opts(vec![], vec![]), &mut sink).expect("scan ok");
+        assert!(
+            res.files.is_empty(),
+            "directory symlink must not become a leaf: {:?}",
+            res.files
+        );
+        assert!(
+            res.unreadable_dirs.is_empty(),
+            "directory symlink must not be reported unreadable: {:?}",
+            res.unreadable_dirs
+        );
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    /// Direct linked root (Unix directory symlink / Windows junction) with
+    /// the managed suffix: scan the link itself. The root is a directory
+    /// even when the walker yields symlink `file_type`, so only the real
+    /// managed descendant is collected — never a phantom root leaf.
+    #[cfg(any(unix, windows))]
+    #[test]
+    fn explicit_linked_root_is_directory_not_managed_file() {
+        let base = scratch("linked-root");
+        fs::create_dir_all(base.join("real")).expect("create real dir");
+        fs::write(
+            base.join("real").join("note.agent-besties.md"),
+            b"# note.post\n",
+        )
+        .expect("write note");
+
+        let link = base.join("link.agent-besties.md");
+        #[cfg(unix)]
+        std::os::unix::fs::symlink("real", &link).expect("create managed-suffix directory symlink");
+        #[cfg(windows)]
+        {
+            let target = base
+                .join("real")
+                .to_str()
+                .expect("utf-8 temp path")
+                .replace('/', "\\");
+            let mklink = std::process::Command::new("cmd")
+                .args([
+                    "/C",
+                    "mklink",
+                    "/J",
+                    "link.agent-besties.md",
+                    target.as_str(),
+                ])
+                .current_dir(&base)
+                .output()
+                .expect("spawn cmd /C mklink");
+            assert!(
+                mklink.status.success(),
+                "mklink /J failed: {}",
+                String::from_utf8_lossy(&mklink.stderr)
+            );
+        }
+
+        let mut trailing = link.clone().into_os_string();
+        trailing.push(std::path::MAIN_SEPARATOR_STR);
+        let roots = [link.clone(), PathBuf::from(trailing), link.join(".")];
+        for root in &roots {
+            let mut calls: Vec<(usize, usize)> = Vec::new();
+            let mut progress = |dirs: usize, files: usize| calls.push((dirs, files));
+            let res = scan(root, &opts(vec![], vec![]), &mut progress).expect("scan ok");
+            assert_eq!(
+                res.files,
+                vec![root.join("note.agent-besties.md")],
+                "linked root {:?} must yield only the real descendant",
+                root
+            );
+            assert_eq!(
+                res.dirs, 1,
+                "linked root {:?} counted once as a directory",
+                root
+            );
+            assert!(
+                res.unreadable_dirs.is_empty(),
+                "linked root {:?} must not be unreadable: {:?}",
+                root,
+                res.unreadable_dirs
+            );
+            assert!(
+                calls.iter().any(|&(dirs, found)| dirs == 1 && found == 0),
+                "root directory progress missing for {:?}: {:?}",
+                root,
+                calls
+            );
+            assert_eq!(
+                *calls.last().expect("progress called"),
+                (1, 1),
+                "final progress for {:?}",
+                root
+            );
+        }
+        let _ = fs::remove_dir_all(&base);
+    }
+
+    /// Spawn this test binary under an isolated git/home environment. The
+    /// child sees `root_key` and runs the scan assertions; the parent never
+    /// mutates process-global environment.
+    fn run_env_isolated(test: &str, root_key: &str, root: &Path, vars: &[(&str, &Path)]) -> bool {
+        let mut cmd = std::process::Command::new(std::env::current_exe().unwrap());
+        cmd.args(["--exact", test, "--nocapture"]);
+        cmd.env_remove("GIT_CONFIG_GLOBAL");
+        cmd.env(root_key, root);
+        cmd.current_dir(root.parent().unwrap_or(root));
+        for (key, value) in vars {
+            cmd.env(key, value);
+        }
+        let mut child = cmd.spawn().expect("spawn env-isolated child");
+        let start = std::time::Instant::now();
+        loop {
+            if let Some(status) = child.try_wait().expect("observe isolated child") {
+                return status.success();
+            }
+            if start.elapsed() >= std::time::Duration::from_secs(15) {
+                child.kill().expect("stop blocked isolated child");
+                child.wait().expect("reap isolated child");
+                return false;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+    }
+
+    #[test]
+    fn source_errors_reach_all_walk_consumers() {
+        const ROOT_KEY: &str = "COEXIST_WALK_SOURCE_ERRORS";
+        if let Some(root) = std::env::var_os(ROOT_KEY) {
+            let root = PathBuf::from(root);
+            assert!(scan(&root, &Options::default(), &mut sink).is_err());
+            let mut builder = WalkBuilder::new(&root);
+            builder.require_git(false);
+            assert!(builder.build().next().expect("global error item").is_err());
+            let mut matcher = builder.build_matchers().pop().expect("root matcher");
+            let (_, error) = matcher.matched_with_errors("note.agent-besties.md", false);
+            assert!(error.is_some());
+            let failed = std::sync::atomic::AtomicBool::new(false);
+            builder.build_parallel().run(|| {
+                Box::new(|entry| {
+                    if entry.is_err() {
+                        failed.store(true, std::sync::atomic::Ordering::Relaxed);
+                        ignore::WalkState::Quit
+                    } else {
+                        ignore::WalkState::Continue
+                    }
+                })
+            });
+            assert!(failed.load(std::sync::atomic::Ordering::Relaxed));
+
+            // A successfully read empty global file remains a source. A
+            // malformed local file is equally fatal, not a partial success.
+            fs::write("global-ignore", b"").unwrap();
+            fs::write(root.join(".ignore"), "{broken\n").unwrap();
+            assert!(scan(&root, &Options::default(), &mut sink).is_err());
+            fs::write(root.join(".ignore"), b"").unwrap();
+            let mut removed = false;
+            let result = scan(&root, &Options::default(), &mut |dirs, _| {
+                if dirs == 1 && !removed {
+                    fs::remove_file(root.join(".ignore")).unwrap();
+                    removed = true;
+                }
+            })
+            .expect("source was read before its removal");
+            assert_eq!(result.files, vec![root.join("note.agent-besties.md")]);
+            assert!(result.ignore_sources.iter().any(|s| s == ".ignore"));
+            assert!(result.ignore_sources.iter().any(|s| s == "global"));
+            return;
+        }
+        let base = scratch("source-errors");
+        let root = base.join("room");
+        touch(&root, "note.agent-besties.md");
+        fs::write(
+            base.join("config"),
+            "[core]\nexcludesFile = global-ignore\n",
+        )
+        .unwrap();
+        fs::write(base.join("global-ignore"), "{broken\n").unwrap();
+        let ok = run_env_isolated(
+            "fsx::walk::tests::source_errors_reach_all_walk_consumers",
+            ROOT_KEY,
+            &root,
+            &[("GIT_CONFIG_GLOBAL", &base.join("config"))],
+        );
+        let _ = fs::remove_dir_all(&base);
+        assert!(ok, "isolated source errors/provenance child failed");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn nonregular_ignore_source_fails_without_waiting_for_a_writer() {
+        use std::os::unix::ffi::OsStrExt;
+        const ROOT_KEY: &str = "COEXIST_WALK_FIFO_SOURCE";
+        if let Some(root) = std::env::var_os(ROOT_KEY) {
+            let root = PathBuf::from(root);
+            assert!(scan(&root, &Options::default(), &mut sink).is_err());
+            let result = scan(&root, &opts(vec![], vec![]), &mut sink).unwrap();
+            assert_eq!(result.files, vec![root.join("note.agent-besties.md")]);
+            return;
+        }
+        let base = scratch("fifo-source");
+        let root = base.join("room");
+        touch(&root, "note.agent-besties.md");
+        let fifo = std::ffi::CString::new(root.join(".ignore").as_os_str().as_bytes()).unwrap();
+        assert_eq!(unsafe { libc::mkfifo(fifo.as_ptr(), 0o600) }, 0);
+        let ok = run_env_isolated(
+            "fsx::walk::tests::nonregular_ignore_source_fails_without_waiting_for_a_writer",
+            ROOT_KEY,
+            &root,
+            &[
+                ("HOME", &base.join("home")),
+                ("XDG_CONFIG_HOME", &base.join("xdg")),
+                ("GIT_CONFIG_GLOBAL", &base.join("missing-global")),
+                ("GIT_CONFIG_SYSTEM", &base.join("missing-system")),
+            ],
+        );
+        let _ = fs::remove_dir_all(&base);
+        assert!(
+            ok,
+            "nonregular source was not rejected within the child deadline"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn git_config_global_prunes_and_reports_global() {
+        const ROOT_KEY: &str = "COEXIST_WALK_ROOT_GIT_CONFIG_GLOBAL";
+        if let Some(root) = std::env::var_os(ROOT_KEY) {
+            let root = PathBuf::from(root);
+            let walk = Options {
+                include: vec![],
+                exclude: vec![],
+                no_ignore: false,
+            };
+            let res = scan(&root, &walk, &mut sink).expect("scan ok");
+            assert!(
+                res.files.is_empty(),
+                "global ignore must prune hidden.agent-besties.md, got {:?}",
+                res.files
+            );
+            assert!(
+                res.ignore_sources.iter().any(|s| s == "global"),
+                "expected global source, got {:?}",
+                res.ignore_sources
+            );
+            return;
+        }
+
+        let base = scratch("git-config-global");
+        let home = base.join("home");
+        let xdg = base.join("xdg");
+        let room = base.join("room");
+        fs::create_dir_all(&home).expect("create home");
+        fs::create_dir_all(&xdg).expect("create xdg");
+        fs::create_dir_all(&room).expect("create room");
+        let global_ignore = base.join("global-ignore");
+        fs::write(&global_ignore, "hidden.agent-besties.md\n").expect("write global ignore");
+        fs::write(
+            base.join("config"),
+            format!("[core]\nexcludesFile = {}\n", global_ignore.display()),
+        )
+        .expect("write GIT_CONFIG_GLOBAL");
+        fs::write(room.join("hidden.agent-besties.md"), b"# hidden.post\n").expect("write hidden");
+
+        let ok = run_env_isolated(
+            "fsx::walk::tests::git_config_global_prunes_and_reports_global",
+            ROOT_KEY,
+            &room,
+            &[
+                ("HOME", &home),
+                ("XDG_CONFIG_HOME", &xdg),
+                ("GIT_CONFIG_GLOBAL", &base.join("config")),
+                ("GIT_CONFIG_SYSTEM", &base.join("missing-system")),
+            ],
+        );
+        let _ = fs::remove_dir_all(&base);
+        assert!(ok, "isolated GIT_CONFIG_GLOBAL child failed");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn configured_missing_excludesfile_does_not_claim_global() {
+        const ROOT_KEY: &str = "COEXIST_WALK_ROOT_MISSING_EXCLUDES";
+        if let Some(root) = std::env::var_os(ROOT_KEY) {
+            let root = PathBuf::from(root);
+            let walk = Options {
+                include: vec![],
+                exclude: vec![],
+                no_ignore: false,
+            };
+            let res = scan(&root, &walk, &mut sink).expect("scan ok");
+            assert_eq!(
+                res.files,
+                vec![root.join("hidden.agent-besties.md")],
+                "missing configured excludesFile must not load the default global ignore"
+            );
+            assert!(
+                !res.ignore_sources.iter().any(|s| s == "global"),
+                "global must be absent, got {:?}",
+                res.ignore_sources
+            );
+            return;
+        }
+
+        let base = scratch("missing-excludes");
+        let home = base.join("home");
+        let xdg = base.join("xdg");
+        let room = base.join("room");
+        fs::create_dir_all(&home).expect("create home");
+        fs::create_dir_all(xdg.join("git")).expect("create xdg git");
+        fs::create_dir_all(&room).expect("create room");
+        fs::write(
+            home.join(".gitconfig"),
+            format!(
+                "[core]\nexcludesFile = {}\n",
+                base.join("missing").display()
+            ),
+        )
+        .expect("write home gitconfig");
+        fs::write(xdg.join("git").join("ignore"), "hidden.agent-besties.md\n")
+            .expect("write default global ignore");
+        fs::write(room.join("hidden.agent-besties.md"), b"# hidden.post\n").expect("write hidden");
+
+        let ok = run_env_isolated(
+            "fsx::walk::tests::configured_missing_excludesfile_does_not_claim_global",
+            ROOT_KEY,
+            &room,
+            &[
+                ("HOME", &home),
+                ("XDG_CONFIG_HOME", &xdg),
+                ("GIT_CONFIG_SYSTEM", &base.join("missing-system")),
+            ],
+        );
+        let _ = fs::remove_dir_all(&base);
+        assert!(ok, "isolated missing-excludesFile child failed");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn empty_global_ignore_still_reports_global() {
+        const ROOT_KEY: &str = "COEXIST_WALK_ROOT_EMPTY_GLOBAL";
+        if let Some(root) = std::env::var_os(ROOT_KEY) {
+            let root = PathBuf::from(root);
+            let walk = Options {
+                include: vec![],
+                exclude: vec![],
+                no_ignore: false,
+            };
+            let res = scan(&root, &walk, &mut sink).expect("scan ok");
+            assert_eq!(res.files, vec![root.join("kept.agent-besties.md")]);
+            assert!(
+                res.ignore_sources.iter().any(|s| s == "global"),
+                "empty loaded global ignore must still be a present source, got {:?}",
+                res.ignore_sources
+            );
+            return;
+        }
+
+        let base = scratch("empty-global");
+        let home = base.join("home");
+        let xdg = base.join("xdg");
+        let room = base.join("room");
+        fs::create_dir_all(&home).expect("create home");
+        fs::create_dir_all(&xdg).expect("create xdg");
+        fs::create_dir_all(&room).expect("create room");
+        let global_ignore = base.join("global-ignore");
+        fs::write(&global_ignore, b"").expect("write empty global ignore");
+        fs::write(
+            base.join("config"),
+            format!("[core]\nexcludesFile = {}\n", global_ignore.display()),
+        )
+        .expect("write GIT_CONFIG_GLOBAL");
+        fs::write(room.join("kept.agent-besties.md"), b"# kept.post\n").expect("write kept");
+
+        let ok = run_env_isolated(
+            "fsx::walk::tests::empty_global_ignore_still_reports_global",
+            ROOT_KEY,
+            &room,
+            &[
+                ("HOME", &home),
+                ("XDG_CONFIG_HOME", &xdg),
+                ("GIT_CONFIG_GLOBAL", &base.join("config")),
+                ("GIT_CONFIG_SYSTEM", &base.join("missing-system")),
+            ],
+        );
+        let _ = fs::remove_dir_all(&base);
+        assert!(ok, "isolated empty-global child failed");
     }
 }

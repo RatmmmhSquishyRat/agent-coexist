@@ -3,7 +3,7 @@
 //! Each test targets a genuinely uncertain mechanism: projection semantics
 //! (newly-relevant messages, reply-target resolution), whole-baseline
 //! advancement on unqualified changes, lifecycle transitions (creation,
-//! deletion, zero-byte, duplicate identities), and cancellation. Sync points
+//! deletion, zero-byte, over-limit, duplicate identities), and cancellation. Sync points
 //! are the ready callback plus whole polling cycles derived from
 //! `WAIT_POLL_MS` — no fixed-sleep readiness guessing. The base eleven
 //! commands have their own suites; these tests are never a base-completion
@@ -15,7 +15,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use coexist_core::error::Fault;
-use coexist_core::report::{Report, Row};
+use coexist_core::report::{Report, Row, Status};
 use coexist_core::wait::{run, Cancellation, Filter, WAIT_POLL_MS};
 
 /// Long enough for at least one full poll cycle to observe (or not observe)
@@ -97,7 +97,13 @@ impl Waiting {
 
     fn expect_hit(&self, context: &str) -> Report {
         match self.finish() {
-            Ok(report) => report,
+            Ok(report) if report.exit == 0 => report,
+            Ok(report) => panic!(
+                "expected a hit ({}), got error report exit {}:\n{}",
+                context,
+                report.exit,
+                row_text(&report)
+            ),
             Err(fault) => panic!(
                 "expected a hit ({}), got: {}",
                 context,
@@ -191,6 +197,44 @@ fn write_file(path: &Path, content: &str) {
     );
 }
 
+/// Grow a regular managed file past the storage cap without holding a 16 MiB
+/// buffer. The exclusive lock is taken first so a concurrent sample cannot
+/// observe a torn length.
+fn locked_write_over_limit(path: &Path) -> std::io::Result<()> {
+    use std::io::{Seek, SeekFrom, Write};
+    let mut file = std::fs::OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(path)?;
+    file.try_lock()?;
+    file.set_len(0)?;
+    file.seek(SeekFrom::Start(0))?;
+    file.write_all(b"# huge.post\n")?;
+    file.set_len((coexist_core::consts::MAX_MANAGED_FILE_BYTES + 1) as u64)?;
+    file.sync_all()?;
+    file.unlock()?;
+    Ok(())
+}
+
+fn write_over_limit(path: &Path) {
+    let mut last: Option<std::io::Error> = None;
+    for _ in 0..400 {
+        match locked_write_over_limit(path) {
+            Ok(()) => return,
+            Err(error) if is_lock_contention(&error) => {
+                last = Some(error);
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            Err(error) => panic!("over-limit write to {:?} failed: {}", path, error),
+        }
+    }
+    panic!(
+        "could not write over-limit {:?} within the lock-contention budget: {:?}",
+        path, last
+    );
+}
+
 fn remove_file(path: &Path) {
     let mut last: Option<std::io::Error> = None;
     for _ in 0..400 {
@@ -224,6 +268,63 @@ fn row_text(report: &Report) -> String {
         }
     }
     lines.join("\n")
+}
+
+fn field_values<'a>(report: &'a Report, wanted: &str) -> Option<&'a [String]> {
+    report.rows.iter().find_map(|row| match row {
+        Row::Fields { key, values, .. } if key == wanted => Some(values.as_slice()),
+        _ => None,
+    })
+}
+
+fn diagnostic_ids(report: &Report) -> Vec<&'static str> {
+    report
+        .rows
+        .iter()
+        .filter_map(|row| match row {
+            Row::Diagnostic(diagnostic) => Some(diagnostic.id),
+            _ => None,
+        })
+        .collect()
+}
+
+fn file_row_mentions(report: &Report, name: &str) -> bool {
+    field_values(report, "file")
+        .map(|values| values.iter().any(|value| value.contains(name)))
+        .unwrap_or(false)
+}
+
+fn expect_blocking_report(result: Result<Report, Fault>, context: &str) -> Report {
+    match result {
+        Ok(report) => {
+            assert_eq!(
+                report.exit,
+                1,
+                "{context}: error report must exit 1, rows:\n{}",
+                row_text(&report)
+            );
+            assert_eq!(
+                report.status,
+                Status::Error,
+                "{context}: first line must be error"
+            );
+            assert!(
+                field_values(&report, "file").is_some(),
+                "{context}: missing file row:\n{}",
+                row_text(&report)
+            );
+            assert!(
+                field_values(&report, "bytes").is_none(),
+                "{context}: blocking report must not be a change hit:\n{}",
+                row_text(&report)
+            );
+            report
+        }
+        Err(fault) => panic!(
+            "{context}: expected check-shaped error report, got {}",
+            fault_summary(&fault)
+        ),
+    }
 }
 
 fn post_with_first_author(author: &str) -> String {
@@ -415,6 +516,77 @@ fn state_file_deletion_with_selected_declarations_hits() {
 }
 
 #[test]
+fn wait_hit_and_deletion_report_state_conflict_warnings() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("state.agent-besties.md");
+    write_file(
+        &path,
+        &doc(&[
+            "# .state",
+            "",
+            "## locked",
+            "",
+            "alice 2026-09-17T08:00:00Z..2030-01-01T00:00:00Z",
+        ]),
+    );
+    let waiting = spawn(&path, Filter::Any);
+    waiting.wait_ready();
+    write_file(
+        &path,
+        &doc(&[
+            "# .state",
+            "",
+            "## locked",
+            "",
+            "alice 2026-09-17T08:00:00Z..2030-01-01T00:00:00Z",
+            "bob 2026-09-17T08:00:00Z..2030-01-01T00:00:00Z",
+        ]),
+    );
+    let hit = waiting.expect_hit("locked pair becomes a conflict");
+    assert_eq!(hit.status, Status::Warn);
+    assert_eq!(hit.exit, 0);
+    let hit_lines: Vec<usize> = hit
+        .rows
+        .iter()
+        .filter_map(|row| match row {
+            Row::Diagnostic(diagnostic) if diagnostic.id == "W-STATE-CONFLICT" => {
+                Some(diagnostic.line)
+            }
+            _ => None,
+        })
+        .collect();
+    assert!(
+        !hit_lines.is_empty() && hit_lines.iter().all(|line| *line > 0),
+        "ordinary hit must emit conflict warnings with real anchors, ids={:?} lines={:?}",
+        diagnostic_ids(&hit),
+        hit_lines
+    );
+
+    let waiting = spawn(&path, Filter::Any);
+    waiting.wait_ready();
+    remove_file(&path);
+    let removed = waiting.expect_hit("conflicting state file deleted");
+    assert_eq!(removed.status, Status::Warn);
+    assert_eq!(removed.exit, 0);
+    let removed_lines: Vec<usize> = removed
+        .rows
+        .iter()
+        .filter_map(|row| match row {
+            Row::Diagnostic(diagnostic) if diagnostic.id == "W-STATE-CONFLICT" => {
+                Some(diagnostic.line)
+            }
+            _ => None,
+        })
+        .collect();
+    assert!(
+        !removed_lines.is_empty() && removed_lines.iter().all(|line| *line > 0),
+        "deletion must emit the before snapshot's conflict warnings, ids={:?} lines={:?}",
+        diagnostic_ids(&removed),
+        removed_lines
+    );
+}
+
+#[test]
 fn state_deletion_without_selected_status_only_advances_to_absent() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("state.agent-besties.md");
@@ -488,26 +660,18 @@ fn duplicate_state_nick_fails_instead_of_waiting() {
             "alice 2026-09-17T09:00:00Z..2030-01-02T00:00:00Z",
         ]),
     );
-    match waiting.finish() {
-        Err(Fault::Diagnostics(diags)) => assert!(
-            diags
-                .iter()
-                .any(|diagnostic| diagnostic.id == "W-STATE-DUP"),
-            "expected W-STATE-DUP diagnostics, got {:?}",
-            diags
-                .iter()
-                .map(|diagnostic| diagnostic.id)
-                .collect::<Vec<_>>()
-        ),
-        Err(other) => panic!(
-            "expected duplicate-identity failure, got: {}",
-            fault_summary(&other)
-        ),
-        Ok(report) => panic!(
-            "duplicate identities must fail, not hit; rows:\n{}",
-            row_text(&report)
-        ),
-    }
+    let report = expect_blocking_report(waiting.finish(), "duplicate identities");
+    assert!(
+        file_row_mentions(&report, "state.agent-besties.md"),
+        "duplicate failure must name the file:\n{}",
+        row_text(&report)
+    );
+    assert_eq!(field_values(&report, "type").expect("type row"), &["state"]);
+    assert!(
+        diagnostic_ids(&report).contains(&"W-STATE-DUP"),
+        "duplicate nick is W-STATE-DUP, got {:?}",
+        diagnostic_ids(&report)
+    );
 }
 
 #[test]
@@ -516,11 +680,106 @@ fn zero_byte_present_file_fails_before_ready() {
     let path = dir.path().join("standup.agent-besties.md");
     write_file(&path, "");
     let waiting = spawn(&path, Filter::Post(None));
+    let report = expect_blocking_report(waiting.finish(), "zero-byte present file");
     assert!(
-        waiting.finish().is_err(),
-        "an existing zero-byte file is a failure, not an absent baseline"
+        file_row_mentions(&report, "standup.agent-besties.md"),
+        "empty present file must name the file:\n{}",
+        row_text(&report)
+    );
+    assert!(
+        field_values(&report, "type").is_none(),
+        "empty file has no kind: {:?}",
+        field_values(&report, "type")
+    );
+    assert!(
+        diagnostic_ids(&report).contains(&"E-H1"),
+        "empty file is E-H1, got {:?}",
+        diagnostic_ids(&report)
     );
     waiting.assert_not_ready();
+}
+
+#[test]
+fn malformed_update_after_ready_reports_file_type_and_fence() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("standup.agent-besties.md");
+    write_file(&path, &plain_post());
+    let waiting = spawn(&path, Filter::Post(None));
+    waiting.wait_ready();
+    write_file(
+        &path,
+        &doc(&[
+            "# standup.post",
+            "",
+            "## #1 alice (2026-09-17T09:00:00Z)",
+            "",
+            "```md",
+            "never closed",
+        ]),
+    );
+    let report = expect_blocking_report(waiting.finish(), "unclosed fence after ready");
+    assert!(
+        file_row_mentions(&report, "standup.agent-besties.md"),
+        "malformed update must name the file:\n{}",
+        row_text(&report)
+    );
+    assert_eq!(field_values(&report, "type").expect("type row"), &["post"]);
+    assert!(
+        diagnostic_ids(&report).contains(&"E-FENCE"),
+        "unclosed fence is E-FENCE, got {:?}",
+        diagnostic_ids(&report)
+    );
+}
+
+#[test]
+fn oversize_present_file_fails_before_ready() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("huge.agent-besties.md");
+    write_over_limit(&path);
+    let waiting = spawn(&path, Filter::Any);
+    let report = expect_blocking_report(waiting.finish(), "over-limit present file");
+    assert!(
+        file_row_mentions(&report, "huge.agent-besties.md"),
+        "over-limit present file must name the file:\n{}",
+        row_text(&report)
+    );
+    assert!(
+        field_values(&report, "type").is_none(),
+        "unparsed over-limit sample must not invent type: {:?}",
+        field_values(&report, "type")
+    );
+    assert!(
+        diagnostic_ids(&report).contains(&"E-TOO-LARGE"),
+        "over-limit file is E-TOO-LARGE, got {:?}",
+        diagnostic_ids(&report)
+    );
+    waiting.assert_not_ready();
+}
+
+#[test]
+fn oversize_update_after_ready_reports_file_without_type() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("standup.agent-besties.md");
+    write_file(&path, &plain_post());
+    let waiting = spawn(&path, Filter::Post(None));
+    waiting.wait_ready();
+    write_over_limit(&path);
+    let report = expect_blocking_report(waiting.finish(), "over-limit after ready");
+    assert!(
+        file_row_mentions(&report, "standup.agent-besties.md"),
+        "over-limit update must name the file:\n{}",
+        row_text(&report)
+    );
+    assert!(
+        field_values(&report, "type").is_none(),
+        "unparsed over-limit sample must not reuse the admitted type: {:?}",
+        field_values(&report, "type")
+    );
+    assert!(
+        diagnostic_ids(&report).contains(&"E-TOO-LARGE"),
+        "over-limit update is E-TOO-LARGE, got {:?}",
+        diagnostic_ids(&report)
+    );
 }
 
 #[test]
@@ -685,6 +944,87 @@ fn generic_wait_reports_legal_type_switch_without_pairing() {
         text.contains("add entry"),
         "new-type entities must be reported as additions:\n{}",
         text
+    );
+    assert!(
+        text.contains("update description"),
+        "type switch must report the entering brief description:\n{}",
+        text
+    );
+    assert!(
+        text.contains("after description"),
+        "type switch must report the description body in full:\n{}",
+        text
+    );
+    assert_eq!(
+        text.matches("update description").count(),
+        1,
+        "brief description must stay a single complete field update:\n{}",
+        text
+    );
+}
+
+#[test]
+fn generic_wait_reports_brief_description_on_create_and_delete() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("notes.agent-besties.md");
+    let body = doc(&["# notes.brief", "", "```md", "only description", "```"]);
+
+    let created_wait = spawn(&path, Filter::Any);
+    created_wait.wait_ready();
+    assert!(
+        !path.exists(),
+        "an absent baseline must not create the file"
+    );
+    write_file(&path, &body);
+    let created = created_wait.expect_hit("brief creation with a description");
+    let created_text = row_text(&created);
+    assert!(
+        created_text.contains("created"),
+        "creation must be reported:\n{}",
+        created_text
+    );
+    assert!(
+        created_text.contains("update description"),
+        "created brief must report the description:\n{}",
+        created_text
+    );
+    assert!(
+        created_text.contains("after only description"),
+        "created description must appear in full:\n{}",
+        created_text
+    );
+    assert_eq!(
+        created_text.matches("only description").count(),
+        1,
+        "creation must not duplicate the description:\n{}",
+        created_text
+    );
+
+    let deleted_wait = spawn(&path, Filter::Any);
+    deleted_wait.wait_ready();
+    remove_file(&path);
+    let removed = deleted_wait.expect_hit("brief deletion with a description");
+    let removed_text = row_text(&removed);
+    assert!(
+        removed_text.contains("removed"),
+        "deletion must be reported:\n{}",
+        removed_text
+    );
+    assert!(
+        removed_text.contains("update description"),
+        "deleted brief must report the description:\n{}",
+        removed_text
+    );
+    assert!(
+        removed_text.contains("before only description"),
+        "deleted description must appear in full:\n{}",
+        removed_text
+    );
+    assert_eq!(
+        removed_text.matches("only description").count(),
+        1,
+        "deletion must not duplicate the description:\n{}",
+        removed_text
     );
 }
 

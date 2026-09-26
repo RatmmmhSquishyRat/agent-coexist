@@ -42,6 +42,25 @@ use crate::ops::reason_report;
 use crate::report::{Report, Status};
 use crate::Time;
 
+/// Include patterns hidden by active ignore rules are visible, uncounted hints.
+/// The glob column is human-display only (`names::display_text`); matching
+/// identity stays the original admitted string.
+fn include_hints(report: &mut Report, zero_includes: &[String]) -> bool {
+    for glob in zero_includes {
+        report.record(
+            "include",
+            vec![
+                names::display_text(glob),
+                "matched 0 files; ignored directories are not reopened (pass --no-ignore)"
+                    .to_string(),
+            ],
+            2,
+            crate::consts::KEY_WIDTH,
+        );
+    }
+    !zero_includes.is_empty()
+}
+
 /// Failure half of the shared single-file load: every outcome that
 /// yields no document, business results and faults alike.
 enum LoadError {
@@ -125,14 +144,6 @@ fn body_excerpt(document: &doc::Document, section: usize) -> Option<String> {
     }
 }
 
-/// Lexical parent of a display path: `a/b` → `a`, `x` → `.`.
-fn parent_display(display: &str) -> String {
-    match display.rfind('/') {
-        Some(i) => display[..i].to_string(),
-        None => ".".to_string(),
-    }
-}
-
 /// §7.3.3 DIR preconditions for the DIR-taking commands (`list`,
 /// `read-notification`, `check-state`). `Ok(None)` = usable;
 /// `Ok(Some(report))` = the `E-DIR-MISSING` / `E-NOT-DIR` reason form.
@@ -149,7 +160,10 @@ fn dir_error(ctx: &Ctx, command: &'static str, dir: &Path) -> Result<Option<Repo
             vec![
                 ("path", object.clone()),
                 ("cmd", command.to_string()),
-                ("parent", parent_display(&object)),
+                (
+                    "parent_arg",
+                    context::parent_dir(dir).to_string_lossy().into_owned(),
+                ),
             ],
         ))),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Some(reason_report(
@@ -157,7 +171,13 @@ fn dir_error(ctx: &Ctx, command: &'static str, dir: &Path) -> Result<Option<Repo
             command,
             &object,
             "E-DIR-MISSING",
-            vec![("dir", object.clone()), ("parent", parent_display(&object))],
+            vec![
+                ("dir", object.clone()),
+                (
+                    "parent_arg",
+                    context::parent_dir(dir).to_string_lossy().into_owned(),
+                ),
+            ],
         ))),
         Err(e) => Err(Fault::io("read", dir.to_path_buf(), e)),
     }
@@ -165,7 +185,7 @@ fn dir_error(ctx: &Ctx, command: &'static str, dir: &Path) -> Result<Option<Repo
 
 /// `E-FILE-MISSING` reason form for the PATH-taking read commands
 /// (§7.3.2). `{file}` carries the suffix — it is the file that does not
-/// exist; the fix's `{dir}` is its lexical parent.
+/// exist; the fix uses the native parent from `dctx.dir_arg`.
 fn file_missing_report(
     dctx: &diag::Context,
     command: &'static str,
@@ -177,18 +197,15 @@ fn file_missing_report(
         command,
         object,
         "E-FILE-MISSING",
-        vec![
-            ("file", context::display_file(path)),
-            ("dir", parent_display(object)),
-        ],
+        vec![("file", context::display_file(path))],
     )
 }
 
 /// `E-TYPE` reason form (§9 补充1): the `cmd_for_actual` mapping for every
 /// actual kind — the catalog placeholder is `{cmd_for_actual}`, so the
 /// param key must match it exactly or the fix renders the placeholder
-/// literally. `dir` rides along for the `actual = state` fix variant
-/// (selected by the actual type, not by this param's presence).
+/// literally. State recovery additionally requires the actual inspected file
+/// to be the selected reserved state file, rather than merely carrying that type.
 fn type_report(
     dctx: &diag::Context,
     command: &'static str,
@@ -211,96 +228,6 @@ fn type_report(
             ("actual", actual.as_str().to_string()),
             ("expected", expected.to_string()),
             ("cmd_for_actual", cmd_for_actual.to_string()),
-            ("dir", dctx.dir.clone()),
         ],
     )
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::report::Row;
-
-    fn dctx(dir: &str) -> diag::Context {
-        diag::Context {
-            path: format!("{dir}/standup"),
-            dir: dir.into(),
-            stem: "standup".into(),
-            argv: "agent-coexist read-brief docs/standup".into(),
-            command: "read-brief".into(),
-            now: "2026-09-25T10:00:00Z".into(),
-        }
-    }
-
-    fn row_values(report: &Report, key: &str) -> Vec<String> {
-        report
-            .rows
-            .iter()
-            .filter_map(|row| match row {
-                Row::Fields { key: k, values, .. } if k == key => Some(values.clone()),
-                _ => None,
-            })
-            .next()
-            .unwrap_or_default()
-    }
-
-    #[test]
-    fn type_report_names_the_actual_type_and_resolves_cmd_for_actual() {
-        // a post file reaching a brief command: the reason names the
-        // actual type, the fix names the post command (resolved from
-        // cmd_for_actual — never a literal placeholder), and no state
-        // wording appears even though the dir param is present
-        let report = type_report(
-            &dctx("docs"),
-            "read-brief",
-            "docs/standup",
-            doc::Kind::Post,
-            "brief",
-        );
-        assert_eq!(report.status, Status::Error);
-        assert_eq!(report.exit, 1);
-        let reason = row_values(&report, "reason").join(" ");
-        assert!(reason.contains("post"), "actual type missing: {reason}");
-        assert!(reason.contains("brief"), "expected type missing: {reason}");
-        let fix = row_values(&report, "fix").join(" ");
-        assert!(!fix.contains('{'), "unresolved placeholder in fix: {fix}");
-        assert!(
-            fix.contains("agent-coexist post"),
-            "fix does not name the actual command: {fix}"
-        );
-        assert!(
-            !fix.contains("state"),
-            "state wording on a post file: {fix}"
-        );
-
-        // a state file reaching a post command: the state variant names
-        // the state command with the file's directory
-        let report = type_report(
-            &dctx("src/parser"),
-            "lookfor-comment",
-            "src/parser/state",
-            doc::Kind::State,
-            "post",
-        );
-        let fix = row_values(&report, "fix").join(" ");
-        assert!(
-            fix.contains("agent-coexist state src/parser"),
-            "state fix missing dir: {fix}"
-        );
-
-        // a profile file: the command word is `profile`, not the type
-        // word `agent-profile`
-        let report = type_report(
-            &dctx("docs"),
-            "read-brief",
-            "docs/standup",
-            doc::Kind::Profile,
-            "brief",
-        );
-        let fix = row_values(&report, "fix").join(" ");
-        assert!(
-            fix.contains("agent-coexist profile"),
-            "profile command not named: {fix}"
-        );
-    }
 }

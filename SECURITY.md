@@ -21,8 +21,11 @@ exclusive writes) coordinates `agent-coexist` processes to avoid collisions.
 It does not stop other editors or non-cooperating programs. A `locked`
 state declaration gates only `profile` and `brief` writes by other
 `agent-coexist` processes — never `post`, `subscribe`, or `state` writes —
-and hand-editing a file bypasses it entirely. Nothing here is a sandbox or
-an access-control mechanism.
+and hand-editing a file bypasses it entirely. A write through a file
+symlink is gated by that lock on the supplied path's directory chain
+and on the canonical referent's parent chain. Own `--as` still exempts
+you. This is not volume-wide hardlink discovery. Nothing here is a
+sandbox or an access-control mechanism.
 
 **No built-in transport or command execution.** The CLI does not sync files
 between machines or execute messages. It reads referenced files and writes
@@ -30,14 +33,18 @@ collaboration files with the permissions of the process running it.
 
 **Your permissions are its permissions.** It reads and writes with your
 user's filesystem permissions — no elevation, no isolation. Directory
-walking honors gitignore-family rules and skips symlinked directories;
-that is traversal behavior, not a security boundary.
+walking honors gitignore-family rules. An explicit scan root that is a
+directory symlink, junction, or `.git` directory is entered; discovered
+descendant directory links, junctions, and `.git` directories are
+pruned. That is traversal behavior, not a security boundary.
 
 ### Working as designed (not vulnerabilities)
 
 - Another program edited a file without taking a lock.
 - Someone posted or edited comments under your nick.
 - A `locked` declaration did not stop a `state` write or a hand edit.
+- A `locked` declaration on a referent's directory stopped a `profile`
+  write through a file symlink.
 
 These are documented properties of local plaintext cooperation, not bugs
 (see [the file guide](docs/file-format.md)). If behavior exceeds these

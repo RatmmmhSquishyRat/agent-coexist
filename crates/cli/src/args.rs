@@ -4,7 +4,8 @@
 //!
 //! 1. clap parses the grammar (`-h` / `-V`, positional shapes, required
 //!    arguments, `u64` overflow for `--edit` / `--reply-to` / `--comment`)
-//!    and exits 2 on stderr by itself for those errors.
+//!    and returns grammar errors to main for one-line stderr and exit 2;
+//!    explicit help/version keep clap's stdout and exit 0.
 //! 2. [`resolve`] validates every value **before any file access**
 //!    (spec §7.1.5–§7.1.7): nick / status / section grammars, control
 //!    characters and double spaces in the enumerating values, `-m`
@@ -204,13 +205,13 @@ pub enum Commands {
         /// the description (no --target/--entry) or the entry's note (with --target/--entry)
         #[arg(short = 'm', value_name = "content")]
         message: Option<String>,
-        /// the entry's target file, relative to the brief's directory
+        /// the entry's target file, relative to the brief's directory; raw CR and LF are rejected
         #[arg(long, value_name = "path")]
         target: Option<String>,
         /// the entry title (matched after whitespace folding)
         #[arg(long, value_name = "title")]
         entry: Option<String>,
-        /// require this pattern in the target ('' deletes the regex line); only with --target
+        /// require this pattern in the target ('' deletes the regex line); only with --target; raw CR and LF are rejected
         #[arg(long, value_name = "pattern")]
         regex: Option<String>,
         /// delete the whole --entry
@@ -317,8 +318,8 @@ pub enum Commands {
 }
 
 impl Commands {
-    /// Whether this command traverses directories (spec §8.4 progress is
-    /// wired only for these).
+    /// Whether this command walks a tree or ancestor state files (spec §8.4
+    /// progress is wired only for these).
     pub fn traverses(&self) -> bool {
         matches!(
             self,
@@ -326,6 +327,8 @@ impl Commands {
                 | Commands::ReadNotification { .. }
                 | Commands::CheckState { .. }
                 | Commands::State { .. }
+                | Commands::Profile { .. }
+                | Commands::Brief { .. }
         )
     }
 }
@@ -440,7 +443,7 @@ pub fn resolve(cli: Cli, ctx: &Ctx) -> Result<Invocation, String> {
             let as_nick = opt_nick(as_nick)?;
             let entry = opt_entry(entry)?;
             if let Some(pattern) = &regex {
-                if pattern.contains('\n') {
+                if pattern.contains('\n') || pattern.contains('\r') {
                     return Err("--regex must not contain newlines".to_string());
                 }
                 if let Err(err) = regex::Regex::new(pattern) {
@@ -448,6 +451,11 @@ pub fn resolve(cli: Cli, ctx: &Ctx) -> Result<Invocation, String> {
                         "--regex does not compile: {}",
                         names::fold(&err.to_string())
                     ));
+                }
+            }
+            if let Some(t) = &target {
+                if t.contains('\n') || t.contains('\r') {
+                    return Err("--target must not contain newlines".to_string());
                 }
             }
             if regex.is_some() && target.is_none() {
@@ -464,6 +472,9 @@ pub fn resolve(cli: Cli, ctx: &Ctx) -> Result<Invocation, String> {
                 let entry = entry.ok_or_else(|| "--remove requires --entry <title>".to_string())?;
                 if message.is_some() {
                     return Err("-m cannot be combined with --remove".to_string());
+                }
+                if target.is_some() {
+                    return Err("--target cannot be combined with --remove".to_string());
                 }
                 BriefForm::RemoveEntry { entry }
             } else if let Some(t) = target {
@@ -671,14 +682,12 @@ pub fn resolve(cli: Cli, ctx: &Ctx) -> Result<Invocation, String> {
 }
 
 /// Append `consts::SUFFIX` when the user omitted it (spec §2.4.3); a PATH
-/// given with the suffix is used as-is.
+/// given with the suffix is used as-is. This is exactly
+/// [`fsx::walk::managed_path`]: the presence test is an exact byte compare
+/// on the file name only (a trailing separator can never cause a second
+/// append) and every `OsStr` byte is preserved — no lossy round-trip.
 fn suffixed(path: PathBuf) -> PathBuf {
-    let raw = path.as_os_str().to_string_lossy();
-    if raw.ends_with(consts::SUFFIX) {
-        path
-    } else {
-        PathBuf::from(format!("{raw}{}", consts::SUFFIX))
-    }
+    fsx::walk::managed_path(&path)
 }
 
 /// Build and validate the walk options (globs validated before any file
@@ -874,7 +883,7 @@ Usage (six mutually exclusive forms):
   agent-coexist brief <PATH> [--as <nick>] [--entry <title>] --refresh          recompute hashes
 
 -m means the description when no --target/--entry is given, and the entry's note otherwise; 'description set' / 'note set' name what was written.
---regex requires --target; --regex '' deletes the regex line. --remove requires --entry and excludes -m. --refresh excludes --target, -m and --remove.
+--regex requires --target; --regex '' deletes the regex line. --regex and --target must not contain raw CR or LF (use \\r / \\n in a pattern to match those bytes). --remove requires --entry and excludes --target, -m. --refresh excludes --target, -m and --remove.
 --as is your nick, used only for the functional-lock check and never written; without --as any other agent's 'locked' triggers E-FLOCKED.
 Writing takes an exclusive lock with a 200ms fast-fail (E-LOCKED exit 3). On E-FLOCKED, retry at the expiry time shown in 'reason'; do not poll at E-LOCKED's millisecond cadence.
 Example: agent-coexist brief docs/onboarding --target src/parser/mod.rs";
@@ -944,3 +953,181 @@ Watches exactly DIR/state.agent-besties.md (DIR defaults to the current director
 --status ('locked', 'observing' or a valid custom name) restricts hits to that status's declarations; without it any change to the file hits.
 A single 'waiting  wait-state  <object>' line is written to stderr once the baseline is established. Ctrl-C cancels: exit 130, no stdout.
 Example: agent-coexist wait-state src --status locked";
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// §2.4.3 argument-path identity: an already-suffixed PATH is used
+    /// byte-for-byte as given — a trailing separator never causes a second
+    /// append (regression: CLI-SUFFIXED-WHOLE-PATH).
+    #[test]
+    fn suffixed_path_with_trailing_separator_is_used_as_is() {
+        let path = PathBuf::from("docs/standup.agent-besties.md/");
+        let resolved = suffixed(path.clone());
+        assert_eq!(resolved.as_os_str(), path.as_os_str());
+        assert_eq!(
+            resolved.file_name().and_then(|name| name.to_str()),
+            Some("standup.agent-besties.md")
+        );
+    }
+
+    /// The suffix test targets the file name only, so a plain name still
+    /// gets exactly one append.
+    #[test]
+    fn suffixed_appends_once_to_plain_name() {
+        assert_eq!(
+            suffixed(PathBuf::from("docs/standup")),
+            PathBuf::from("docs/standup.agent-besties.md")
+        );
+    }
+
+    /// Non-UTF-8 components survive resolution byte-for-byte — no lossy
+    /// round-trip through U+FFFD (regression: CLI-SUFFIXED-WHOLE-PATH).
+    #[cfg(unix)]
+    #[test]
+    fn suffixed_preserves_non_utf8_bytes() {
+        use std::os::unix::ffi::OsStrExt;
+
+        let parent = std::ffi::OsStr::from_bytes(b"docs\xff");
+        let path = PathBuf::from(parent).join("standup");
+        let mut expected = path.as_os_str().as_bytes().to_vec();
+        expected.extend_from_slice(consts::SUFFIX.as_bytes());
+        assert_eq!(suffixed(path).as_os_str().as_bytes(), expected.as_slice());
+
+        // Already suffixed: untouched identity, not even a rebuild.
+        let path =
+            PathBuf::from(parent).join(std::ffi::OsStr::from_bytes(b"standup.agent-besties.md"));
+        assert_eq!(suffixed(path.clone()), path);
+    }
+
+    fn brief_cli(target: Option<String>, regex: Option<String>) -> Cli {
+        Cli {
+            command: Commands::Brief {
+                path: PathBuf::from("plan"),
+                as_nick: None,
+                message: None,
+                target,
+                entry: None,
+                regex,
+                remove: false,
+                refresh: false,
+            },
+        }
+    }
+
+    fn resolve_brief(target: Option<String>, regex: Option<String>) -> Result<Invocation, String> {
+        let ctx = Ctx::new(String::new(), None).expect("ctx");
+        resolve(brief_cli(target, regex), &ctx)
+    }
+
+    fn brief_target(inv: Invocation) -> BriefTarget {
+        match inv {
+            Invocation::Base {
+                request: Request::Brief(p),
+                ..
+            } => match p.form {
+                BriefForm::Target(t) => t,
+                _ => panic!("expected brief target form"),
+            },
+            _ => panic!("expected base brief invocation"),
+        }
+    }
+
+    /// Raw CR/LF in --regex/--target are usage failures at resolve, before
+    /// any file access (R4 raw-CR-regex write produced ok + unparseable).
+    #[test]
+    fn resolve_rejects_raw_cr_or_lf_in_regex_and_target() {
+        assert!(resolve_brief(Some("target.txt".into()), Some("\rmatch".into())).is_err());
+        assert!(resolve_brief(Some("target.txt".into()), Some("a\nmatch".into())).is_err());
+        assert!(resolve_brief(Some("target.txt".into()), Some("a\r\nmatch".into())).is_err());
+        assert!(resolve_brief(Some("tar\rget.txt".into()), Some("ok".into())).is_err());
+        assert!(resolve_brief(Some("tar\nget.txt".into()), None).is_err());
+        assert!(resolve_brief(Some("tar\r\nget.txt".into()), None).is_err());
+    }
+
+    /// Two-character regex escapes and surrounding whitespace stay usable;
+    /// values are not trimmed and other controls are not newly rejected.
+    #[test]
+    fn resolve_keeps_regex_escapes_and_raw_whitespace() {
+        let cr =
+            brief_target(resolve_brief(Some("target.txt".into()), Some("\\r".into())).unwrap());
+        match cr.regex {
+            RegexOpt::Set(p) => assert_eq!(p, "\\r"),
+            _ => panic!("expected Set"),
+        }
+        let lf =
+            brief_target(resolve_brief(Some("target.txt".into()), Some("\\n".into())).unwrap());
+        match lf.regex {
+            RegexOpt::Set(p) => assert_eq!(p, "\\n"),
+            _ => panic!("expected Set"),
+        }
+        let padded =
+            brief_target(resolve_brief(Some("a.txt ".into()), Some(" foo ".into())).unwrap());
+        assert_eq!(padded.target, "a.txt ");
+        match padded.regex {
+            RegexOpt::Set(p) => assert_eq!(p, " foo "),
+            _ => panic!("expected Set"),
+        }
+        let tabbed =
+            brief_target(resolve_brief(Some("a.txt".into()), Some("\tfoo".into())).unwrap());
+        match tabbed.regex {
+            RegexOpt::Set(p) => assert_eq!(p, "\tfoo"),
+            _ => panic!("expected Set"),
+        }
+        let delete =
+            brief_target(resolve_brief(Some("a.txt".into()), Some(String::new())).unwrap());
+        assert!(matches!(delete.regex, RegexOpt::Delete));
+    }
+
+    /// `--entry --remove --target` is a usage error at resolve, never
+    /// RemoveEntry. Valid `--entry --remove` stays representable
+    /// (regression: BRIEF-REMOVE-DROPS-TARGET).
+    #[test]
+    fn resolve_rejects_remove_combined_with_target() {
+        let ctx = Ctx::new(String::new(), None).expect("ctx");
+        let mixed = Cli {
+            command: Commands::Brief {
+                path: PathBuf::from("plan"),
+                as_nick: None,
+                message: None,
+                target: Some("new.txt".into()),
+                entry: Some("item".into()),
+                regex: None,
+                remove: true,
+                refresh: false,
+            },
+        };
+        match resolve(mixed, &ctx) {
+            Err(_) => {}
+            Ok(Invocation::Base {
+                request: Request::Brief(p),
+                ..
+            }) => panic!("expected usage error, got form {:?}", p.form),
+            Ok(_) => panic!("expected usage error, never RemoveEntry"),
+        }
+
+        let valid = Cli {
+            command: Commands::Brief {
+                path: PathBuf::from("plan"),
+                as_nick: None,
+                message: None,
+                target: None,
+                entry: Some("item".into()),
+                regex: None,
+                remove: true,
+                refresh: false,
+            },
+        };
+        match resolve(valid, &ctx) {
+            Ok(Invocation::Base {
+                request: Request::Brief(p),
+                ..
+            }) => match p.form {
+                BriefForm::RemoveEntry { entry } => assert_eq!(entry, "item"),
+                other => panic!("expected RemoveEntry, got {other:?}"),
+            },
+            _ => panic!("expected ok remove"),
+        }
+    }
+}

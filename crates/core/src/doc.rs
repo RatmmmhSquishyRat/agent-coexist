@@ -104,7 +104,9 @@ pub struct Document {
     /// invalid) to the first H2 line (or EOF).
     pub preamble: Span,
     pub sections: Vec<Section>,
-    /// All diagnostics, sorted by anchor line then §9 catalog order.
+    /// Parse diagnostics, sorted by anchor line then §9 catalog order.
+    /// `check` and qualifying wait hits derive pairwise state-conflict
+    /// diagnostics on demand rather than materializing them during parsing.
     pub diagnostics: Vec<Diagnostic>,
     pub post: types::post::Post,
     pub brief: types::brief::Brief,
@@ -158,7 +160,10 @@ fn too_large() -> Diagnostic {
 /// problem is a diagnostic on the returned document, which keeps whatever
 /// could be parsed (spec §10.2.3: an empty file yields E-H1, not an error).
 /// `path` supplies the stem for W-NAME / W-NAME-STATE; `now` is the single
-/// command clock used for state validity.
+/// command clock used for state validity. Pairwise state-conflict
+/// diagnostics are derived only when emitted by `check` or a qualifying
+/// wait hit; all parseable declarations and other parse diagnostics remain
+/// available here.
 pub fn parse(bytes: Vec<u8>, path: &Path, now: DateTime<Utc>) -> Result<Document, Fault> {
     if bytes.len() > consts::MAX_MANAGED_FILE_BYTES {
         return Err(Fault::Diagnostics(vec![too_large()]));
@@ -305,6 +310,9 @@ pub fn parse(bytes: Vec<u8>, path: &Path, now: DateTime<Utc>) -> Result<Document
         }
     }
     let mut sections: Vec<Section> = Vec::with_capacity(h2s.len());
+    // Headings and closed fences are source-ordered. Skip old fences once,
+    // keeping the first future fence available across bodyless sections.
+    let mut next_fence = 0;
     for (si, &h) in h2s.iter().enumerate() {
         let end_idx = h2s.get(si + 1).copied().unwrap_or(lines.count());
         let hl = lines.line(h);
@@ -313,10 +321,13 @@ pub fn parse(bytes: Vec<u8>, path: &Path, now: DateTime<Utc>) -> Result<Document
         } else {
             lines.line(end_idx).start
         };
+        while next_fence < fence.blocks.len() && fence.blocks[next_fence].open <= h {
+            next_fence += 1;
+        }
         let body = fence
             .blocks
-            .iter()
-            .find(|b| b.open > h && b.open < end_idx)
+            .get(next_fence)
+            .filter(|b| b.open < end_idx)
             .map(|b| Body::from_block(&source, b));
         sections.push(Section {
             title: names::fold(&source[hl.start + 3..hl.end]),
@@ -337,8 +348,7 @@ pub fn parse(bytes: Vec<u8>, path: &Path, now: DateTime<Utc>) -> Result<Document
         .map(|s| s.head.start)
         .unwrap_or(source.len());
     let preamble = pre_start..pre_end;
-    let preamble_lines =
-        lines.idx_at(pre_start)..lines.idx_at(pre_end).max(lines.idx_at(pre_start));
+    let preamble_lines = lines.lines_in(pre_start..pre_end);
 
     // --- per-type views -----------------------------------------------------
     let empty_post = || types::post::Post {
@@ -384,6 +394,7 @@ pub fn parse(bytes: Vec<u8>, path: &Path, now: DateTime<Utc>) -> Result<Document
                 now,
                 &mut diagnostics,
             );
+            ctx.stray_preamble(preamble_lines.clone());
             let profile = types::profile::scan(&mut ctx, &sections);
             if sections.is_empty() {
                 // W-PROFILE-EMPTY anchors at the H1 (spec §5.2.3)
@@ -400,6 +411,7 @@ pub fn parse(bytes: Vec<u8>, path: &Path, now: DateTime<Utc>) -> Result<Document
                 now,
                 &mut diagnostics,
             );
+            ctx.stray_preamble(preamble_lines.clone());
             let state = types::state::scan(&mut ctx, &sections);
             (empty_post(), empty_brief(), Vec::new(), state)
         }
@@ -626,6 +638,54 @@ mod tests {
     }
 
     #[test]
+    fn section_bodies_keep_first_fence_across_bodyless_sections() {
+        let preamble = "\n```md\npreamble\n```\n";
+        let sections = [
+            "## before\n",
+            concat!(
+                "## 第一\r\n",
+                "```md\r\n",
+                "# body H1\r\n",
+                "## fenced H2\r\n",
+                "一\r二\r\n",
+                "```\r\n",
+                "```md\n",
+                "ignored second fence\n",
+                "```\n",
+            ),
+            "## gap\n",
+            "## after\n```md\nlast\n```\n",
+            "## unfinished\n```md\n## hidden\n",
+        ];
+        let src = format!("# a.agent-profile\n{preamble}{}", sections.concat());
+        let d = parse_str(&src, "a");
+        assert_eq!(
+            d.sections
+                .iter()
+                .map(|s| s.title.as_str())
+                .collect::<Vec<_>>(),
+            vec!["before", "第一", "gap", "after", "unfinished"]
+        );
+        assert_eq!(d.text(&d.preamble), preamble);
+        let bodies = [
+            None,
+            Some("# body H1\r\n## fenced H2\r\n一\r二"),
+            None,
+            Some("last"),
+            None,
+        ];
+        for (i, expected) in sections.iter().enumerate() {
+            assert_eq!(d.text(&d.sections[i].span), *expected);
+            assert_eq!(d.body(i), bodies[i]);
+        }
+        assert_eq!(d.text(&d.sections[1].head), "## 第一");
+        assert_eq!(
+            d.text(&d.sections[1].body.as_ref().unwrap().span),
+            "```md\r\n# body H1\r\n## fenced H2\r\n一\r二\r\n```"
+        );
+    }
+
+    #[test]
     fn blocking_subset_and_sorting() {
         // an invalid H1 leaves no type view, so no W-STRAY is derived;
         // blocking() keeps only the §1 set
@@ -634,5 +694,61 @@ mod tests {
         let blocking = d.blocking();
         assert_eq!(blocking.len(), 1);
         assert_eq!(blocking[0].id, "E-H1");
+    }
+
+    #[test]
+    fn unterminated_last_line_is_content_phantom_is_not() {
+        // T-EOF-IDX-EXCLUSIVE / STATE-01: no final LF still parses the last
+        // real line; a trailing LF's phantom empty line is not content.
+        let post = "# foo.post\n\n- subscribers: alice";
+        let d = parse_str(post, "foo");
+        assert_eq!(d.post.subscribers, vec!["alice".to_string()]);
+        assert!(d.diagnostics.iter().all(|x| x.id != "W-STRAY"));
+        let sp = d.post.subscribers_span.expect("subscribers line");
+        assert_eq!(&d.source[sp.clone()], "- subscribers: alice");
+
+        let d = parse_str("# foo.post\n\n- subscribers: alice\n", "foo");
+        assert_eq!(d.post.subscribers, vec!["alice".to_string()]);
+        assert!(d.diagnostics.is_empty());
+
+        let now = "2026-09-25T12:00:00Z".parse().unwrap();
+        let state = "# .state\n\n## locked\n\nalice 2026-09-25T11:00:00Z..2026-09-25T13:00:00Z";
+        let d = parse(state.as_bytes().to_vec(), Path::new("state"), now).unwrap();
+        assert_eq!(d.state.len(), 1);
+        assert_eq!(d.state[0].entries.len(), 1);
+        assert_eq!(d.state[0].entries[0].nick, "alice");
+        assert!(d.state[0].entries[0].clean);
+        assert_eq!(d.state[0].clean_lines.len(), 1);
+
+        let d = parse(format!("{state}\n").into_bytes(), Path::new("state"), now).unwrap();
+        assert_eq!(d.state[0].entries.len(), 1);
+        assert_eq!(d.state[0].entries[0].nick, "alice");
+        assert!(d.state[0].entries[0].clean);
+
+        let dirty = "# .state\n\n## locked\n\nalice 2026-09-25T11:00:00Z..2026-09-25T13:00:00Z\nalice 2026-09-25T11:00:00Z..2026-09-25T14:00:00Z, junk";
+        let d = parse(dirty.as_bytes().to_vec(), Path::new("state"), now).unwrap();
+        assert_eq!(d.state[0].entries.len(), 2);
+        assert!(d.state[0].entries[0].clean);
+        assert!(!d.state[0].entries[1].clean);
+        assert_eq!(d.state[0].entries[1].nick, "alice");
+        assert!(ids(&d).contains(&"W-STATE-ENTRY"));
+    }
+
+    #[test]
+    fn state_preamble_stray_skips_reader_comments() {
+        let d = parse_str("# .state\n\njunk\n\n## locked\n", "state");
+        assert_eq!(
+            d.diagnostics
+                .iter()
+                .map(|x| (x.id, x.line))
+                .collect::<Vec<_>>(),
+            vec![("W-STRAY", 3)]
+        );
+
+        let d = parse_str(
+            "# .state\n\n> locked = please do not change this directory or its subdirectories until the end time; observing = I am watching, changes are welcome.\n\n## locked\n",
+            "state",
+        );
+        assert!(!ids(&d).contains(&"W-STRAY"));
     }
 }

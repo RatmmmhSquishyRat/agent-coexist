@@ -12,7 +12,7 @@ use crate::consts;
 use crate::doc;
 use crate::error::Fault;
 use crate::fsx::{self, Mutation};
-use crate::ops::context::{self, Ctx};
+use crate::ops::context::Ctx;
 use crate::report::Report;
 use crate::text::{self, Splice};
 
@@ -176,7 +176,7 @@ fn remove_step(
         None => {
             return Err(Fault::reason("E-SECTION-NOTFOUND")
                 .with("name", name.to_string())
-                .with("path", context::object_of_path(&p.path)));
+                .with("path_arg", p.path.to_string_lossy().into_owned()));
         }
     };
     if stash_flock(stash, ctx, &p.path, p.as_nick.as_deref()) {
@@ -277,6 +277,88 @@ mod tests {
         // survives the refusal byte-for-byte.
         assert!(target.exists());
         assert_eq!(std::fs::read(&target).unwrap(), Vec::<u8>::new());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn file_symlink_respects_referent_locks_and_own_identity() {
+        let dir = scratch("flock-file-symlink");
+        let locked = dir.join("locked");
+        let nested = locked.join("child");
+        let free = dir.join("free");
+        std::fs::create_dir_all(&nested).unwrap();
+        std::fs::create_dir(&free).unwrap();
+        let target = nested.join("notes.agent-besties.md");
+        let alias = free.join("notes.agent-besties.md");
+        let original = b"# notes.agent-profile\n\n## role\n\n```\nold\n```\n";
+        std::fs::write(&target, original).unwrap();
+        std::os::unix::fs::symlink(&target, &alias).unwrap();
+        std::fs::write(locked.join("state.agent-besties.md"), LOCKED_BY_OTHER).unwrap();
+
+        for path in [&target, &alias] {
+            let mut ctx = test_ctx(time::parse(NOW).unwrap());
+            let report = run(&mut ctx, &set_section(path.clone())).unwrap();
+            assert_eq!(report.status, Status::Error);
+            assert_eq!(report.exit, 3);
+            assert_eq!(std::fs::read(&target).unwrap(), original);
+        }
+
+        // This ancestor belongs to both chains, but represents only one
+        // additional lock; distinct directories retain their own holders.
+        std::fs::write(dir.join("state.agent-besties.md"), LOCKED_BY_OTHER).unwrap();
+        let mut ctx = test_ctx(time::parse(NOW).unwrap());
+        let report = run(&mut ctx, &set_section(alias.clone())).unwrap();
+        assert_eq!(report.status, Status::Error);
+        assert_eq!(report.exit, 3);
+        assert_eq!(row_values(&report, "also-locked").len(), 1);
+        assert_eq!(std::fs::read(&target).unwrap(), original);
+
+        let mut own = set_section(alias.clone());
+        own.as_nick = Some("other".to_string());
+        let mut ctx = test_ctx(time::parse(NOW).unwrap());
+        let report = run(&mut ctx, &own).unwrap();
+        assert_eq!(report.status, Status::Ok);
+        assert_eq!(report.exit, 0);
+        let document = doc::parse(std::fs::read(&target).unwrap(), &target, ctx.now).unwrap();
+        assert_eq!(document.body(0), Some("dev"));
+        assert_eq!(std::fs::read_link(&alias).unwrap(), target);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn file_symlink_keeps_supplied_directory_lock() {
+        let dir = scratch("flock-file-symlink-reverse");
+        let locked = dir.join("locked");
+        let free = dir.join("free");
+        std::fs::create_dir(&locked).unwrap();
+        std::fs::create_dir(&free).unwrap();
+        let target = free.join("notes.agent-besties.md");
+        let alias = locked.join("notes.agent-besties.md");
+        std::fs::write(
+            &target,
+            b"# notes.agent-profile\n\n## role\n\n```\nold\n```\n",
+        )
+        .unwrap();
+        std::os::unix::fs::symlink(&target, &alias).unwrap();
+        std::fs::write(locked.join("state.agent-besties.md"), LOCKED_BY_OTHER).unwrap();
+
+        let mut direct = set_section(target.clone());
+        direct.action = ProfileAction::SetBody("direct".to_string());
+        let mut ctx = test_ctx(time::parse(NOW).unwrap());
+        let report = run(&mut ctx, &direct).unwrap();
+        assert_eq!(report.status, Status::Ok);
+        assert_eq!(report.exit, 0);
+        let original = std::fs::read(&target).unwrap();
+        let document = doc::parse(original.clone(), &target, ctx.now).unwrap();
+        assert_eq!(document.body(0), Some("direct"));
+
+        let mut ctx = test_ctx(time::parse(NOW).unwrap());
+        let report = run(&mut ctx, &set_section(alias)).unwrap();
+        assert_eq!(report.status, Status::Error);
+        assert_eq!(report.exit, 3);
+        assert_eq!(std::fs::read(&target).unwrap(), original);
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -496,6 +578,39 @@ mod tests {
         let document = crate::doc::parse(content.into_bytes(), &target, ctx.now).unwrap();
         assert_eq!(document.body(0), Some("dev"));
         drop(_denial);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn set_section_does_not_activate_terminal_cr_heading() {
+        let dir = scratch("append-cr-h2");
+        let target = dir.join("a.agent-besties.md");
+        std::fs::write(
+            &target,
+            b"# a.agent-profile\n\n## role\n\n```md\nx\n```\n## z\r",
+        )
+        .unwrap();
+        let mut ctx = test_ctx(time::parse(NOW).unwrap());
+        let report = run(
+            &mut ctx,
+            &ProfileParams {
+                path: target.clone(),
+                as_nick: None,
+                section: Some("scope".to_string()),
+                action: ProfileAction::SetBody("y".to_string()),
+            },
+        )
+        .unwrap();
+        assert_ne!(report.status, Status::Error);
+        let bytes = std::fs::read(&target).unwrap();
+        assert_eq!(
+            bytes.as_slice(),
+            b"# a.agent-profile\n\n## role\n\n```md\nx\n```\n## z\r \n\n## scope\n\n```md\ny\n```\n",
+        );
+        let document = crate::doc::parse(bytes, &target, ctx.now).unwrap();
+        let names: Vec<&str> = document.profile.iter().map(|ps| ps.name.as_str()).collect();
+        assert_eq!(names, ["role", "scope"]);
+        assert!(document.diagnostics.iter().all(|d| d.id != "E-SECTION-DUP"));
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

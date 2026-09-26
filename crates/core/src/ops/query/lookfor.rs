@@ -71,8 +71,9 @@ pub fn lookfor_comment(ctx: &mut Ctx, p: &LookforCommentParams) -> Result<Report
 fn rows(object: &str, document: &Document, filters: &Filters) -> Report {
     let mut report = Report::new("lookfor-comment", object);
     let mut count = 0usize;
+    let keyword = filters.keyword.as_deref().map(str::to_lowercase);
     for comment in &document.post.comments {
-        if !matches_filters(document, comment, filters) {
+        if !matches_filters(document, comment, filters, keyword.as_deref()) {
             continue;
         }
         let section = &document.sections[comment.section];
@@ -95,7 +96,12 @@ fn rows(object: &str, document: &Document, filters: &Filters) -> Report {
 /// §10.7.1: several filters intersect; `--keyword` is a case-insensitive
 /// substring on the body AND the original (unfolded) header line, the
 /// argument used as given (§7.1.6).
-fn matches_filters(document: &Document, comment: &Comment, filters: &Filters) -> bool {
+fn matches_filters(
+    document: &Document,
+    comment: &Comment,
+    filters: &Filters,
+    keyword: Option<&str>,
+) -> bool {
     if let Some(by) = &filters.by {
         if &comment.nick != by {
             return false;
@@ -116,18 +122,73 @@ fn matches_filters(document: &Document, comment: &Comment, filters: &Filters) ->
             return false;
         }
     }
-    if let Some(keyword) = &filters.keyword {
-        let needle = keyword.to_lowercase();
+    if let Some(needle) = keyword {
         let in_body = document
             .body(comment.section)
-            .map(|body| body.to_lowercase().contains(&needle))
+            .map(|body| body.to_lowercase().contains(needle))
             .unwrap_or(false);
         let header = document
             .text(&document.sections[comment.section].head)
             .to_lowercase();
-        if !in_body && !header.contains(&needle) {
+        if !in_body && !header.contains(needle) {
             return false;
         }
     }
     true
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::report::Row;
+    use std::path::Path;
+
+    fn parse_post(src: &str) -> Document {
+        doc::parse(
+            src.as_bytes().to_vec(),
+            Path::new("foo.agent-besties.md"),
+            time::parse("2026-09-17T10:00:00Z").unwrap(),
+        )
+        .expect("parses")
+    }
+
+    fn keyword(value: &str) -> Filters {
+        Filters {
+            keyword: Some(value.to_string()),
+            ..Filters::default()
+        }
+    }
+
+    fn total(report: &Report) -> usize {
+        report
+            .rows
+            .iter()
+            .find_map(|row| match row {
+                Row::Fields { key, values, .. } if key == "total" => {
+                    values.first().and_then(|v| v.parse().ok())
+                }
+                _ => None,
+            })
+            .unwrap_or(0)
+    }
+
+    #[test]
+    fn keyword_keeps_raw_whitespace_and_case_insensitive_substring() {
+        let document = parse_post(concat!(
+            "# foo.post\n",
+            "\n",
+            "## #1 alice (2026-09-17T10:00:00Z)\n",
+            "\n",
+            "```md\n",
+            "keep a\u{00A0}b here\n",
+            "two  spaces\n",
+            "```\n",
+        ));
+        assert_eq!(total(&rows("foo", &document, &keyword("a\u{00A0}b"))), 1);
+        assert_eq!(total(&rows("foo", &document, &keyword("a b"))), 0);
+        assert_eq!(total(&rows("foo", &document, &keyword("two  spaces"))), 1);
+        assert_eq!(total(&rows("foo", &document, &keyword("two spaces"))), 0);
+        assert_eq!(total(&rows("foo", &document, &keyword("A\u{00A0}B"))), 1);
+        assert_eq!(total(&rows("foo", &document, &keyword("ALICE"))), 1);
+    }
 }

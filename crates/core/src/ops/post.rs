@@ -10,6 +10,7 @@
 //! module file may be created, so those internals live here behind
 //! `pub(super)`.
 
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
 use crate::consts;
@@ -84,7 +85,7 @@ fn create_step(p: &PostParams, now: &str) -> Result<(Mutation, Step), Fault> {
             format!("L{}", line_of(content.as_bytes(), prefix.len())),
         ],
     );
-    add_reference_rows(&mut done, &p.body, &[1]);
+    add_reference_rows(&mut done, &p.body, [1]);
     Ok((Mutation::Write(content.into_bytes()), Step::Done(done)))
 }
 
@@ -119,8 +120,6 @@ fn append_step(
         range: doc.source.len()..doc.source.len(),
         replacement: replacement.into_bytes(),
     }];
-    let mut seqs: Vec<u64> = doc.post.comments.iter().map(|c| c.seq).collect();
-    seqs.push(seq);
     match guarded_apply(bytes, splices, kind_str(doc))? {
         Applied::Bytes(new_bytes) => {
             let mut done = Done::empty();
@@ -131,7 +130,11 @@ fn append_step(
                     format!("L{}", line_of(&new_bytes, header_off)),
                 ],
             );
-            add_reference_rows(&mut done, &p.body, &seqs);
+            add_reference_rows(
+                &mut done,
+                &p.body,
+                doc.post.comments.iter().map(|c| c.seq).chain([seq]),
+            );
             Ok((Mutation::Write(new_bytes), Step::Done(done)))
         }
         Applied::Refused(step) => Ok((Mutation::Unchanged, step)),
@@ -155,7 +158,7 @@ fn edit_step(
                 .with("n", n.to_string())
                 .with("max", max_seq.to_string())
                 .with("nick", p.nick.clone())
-                .with("path", context::object_of_path(&p.path)));
+                .with("path_arg", p.path.to_string_lossy().into_owned()));
         }
     };
     let comment = &doc.post.comments[idx];
@@ -164,7 +167,7 @@ fn edit_step(
             .with("n", n.to_string())
             .with("author", comment.nick.clone())
             .with("nick", p.nick.clone())
-            .with("path", context::object_of_path(&p.path)));
+            .with("path_arg", p.path.to_string_lossy().into_owned()));
     }
     let section = &doc.sections[comment.section];
     let mut splices = Vec::new();
@@ -206,7 +209,6 @@ fn edit_step(
         }
     }
     let line = line_of(doc.source.as_bytes(), section.head.start);
-    let seqs: Vec<u64> = doc.post.comments.iter().map(|c| c.seq).collect();
     match guarded_apply(bytes, splices, kind_str(doc))? {
         Applied::Bytes(new_bytes) => {
             let mut done = Done::empty();
@@ -218,7 +220,7 @@ fn edit_step(
                     "edited".to_string(),
                 ],
             );
-            add_reference_rows(&mut done, &p.body, &seqs);
+            add_reference_rows(&mut done, &p.body, doc.post.comments.iter().map(|c| c.seq));
             Ok((Mutation::Write(new_bytes), Step::Done(done)))
         }
         Applied::Refused(step) => Ok((Mutation::Unchanged, step)),
@@ -226,19 +228,19 @@ fn edit_step(
 }
 
 /// `mentions` / `reply-to` rows derived from the freshly written body
-/// (§3.4.2, §3.5.4, §8.1.14). `existing` lists the seqs present after the
-/// write; a missing target still gets written but downgrades to `warn`.
-fn add_reference_rows(done: &mut Done, body: &str, existing: &[u64]) {
+/// (§3.4.2, §3.5.4, §8.1.14). `existing` is the seqs present after the
+/// write and is consumed only when the body contains replies; a missing
+/// target still gets written but downgrades to `warn`.
+fn add_reference_rows(done: &mut Done, body: &str, existing: impl IntoIterator<Item = u64>) {
     let (mentions, replies) = crate::types::post::references(body);
     if !mentions.is_empty() {
         done.kv("mentions", vec![mentions.join(", ")]);
     }
-    let mut seen: Vec<u64> = Vec::new();
+    if replies.is_empty() {
+        return;
+    }
+    let existing: HashSet<u64> = existing.into_iter().collect();
     for m in replies {
-        if seen.contains(&m) {
-            continue;
-        }
-        seen.push(m);
         if existing.contains(&m) {
             done.kv("reply-to", vec![format!("#{m}")]);
         } else {
@@ -305,9 +307,9 @@ pub(super) enum Applied {
 /// `fsx::mutate` closure and turned into the `E-FLOCKED` report after it.
 pub(super) struct FlockStash {
     holders: Vec<shared::FlockHolder>,
-    issues: Vec<(String, shared::ScanIssue)>,
-    unreadable_dirs: Vec<String>,
-    canonicalize_failed: Vec<String>,
+    issues: Vec<(PathBuf, shared::ScanIssue)>,
+    unreadable_dirs: Vec<PathBuf>,
+    canonicalize_failed: Vec<PathBuf>,
 }
 
 /// Parse existing bytes; byte-level faults (`E-UTF8` / `E-TOO-LARGE`) and
@@ -414,7 +416,8 @@ pub(super) fn flock_blocked() -> Result<(Mutation, Step), Fault> {
 /// scan visible: `skipped` / `partial` / unreadable-directory /
 /// `canonicalize` rows are appended and the report is promoted to `warn`
 /// (best-effort semantics — no recognizable holder may write, the unread
-/// portion is never hidden).
+/// portion is never hidden). `remaining` rows stay the final group after
+/// those scan rows (§2.7.4).
 pub(super) fn finish(
     ctx: &mut Ctx,
     command: &'static str,
@@ -430,7 +433,11 @@ pub(super) fn finish(
                 if wr.created {
                     created_rows(&mut report, &wr.created_dirs, path);
                 }
-                report.rows.extend(done.rows);
+                let (body, remaining): (Vec<Row>, Vec<Row>) = done
+                    .rows
+                    .into_iter()
+                    .partition(|row| !matches!(row, Row::Fields { key, .. } if key == "remaining"));
+                report.rows.extend(body);
                 if done.warn {
                     report.warn();
                 }
@@ -439,6 +446,7 @@ pub(super) fn finish(
                         report.warn();
                     }
                 }
+                report.rows.extend(remaining);
                 Ok(report)
             }
             Step::Refused { kind, diags } => Ok(refuse_report(command, &object, path, kind, diags)),
@@ -500,37 +508,56 @@ fn flocked_report(
     report
 }
 
-/// Append the stashed scan-incompleteness rows (§10.5.6 order):
-/// `skipped <dir> busy|<E-ID>` for every state file the verdict could not
-/// incorporate, `skipped <dir> unreadable` for directories that could not
-/// be listed, then `canonicalize <dir> failed` rows. Returns whether
-/// anything was appended, so a successful report can promote itself to
-/// `warn`.
+/// Append the stashed scan-incompleteness rows (§10.5.6):
+/// `skipped` / `partial` for every state file the verdict could not
+/// incorporate and `skipped <dir> unreadable` for directories that could
+/// not be listed, then `canonicalize <dir> failed` rows. Skipped/partial
+/// rows keep native source identity (and de-duplication) and are then
+/// ordered by displayed cwd-relative directory path (§10.5.4). Returns
+/// whether anything was appended, so a successful report can promote
+/// itself to `warn`.
 fn append_scan_rows(report: &mut Report, stash: &FlockStash) -> bool {
     let mut any = false;
+    let mut tail: Vec<(&Path, &'static str, Vec<String>)> = Vec::new();
     for (dir, issue) in &stash.issues {
         match issue {
             shared::ScanIssue::Busy => {
-                report.kv("skipped", vec![dir.clone(), "busy".to_string()]);
+                tail.push((dir.as_path(), "skipped", vec!["busy".to_string()]));
             }
             shared::ScanIssue::Blocking(id) => {
-                report.kv("skipped", vec![dir.clone(), (*id).to_string()]);
+                tail.push((dir.as_path(), "skipped", vec![(*id).to_string()]));
             }
             shared::ScanIssue::Partial { id, line } => {
-                report.kv(
+                tail.push((
+                    dir.as_path(),
                     "partial",
-                    vec![dir.clone(), (*id).to_string(), format!("L{line}")],
-                );
+                    vec![(*id).to_string(), format!("L{line}")],
+                ));
             }
         }
-        any = true;
     }
     for dir in &stash.unreadable_dirs {
-        report.kv("skipped", vec![dir.clone(), "unreadable".to_string()]);
+        tail.push((dir.as_path(), "skipped", vec!["unreadable".to_string()]));
+    }
+    tail.sort();
+    tail.dedup();
+    // Display paths may collide; rendering changes ordering, never identity.
+    let mut tail: Vec<_> = tail
+        .into_iter()
+        .map(|(dir, key, detail)| (context::object_of_dir(dir), key, detail))
+        .collect();
+    tail.sort();
+    for (dir, key, detail) in tail {
+        let mut values = vec![dir];
+        values.extend(detail);
+        report.kv(key, values);
         any = true;
     }
     for dir in &stash.canonicalize_failed {
-        report.kv("canonicalize", vec![dir.clone(), "failed".to_string()]);
+        report.kv(
+            "canonicalize",
+            vec![context::object_of_dir(dir), "failed".to_string()],
+        );
         any = true;
     }
     any
@@ -571,17 +598,13 @@ pub(super) fn refuse_report(
     report
 }
 
-fn parent_dir_display(path: &Path) -> String {
-    match path.parent() {
-        Some(p) if !p.as_os_str().is_empty() => context::object_of_dir(p),
-        _ => ".".to_string(),
-    }
-}
-
 fn file_missing_params(path: &Path) -> Vec<(&'static str, String)> {
     vec![
         ("file", context::display_file(path)),
-        ("dir", parent_dir_display(path)),
+        (
+            "dir_arg",
+            context::parent_dir(path).to_string_lossy().into_owned(),
+        ),
     ]
 }
 
@@ -596,7 +619,10 @@ fn type_fault(actual: doc::Kind, expected: doc::Kind, path: &Path) -> Fault {
         .with("actual", actual.as_str())
         .with("expected", expected.as_str())
         .with("cmd_for_actual", cmd_for_actual)
-        .with("dir", parent_dir_display(path))
+        .with(
+            "dir_arg",
+            context::parent_dir(path).to_string_lossy().into_owned(),
+        )
 }
 
 /// `unchanged  <file>` rows for the no-write forms.
@@ -640,18 +666,31 @@ pub(super) fn is_blank(line: &str) -> bool {
 /// Insertion point and bytes for "after the line starting at `line_start`
 /// and its immediately following blank line, adding the blank when absent"
 /// (the §3.5.3 / §5.3.2 geometry). `block` must end with a terminator.
+///
+/// An unterminated whitespace-only following line is not an insertion
+/// boundary: its original bytes stay put, a terminator is added, then the
+/// block. A following isolated CR is not blank, so this never concatenates
+/// new syntax onto a CR-tainted line.
 pub(super) fn after_line_and_blank(src: &str, line_start: usize, block: &str) -> (usize, String) {
     let end = line_end(src, line_start);
     let terminated = end > line_start && src.as_bytes()[end - 1] == b'\n';
     if !terminated {
         // Last line without a terminator: terminate it, add the blank, then
-        // the block.
-        return (end, format!("\n\n{block}"));
+        // the block. A terminal isolated CR stays line content via append_gap.
+        let pad = if end > 0 && src.as_bytes()[end - 1] == b'\r' {
+            text::append_gap(&src[..end])
+        } else {
+            "\n\n"
+        };
+        return (end, format!("{pad}{block}"));
     }
     if end < src.len() {
         let next_end = line_end(src, end);
         if is_blank(strip_term(&src[end..next_end])) {
-            return (next_end, block.to_string());
+            if next_end > end && src.as_bytes()[next_end - 1] == b'\n' {
+                return (next_end, block.to_string());
+            }
+            return (next_end, format!("\n{block}"));
         }
     }
     (end, format!("\n{block}"))
@@ -718,7 +757,7 @@ pub(super) fn preamble_anchor(doc: &doc::Document) -> usize {
         let line_start = pos;
         let next = line_end(&doc.source, pos);
         let line = strip_term(&doc.source[line_start..next]);
-        if line.starts_with("> ") {
+        if crate::types::is_reader_comment(line.as_bytes()) {
             anchor = line_start;
         } else if !is_blank(line) {
             break;
@@ -810,6 +849,340 @@ mod tests {
         assert_eq!(report.status, crate::report::Status::Error);
         assert_eq!(report.exit, 1);
         assert!(!target.exists());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    fn field_keys(report: &Report) -> Vec<&str> {
+        report
+            .rows
+            .iter()
+            .filter_map(|row| match row {
+                Row::Fields { key, .. } => Some(key.as_str()),
+                _ => None,
+            })
+            .collect()
+    }
+
+    fn field_lists(rows: &[Row], key: &str) -> Vec<Vec<String>> {
+        rows.iter()
+            .filter_map(|row| match row {
+                Row::Fields { key: k, values, .. } if k == key => Some(values.clone()),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn remaining_rows_follow_incomplete_scan_rows() {
+        let path = PathBuf::from("notes.agent-besties.md");
+        let mut ctx = test_ctx(time::parse("2026-09-25T12:00:00Z").unwrap());
+        let mut done = Done::empty();
+        done.kv("description", vec!["set".to_string()]);
+        done.kv(
+            "remaining",
+            vec!["E-ENTRY-HASH".to_string(), "L6".to_string()],
+        );
+        done.warn = true;
+        let stash = FlockStash {
+            holders: Vec::new(),
+            issues: vec![(
+                PathBuf::from("remaining-order"),
+                shared::ScanIssue::Blocking("E-H1"),
+            )],
+            unreadable_dirs: Vec::new(),
+            canonicalize_failed: Vec::new(),
+        };
+        let wr = fsx::WriteResult {
+            value: Step::Done(done),
+            created: false,
+            created_dirs: Vec::new(),
+            deleted: false,
+        };
+        let report = finish(&mut ctx, "brief", &path, Some(stash), Ok(wr)).unwrap();
+        assert_eq!(report.status, Status::Warn);
+        assert_eq!(field_keys(&report), ["description", "skipped", "remaining"]);
+    }
+
+    #[test]
+    fn skipped_scan_rows_follow_displayed_dir_order() {
+        let cwd = std::env::current_dir().expect("cwd available");
+        let parent = cwd.parent().expect("cwd has a parent").to_path_buf();
+        let path = PathBuf::from("notes.agent-besties.md");
+        let mut ctx = test_ctx(time::parse("2026-09-25T12:00:00Z").unwrap());
+        let mut done = Done::empty();
+        done.kv("description", vec!["set".to_string()]);
+        done.kv(
+            "remaining",
+            vec!["E-ENTRY-HASH".to_string(), "L6".to_string()],
+        );
+        let stash = FlockStash {
+            holders: Vec::new(),
+            // Native parent-before-child; displayed order is '.' then '..'.
+            // Folded-equal relatives must both remain as separate rows.
+            issues: vec![
+                (parent, shared::ScanIssue::Blocking("E-H1")),
+                (cwd, shared::ScanIssue::Blocking("E-H1")),
+                (
+                    PathBuf::from("alias  dir"),
+                    shared::ScanIssue::Blocking("E-H1"),
+                ),
+                (
+                    PathBuf::from("alias dir"),
+                    shared::ScanIssue::Blocking("E-H1"),
+                ),
+            ],
+            unreadable_dirs: Vec::new(),
+            canonicalize_failed: Vec::new(),
+        };
+        let wr = fsx::WriteResult {
+            value: Step::Done(done),
+            created: false,
+            created_dirs: Vec::new(),
+            deleted: false,
+        };
+        let report = finish(&mut ctx, "profile", &path, Some(stash), Ok(wr)).unwrap();
+        let skipped: Vec<&[String]> = report
+            .rows
+            .iter()
+            .filter_map(|row| match row {
+                Row::Fields { key, values, .. } if key == "skipped" => Some(values.as_slice()),
+                _ => None,
+            })
+            .collect();
+        let dots: Vec<[&str; 2]> = skipped
+            .iter()
+            .filter_map(|row| match row.first().map(String::as_str) {
+                Some(".") | Some("..") => Some([row[0].as_str(), row[1].as_str()]),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(dots, [[".", "E-H1"], ["..", "E-H1"]]);
+        let aliases: Vec<&&[String]> = skipped
+            .iter()
+            .filter(|row| row.first().map(String::as_str) == Some("alias dir"))
+            .collect();
+        assert_eq!(aliases.len(), 2);
+        assert_eq!(aliases[0], aliases[1]);
+        assert_eq!(field_keys(&report).last().copied(), Some("remaining"));
+    }
+
+    #[test]
+    fn subscribe_inserts_before_cr_tainted_gt_line() {
+        let dir = scratch("preamble-cr");
+        let target = dir.join("foo.agent-besties.md");
+        std::fs::write(&target, b"# foo.post\n\n> hello\rworld\n").unwrap();
+        let p = crate::ops::SubscribeParams {
+            path: target.clone(),
+            nick: "alice".to_string(),
+            cancel: false,
+        };
+        let mut ctx = test_ctx(time::parse("2026-09-25T12:00:00Z").unwrap());
+        let report = crate::ops::subscribe::run(&mut ctx, &p).unwrap();
+        assert_ne!(report.status, Status::Error);
+        let bytes = std::fs::read(&target).unwrap();
+        assert_eq!(
+            bytes.as_slice(),
+            b"# foo.post\n\n- subscribers: alice\n> hello\rworld\n"
+        );
+
+        let target = dir.join("noted.agent-besties.md");
+        std::fs::write(&target, b"# noted.post\n> note\n> also\n").unwrap();
+        let p = crate::ops::SubscribeParams {
+            path: target.clone(),
+            nick: "alice".to_string(),
+            cancel: false,
+        };
+        let mut ctx = test_ctx(time::parse("2026-09-25T12:00:00Z").unwrap());
+        crate::ops::subscribe::run(&mut ctx, &p).unwrap();
+        let bytes = std::fs::read(&target).unwrap();
+        assert_eq!(
+            bytes.as_slice(),
+            b"# noted.post\n> note\n> also\n\n- subscribers: alice\n"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn append_does_not_activate_terminal_cr_comment_header() {
+        let dir = scratch("append-cr-h2");
+        let target = dir.join("foo.agent-besties.md");
+        // R3 witness: opaque `## #2 …\r` is not a comment; appending LF
+        // against that CR used to form CRLF and mint a duplicate #2.
+        std::fs::write(
+            &target,
+            b"# foo.post\n\n## #1 alice (2026-09-25T10:00:00Z)\n\n```md\nhi\n```\n## #2 bob (2026-09-25T11:00:00Z)\r",
+        )
+        .unwrap();
+        let p = PostParams {
+            path: target.clone(),
+            nick: "bob".to_string(),
+            body: "x".to_string(),
+            edit: None,
+        };
+        let now = time::parse("2026-09-25T12:00:00Z").unwrap();
+        let mut ctx = test_ctx(now);
+        let report = run(&mut ctx, &p).unwrap();
+        assert_ne!(report.status, Status::Error);
+        let bytes = std::fs::read(&target).unwrap();
+        assert_eq!(
+            bytes.as_slice(),
+            b"# foo.post\n\n## #1 alice (2026-09-25T10:00:00Z)\n\n```md\nhi\n```\n## #2 bob (2026-09-25T11:00:00Z)\r \n\n## #2 bob (2026-09-25T12:00:00Z)\n\n```md\nx\n```\n",
+        );
+        let parsed = doc::parse(bytes, &target, now).unwrap();
+        assert_eq!(
+            parsed
+                .post
+                .comments
+                .iter()
+                .map(|c| (c.seq, c.nick.as_str(), time::format(c.created)))
+                .collect::<Vec<_>>(),
+            vec![
+                (1, "alice", "2026-09-25T10:00:00Z".to_string()),
+                (2, "bob", "2026-09-25T12:00:00Z".to_string()),
+            ]
+        );
+        assert!(parsed.diagnostics.iter().all(|d| d.id != "E-SEQ-DUP"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    fn apply_after(src: &str, line_start: usize, block: &str) -> String {
+        let (pos, inserted) = after_line_and_blank(src, line_start, block);
+        format!("{}{}{}", &src[..pos], inserted, &src[pos..])
+    }
+
+    #[test]
+    fn after_line_and_blank_does_not_glue_onto_unterminated_whitespace() {
+        let block = "- subscribers: alice\n";
+        assert_eq!(
+            apply_after("# foo.post\n ", 0, block),
+            "# foo.post\n \n- subscribers: alice\n"
+        );
+        let profile = "# a.agent-profile\n\n## role\n    ";
+        let head = profile.find("## role").expect("role heading");
+        assert_eq!(
+            apply_after(profile, head, &fence_block("x")),
+            "# a.agent-profile\n\n## role\n    \n```md\nx\n```\n"
+        );
+        assert_eq!(
+            apply_after("# foo.post\n\n", 0, block),
+            "# foo.post\n\n- subscribers: alice\n"
+        );
+        // following isolated CR is not blank; original CR bytes survive
+        assert_eq!(
+            apply_after("# foo.post\n\r", 0, block),
+            "# foo.post\n\n- subscribers: alice\n\r"
+        );
+    }
+
+    #[test]
+    fn subscribe_keeps_unterminated_whitespace_and_effective_nick() {
+        let dir = scratch("eof-blank-sub");
+        let target = dir.join("foo.agent-besties.md");
+        std::fs::write(&target, b"# foo.post\n ").unwrap();
+        let p = crate::ops::SubscribeParams {
+            path: target.clone(),
+            nick: "alice".to_string(),
+            cancel: false,
+        };
+        let now = time::parse("2026-09-25T12:00:00Z").unwrap();
+        let mut ctx = test_ctx(now);
+        let report = crate::ops::subscribe::run(&mut ctx, &p).unwrap();
+        assert_ne!(report.status, Status::Error);
+        let bytes = std::fs::read(&target).unwrap();
+        assert_eq!(bytes.as_slice(), b"# foo.post\n \n- subscribers: alice\n");
+        let parsed = doc::parse(bytes, &target, now).unwrap();
+        assert_eq!(parsed.post.subscribers, vec!["alice".to_string()]);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn profile_keeps_unterminated_whitespace_and_valid_fence() {
+        let dir = scratch("eof-blank-profile");
+        let target = dir.join("a.agent-besties.md");
+        std::fs::write(&target, b"# a.agent-profile\n\n## role\n    ").unwrap();
+        let p = crate::ops::ProfileParams {
+            path: target.clone(),
+            as_nick: None,
+            section: Some("role".to_string()),
+            action: crate::ops::ProfileAction::SetBody("x".to_string()),
+        };
+        let now = time::parse("2026-09-25T12:00:00Z").unwrap();
+        let mut ctx = test_ctx(now);
+        let report = crate::ops::profile::run(&mut ctx, &p).unwrap();
+        assert_ne!(report.status, Status::Error);
+        let bytes = std::fs::read(&target).unwrap();
+        assert_eq!(
+            bytes.as_slice(),
+            b"# a.agent-profile\n\n## role\n    \n```md\nx\n```\n"
+        );
+        let parsed = doc::parse(bytes, &target, now).unwrap();
+        assert!(parsed.diagnostics.iter().all(|d| d.id != "E-FENCE"));
+        let role = parsed
+            .profile
+            .iter()
+            .find(|s| s.name == "role")
+            .expect("role section");
+        assert!(parsed.sections[role.section].body.is_some());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn add_reference_rows_keep_first_reply_order_and_missing_targets() {
+        let mut done = Done::empty();
+        add_reference_rows(&mut done, "@carol @#5 @#1 @#5 @#9", [1, 5]);
+        assert_eq!(
+            field_lists(&done.rows, "mentions"),
+            vec![vec!["carol".to_string()]]
+        );
+        assert_eq!(
+            field_lists(&done.rows, "reply-to"),
+            vec![
+                vec!["#5".to_string()],
+                vec!["#1".to_string()],
+                vec!["#9".to_string(), "(not found)".to_string()],
+            ]
+        );
+        assert!(done.warn);
+    }
+
+    #[test]
+    fn append_reply_includes_new_sequence_and_warns_on_missing() {
+        let dir = scratch("reply-seq");
+        let target = dir.join("foo.agent-besties.md");
+        std::fs::write(
+            &target,
+            b"# foo.post\n\n## #1 alice (2026-09-25T10:00:00Z)\n\n```md\nhi\n```\n",
+        )
+        .unwrap();
+        let p = PostParams {
+            path: target.clone(),
+            nick: "bob".to_string(),
+            body: "@#1 @#2 @#9 @#2".to_string(),
+            edit: None,
+        };
+        let now = time::parse("2026-09-25T12:00:00Z").unwrap();
+        let mut ctx = test_ctx(now);
+        let report = run(&mut ctx, &p).unwrap();
+        assert_eq!(report.status, Status::Warn);
+        assert_eq!(
+            field_lists(&report.rows, "reply-to"),
+            vec![
+                vec!["#1".to_string()],
+                vec!["#2".to_string()],
+                vec!["#9".to_string(), "(not found)".to_string()],
+            ]
+        );
+        let bytes = std::fs::read(&target).unwrap();
+        let parsed = doc::parse(bytes, &target, now).unwrap();
+        assert_eq!(
+            parsed
+                .post
+                .comments
+                .iter()
+                .map(|c| c.seq)
+                .collect::<Vec<_>>(),
+            vec![1, 2]
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

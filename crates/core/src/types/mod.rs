@@ -98,11 +98,10 @@ impl<'a> ScanCtx<'a> {
     }
 
     /// 0-based line indices whose bytes intersect `span` (a line whose start
-    /// equals `span.end` is excluded).
+    /// equals `span.end` is excluded). An unterminated last line is included
+    /// when `span` runs to EOF; a phantom trailing-newline line is not.
     pub(crate) fn lines_between(&self, span: &Span) -> Range<usize> {
-        let start = self.idx_at(span.start);
-        let end = self.idx_at(span.end).max(start);
-        start..end
+        self.lines.lines_in(span.start..span.end)
     }
 
     /// True when the line is part of a fence block (open/close/content).
@@ -131,6 +130,25 @@ impl<'a> ScanCtx<'a> {
         let head = self.idx_at(section.head.start);
         (head + 1)..all.end
     }
+
+    /// Nonempty non-comment preamble lines (spec §2.6.2, §5.2.4). Fences
+    /// stay opaque; a `> ` reader comment is the sole exemption; a line
+    /// with an isolated `\r` matches no comment grammar.
+    pub(crate) fn stray_preamble(&mut self, lines: Range<usize>) {
+        for idx in lines {
+            if self.fenced(idx) {
+                continue;
+            }
+            let line = self.line_str(idx);
+            if is_blank_line(line) {
+                continue;
+            }
+            if is_reader_comment(line.as_bytes()) {
+                continue;
+            }
+            self.push(Diagnostic::new("W-STRAY", idx + 1).with("n", (idx + 1).to_string()));
+        }
+    }
 }
 
 /// `- <key>: <value>` property line (spec §2.6.1). Returns `(key, value)`
@@ -158,4 +176,12 @@ pub(crate) fn property_parts(line: &str) -> Option<(&str, &str)> {
 /// Blank line: empty or only U+0020 and tabs (spec §1).
 pub(crate) fn is_blank_line(s: &str) -> bool {
     s.chars().all(|c| c == ' ' || c == '\t')
+}
+
+/// Reader-comment line: prefix `> ` and no isolated `\r` (spec §2.1.2,
+/// §2.6.2). `line` is logical content after a real LF / CRLF terminator
+/// has already been removed; a remaining `\r` (including a terminal
+/// lone CR) matches no comment grammar.
+pub(crate) fn is_reader_comment(line: &[u8]) -> bool {
+    line.starts_with(b"> ") && !line.contains(&b'\r')
 }

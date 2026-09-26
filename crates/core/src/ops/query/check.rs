@@ -7,6 +7,7 @@
 //! structured diagnostic set plus the §8.1.11 facts, never from
 //! formatted text.
 
+use std::collections::HashSet;
 use std::path::Path;
 
 use crate::consts;
@@ -14,6 +15,7 @@ use crate::diag;
 use crate::doc::{self, Document};
 use crate::error::{Diagnostic, Fault};
 use crate::hash;
+use crate::names;
 use crate::ops::context::{self, Ctx};
 use crate::ops::{reason_report, CheckParams};
 use crate::report::{Report, Status};
@@ -104,11 +106,11 @@ fn report_for(
             flags
         }
         doc::Kind::State => {
-            // The scan already derived expiry / conflict diagnostics once
-            // over the selected declarations (§6.2.5, §6.2.7); the
-            // preview only renders the §8.1.11 marks for the same set.
-            let (count, rows) = state_preview(ctx.now, &document);
-            let flags = push_diagnostics(&mut report, document.diagnostics.clone());
+            // Expand the complete pairwise conflict report at emission,
+            // alongside preview marks over the same selected declarations.
+            let mut diags = document.diagnostics.clone();
+            let (count, rows) = state_preview(ctx.now, &document, &mut diags);
+            let flags = push_diagnostics(&mut report, diags);
             report.kv("entries", vec![count.to_string()]);
             for (status, values) in rows {
                 report.record(status, values, 2, consts::KEY_WIDTH);
@@ -148,8 +150,9 @@ fn post_rows(report: &mut Report, document: &Document) {
     let post = &document.post;
     report.kv("comments", vec![post.comments.len().to_string()]);
     let mut authors: Vec<&str> = Vec::new();
+    let mut seen = HashSet::new();
     for comment in &post.comments {
-        if !authors.contains(&comment.nick.as_str()) {
+        if seen.insert(comment.nick.as_str()) {
             authors.push(comment.nick.as_str());
         }
     }
@@ -224,12 +227,14 @@ fn brief_rows(
     }
     for (entry, verification) in document.brief.entries.iter().zip(verifications.iter()) {
         let mut values = vec![
-            entry.title.clone(),
+            names::display_text(&entry.title),
             verification.state.to_string(),
             entry
                 .path
                 .as_ref()
-                .map(|property| crate::names::fold(&property.value))
+                .map(|property| {
+                    crate::names::display_text(&hash::normalized_target(&property.value))
+                })
                 .unwrap_or_else(|| "?".to_string()),
         ];
         if let Some(reason) = verification.reason {
@@ -246,7 +251,7 @@ fn brief_rows(
 fn profile_rows(report: &mut Report, document: &Document) {
     report.kv("sections", vec![document.profile.len().to_string()]);
     for section in &document.profile {
-        let mut values = vec![section.name.clone()];
+        let mut values = vec![names::display_text(&section.name)];
         if let Some(excerpt) = body_excerpt(document, section.section) {
             values.push(excerpt);
         }
@@ -255,61 +260,43 @@ fn profile_rows(report: &mut Report, document: &Document) {
 }
 
 /// Same-file state preview (§6.2.7, §8.2 check state): display uses
-/// [`crate::types::state::selected`] per section (all parseable
+/// [`crate::types::state::selected`] across the file (all parseable
 /// declarations stay candidates, dirty-line fragments included) and
 /// renders the §8.1.11 `conflict` / `expired` marks for that same
-/// selected set. Expiry and conflict *diagnostics* are not derived
-/// here — the type scan owns the single derivation, so `check` never
-/// prints a parse-time set plus a preview-time duplicate.
+/// selected set. The scan supplies expiry diagnostics; this check-only
+/// boundary adds the complete pairwise conflict diagnostics while marking
+/// their preview rows, without expanding discarded reports during parsing.
 #[allow(clippy::type_complexity)]
-fn state_preview(now: Time, document: &Document) -> (usize, Vec<(String, Vec<String>)>) {
-    let flat: Vec<(&types::state::StateSection, &types::state::Declaration)> = document
-        .state
+fn state_preview(
+    now: Time,
+    document: &Document,
+    diagnostics: &mut Vec<Diagnostic>,
+) -> (usize, Vec<(String, Vec<String>)>) {
+    let flat = types::state::selected(&document.state);
+    types::state::append_conflict_diagnostics(&flat, now, diagnostics);
+    // Selection is unique per (status, nick): every valid locked entry
+    // conflicts exactly when at least two remain, without another pair walk.
+    let has_conflicts = flat
         .iter()
-        .flat_map(|section| {
-            types::state::selected(section)
-                .into_iter()
-                .map(move |decl| (section, decl))
+        .filter(|(section, declaration)| {
+            section.status == "locked" && section.valid_name && declaration.valid(now)
         })
-        .collect();
-    let mut conflict = vec![false; flat.len()];
-    let mut expired = vec![false; flat.len()];
-    for (i, (_, decl)) in flat.iter().enumerate() {
-        if !decl.valid(now) {
-            expired[i] = true;
-        }
-    }
-    // §10.5.3 pairwise relation restricted to this file; the matching
-    // W-STATE-CONFLICT diagnostics anchor on the later declaration.
-    for x in 0..flat.len() {
-        for y in (x + 1)..flat.len() {
-            let (section_x, decl_x) = flat[x];
-            let (section_y, decl_y) = flat[y];
-            if section_x.status == "locked"
-                && section_y.status == "locked"
-                && decl_x.nick != decl_y.nick
-                && decl_x.valid(now)
-                && decl_y.valid(now)
-            {
-                conflict[x] = true;
-                conflict[y] = true;
-            }
-        }
-    }
+        .count()
+        > 1;
     let rows = flat
         .iter()
-        .enumerate()
-        .map(|(i, (section, decl))| {
+        .map(|(section, decl)| {
             let mut values = vec![
                 decl.nick.clone(),
                 format!("{}..{}", time::format(decl.start), time::format(decl.until)),
             ];
-            if conflict[i] {
+            let valid = decl.valid(now);
+            if has_conflicts && valid && section.status == "locked" && section.valid_name {
                 values.push("conflict".to_string());
-            } else if expired[i] {
+            } else if !valid {
                 values.push("expired".to_string());
             }
-            (section.status.clone(), values)
+            (names::display_text(&section.status), values)
         })
         .collect();
     (flat.len(), rows)
@@ -317,79 +304,135 @@ fn state_preview(now: Time, document: &Document) -> (usize, Vec<(String, Vec<Str
 
 #[cfg(test)]
 mod tests {
+    use crate::report::{Report, Row};
+
     use super::*;
     use crate::doc;
     use std::path::Path;
 
-    fn state_doc(src: &str, now: &str) -> Document {
-        doc::parse(
-            src.as_bytes().to_vec(),
-            Path::new("state.agent-besties.md"),
-            crate::time::parse(now).unwrap(),
+    fn state_report(src: &str, now: &str) -> Report {
+        let now = crate::time::parse(now).unwrap();
+        let path = Path::new("state.agent-besties.md");
+        let document = doc::parse(src.as_bytes().to_vec(), path, now).expect("parses");
+        report_for(
+            &context::test_ctx(now),
+            path,
+            "state",
+            "state.agent-besties.md",
+            doc::Kind::State,
+            document,
         )
-        .expect("parses")
     }
 
-    fn ids(document: &Document) -> Vec<(&'static str, usize)> {
-        sort_diagnostics(document.diagnostics.clone())
-            .into_iter()
-            .map(|d| (d.id, d.line))
+    fn ids(report: &Report) -> Vec<(&'static str, usize)> {
+        report
+            .rows
+            .iter()
+            .filter_map(|row| match row {
+                Row::Diagnostic(diagnostic) => Some((diagnostic.id, diagnostic.line)),
+                _ => None,
+            })
             .collect()
     }
 
     #[test]
-    fn state_expiry_and_conflict_reported_once_per_selected_declaration() {
-        // alice's expired earlier declaration is superseded by the L5
-        // renewal; bob (L6) is expired and selected; dave (L7) conflicts
-        // with the selected alice.
-        let document = state_doc(
+    fn state_expiry_and_conflicts_use_selected_declarations_across_sections() {
+        // The renewal supersedes alice's expired declaration in an earlier
+        // section. Dave's legal fragment on a dirty line still conflicts.
+        let report = state_report(
             concat!(
                 "# .state\n",
                 "\n",
                 "## locked\n",
                 "alice 2026-09-17T08:00:00Z..2026-09-17T09:00:00Z\n",
+                "## locked\n",
                 "alice 2026-09-17T09:00:00Z..2026-09-17T12:00:00Z\n",
                 "bob 2026-09-17T08:00:00Z..2026-09-17T09:30:00Z\n",
-                "dave 2026-09-17T09:00:00Z..2026-09-17T12:00:00Z\n",
+                "dave 2026-09-17T09:00:00Z..2026-09-17T12:00:00Z, broken entry\n",
+                "gina 2026-09-17T09:00:00Z..2026-09-17T12:00:00Z\n",
             ),
             "2026-09-17T10:00:00Z",
         );
-        let now = crate::time::parse("2026-09-17T10:00:00Z").unwrap();
-        // What `check` composes: the scan's diagnostics plus the
-        // preview marks over the same selected set.
-        let (count, rows) = state_preview(now, &document);
-        let all = ids(&document);
-
-        // exactly one W-STATE-EXPIRED (bob L6), none for the
-        // superseded alice declaration (L4)
-        let expired: Vec<_> = all
-            .iter()
-            .filter(|(id, _)| *id == "W-STATE-EXPIRED")
-            .copied()
-            .collect();
-        assert_eq!(expired, vec![("W-STATE-EXPIRED", 6)]);
-
-        // exactly one W-STATE-CONFLICT: the selected alice vs dave,
-        // anchored on the later declaration
-        let conflict: Vec<_> = all
-            .iter()
-            .filter(|(id, _)| *id == "W-STATE-CONFLICT")
-            .copied()
-            .collect();
-        assert_eq!(conflict, vec![("W-STATE-CONFLICT", 7)]);
-
-        // marks on the preview rows match the same derivation
-        assert_eq!(count, 3);
+        assert_eq!(
+            ids(&report),
+            vec![
+                ("E-STATUS-DUP", 5),
+                ("W-STATE-DUP", 6),
+                ("W-STATE-EXPIRED", 7),
+                ("W-STATE-ENTRY", 8),
+                ("W-STATE-CONFLICT", 8),
+                ("W-STATE-CONFLICT", 9),
+                ("W-STATE-CONFLICT", 9),
+            ]
+        );
+        assert_eq!(report.status, Status::Error);
+        assert_eq!(report.exit, 1);
+        assert_eq!(
+            field_values(&report, "entries"),
+            vec![vec!["4".to_string()]]
+        );
+        let rows = field_values(&report, "locked");
         let marks: Vec<(&str, Option<&str>)> = rows
             .iter()
-            .map(|(status, values)| (status.as_str(), values.get(2).map(|s| s.as_str())))
+            .map(|values| (values[0].as_str(), values.get(2).map(String::as_str)))
             .collect();
         assert_eq!(
             marks,
             vec![
-                ("locked", Some("conflict")), // alice (the L5 renewal)
-                ("locked", Some("expired")),  // bob
-                ("locked", Some("conflict")), // dave
+                ("alice", Some("conflict")),
+                ("bob", Some("expired")),
+                ("dave", Some("conflict")),
+                ("gina", Some("conflict")),
+            ]
+        );
+    }
+
+    #[test]
+    fn state_conflicts_warn_with_every_pair_in_anchor_order() {
+        // Same-line pairs preserve declaration order, not nickname order;
+        // sorting by anchor must not interleave the later dave pairs.
+        let report = state_report(
+            concat!(
+                "# .state\n",
+                "\n",
+                "## locked\n",
+                "bob 2026-09-17T09:00:00Z..2026-09-17T12:00:00Z, ",
+                "carol 2026-09-17T09:00:00Z..2026-09-17T12:00:00Z, ",
+                "alice 2026-09-17T09:00:00Z..2026-09-17T12:00:00Z\n",
+                "dave 2026-09-17T09:00:00Z..2026-09-17T12:00:00Z\n",
+            ),
+            "2026-09-17T10:00:00Z",
+        );
+        assert_eq!(report.status, Status::Warn);
+        assert_eq!(report.exit, 0);
+        let diagnostics: Vec<_> = report
+            .rows
+            .iter()
+            .filter_map(|row| match row {
+                Row::Diagnostic(diagnostic) => {
+                    let param = |key| {
+                        diagnostic
+                            .params
+                            .iter()
+                            .find(|(name, _)| *name == key)
+                            .unwrap()
+                            .1
+                            .as_str()
+                    };
+                    Some((diagnostic.id, diagnostic.line, param("a"), param("b")))
+                }
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            diagnostics,
+            vec![
+                ("W-STATE-CONFLICT", 4, "bob", "carol"),
+                ("W-STATE-CONFLICT", 4, "bob", "alice"),
+                ("W-STATE-CONFLICT", 4, "carol", "alice"),
+                ("W-STATE-CONFLICT", 5, "bob", "dave"),
+                ("W-STATE-CONFLICT", 5, "carol", "dave"),
+                ("W-STATE-CONFLICT", 5, "alice", "dave"),
             ]
         );
     }
@@ -398,7 +441,7 @@ mod tests {
     fn state_reversed_range_marks_expired_without_a_second_warning() {
         // §6.2.5: start > until counts as expired — the row is marked,
         // but the only diagnostic is the per-entry W-STATE-RANGE.
-        let document = state_doc(
+        let report = state_report(
             concat!(
                 "# .state\n",
                 "\n",
@@ -407,10 +450,189 @@ mod tests {
             ),
             "2026-09-17T10:00:00Z",
         );
-        let now = crate::time::parse("2026-09-17T10:00:00Z").unwrap();
-        let (count, rows) = state_preview(now, &document);
-        assert_eq!(ids(&document), vec![("W-STATE-RANGE", 4)]);
-        assert_eq!(count, 1);
-        assert_eq!(rows[0].1[2], "expired");
+        assert_eq!(ids(&report), vec![("W-STATE-RANGE", 4)]);
+        assert_eq!(
+            field_values(&report, "entries"),
+            vec![vec!["1".to_string()]]
+        );
+        assert_eq!(field_values(&report, "locked")[0][2], "expired");
+    }
+
+    #[test]
+    fn state_esc_status_headings_show_replacement_without_merging_raw_identities() {
+        // Handwritten ESC/BEL headings remain distinct raw statuses;
+        // display_text sanitizes them equally. The preview row shown to
+        // consumers must carry U+FFFD and must not leak the controls.
+        // Selection and locked matching stay on the raw identities, so
+        // the headings are not merged and are never valid locked status.
+        let report = state_report(
+            concat!(
+                "# .state\n",
+                "\n",
+                "## locked\u{1b}\n",
+                "alice 2026-09-17T09:00:00Z..2026-09-17T12:00:00Z\n",
+                "## locked\u{07}\n",
+                "alice 2026-09-17T09:00:00Z..2026-09-17T12:00:00Z\n",
+                "bob 2026-09-17T09:00:00Z..2026-09-17T12:00:00Z\n",
+            ),
+            "2026-09-17T10:00:00Z",
+        );
+        assert_eq!(
+            field_values(&report, "entries"),
+            vec![vec!["3".to_string()]]
+        );
+        let rows = field_values(&report, "locked\u{FFFD}");
+        let preview: Vec<(&str, Option<&str>)> = rows
+            .iter()
+            .map(|values| (values[0].as_str(), values.get(2).map(String::as_str)))
+            .collect();
+        assert_eq!(
+            preview,
+            vec![("alice", None), ("alice", None), ("bob", None)]
+        );
+        assert_eq!(
+            ids(&report),
+            vec![("W-STATUS-NAME", 3), ("W-STATUS-NAME", 5)]
+        );
+    }
+
+    fn field_values(report: &Report, key: &str) -> Vec<Vec<String>> {
+        report
+            .rows
+            .iter()
+            .filter_map(|row| match row {
+                Row::Fields { key: k, values, .. } if k == key => Some(values.clone()),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn brief_entry_titles_show_replacement_without_merging_raw_identities() {
+        let document = doc::parse(
+            concat!(
+                "# notes.brief\n",
+                "\n",
+                "## t\u{1b}itle\n",
+                "- path: a.txt\n",
+                "- hash: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855\n",
+                "## t\u{07}itle\n",
+                "- path: b.txt\n",
+                "- hash: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855\n",
+            )
+            .as_bytes()
+            .to_vec(),
+            Path::new("notes.agent-besties.md"),
+            crate::time::parse("2026-09-17T10:00:00Z").unwrap(),
+        )
+        .expect("parses");
+        let verifications: Vec<_> = document
+            .brief
+            .entries
+            .iter()
+            .map(|entry| hash::verify(Path::new("notes.agent-besties.md"), entry))
+            .collect();
+        let mut report = Report::new("check", "notes");
+        brief_rows(&mut report, &document, &verifications);
+        let titles: Vec<String> = field_values(&report, "entry")
+            .into_iter()
+            .map(|values| values[0].clone())
+            .collect();
+        assert_eq!(
+            titles,
+            vec!["t\u{FFFD}itle".to_string(), "t\u{FFFD}itle".to_string()]
+        );
+        assert_eq!(document.brief.entries.len(), 2);
+        assert_ne!(
+            document.brief.entries[0].title,
+            document.brief.entries[1].title
+        );
+        assert!(document
+            .brief
+            .entries
+            .iter()
+            .all(|entry| entry.title.contains('\u{1b}') || entry.title.contains('\u{07}')));
+    }
+
+    #[test]
+    fn profile_section_titles_show_replacement_without_merging_raw_identities() {
+        let document = doc::parse(
+            concat!(
+                "# a.agent-profile\n",
+                "\n",
+                "## role\u{1b}\n",
+                "\n",
+                "```md\n",
+                "dev\n",
+                "```\n",
+                "## role\u{07}\n",
+                "\n",
+                "```md\n",
+                "ops\n",
+                "```\n",
+            )
+            .as_bytes()
+            .to_vec(),
+            Path::new("a.agent-besties.md"),
+            crate::time::parse("2026-09-17T10:00:00Z").unwrap(),
+        )
+        .expect("parses");
+        let mut report = Report::new("check", "a");
+        profile_rows(&mut report, &document);
+        let titles: Vec<String> = field_values(&report, "section")
+            .into_iter()
+            .map(|values| values[0].clone())
+            .collect();
+        assert_eq!(
+            titles,
+            vec!["role\u{FFFD}".to_string(), "role\u{FFFD}".to_string()]
+        );
+        assert_eq!(document.profile.len(), 2);
+        assert_ne!(document.profile[0].name, document.profile[1].name);
+        assert!(document
+            .profile
+            .iter()
+            .all(|section| section.name.contains('\u{1b}') || section.name.contains('\u{07}')));
+    }
+
+    #[test]
+    fn post_authors_keep_first_occurrence_order() {
+        let document = doc::parse(
+            concat!(
+                "# foo.post\n",
+                "\n",
+                "## #1 alice (2026-09-17T10:00:00Z)\n",
+                "\n",
+                "```md\n",
+                "one\n",
+                "```\n",
+                "## #2 bob (2026-09-17T10:00:00Z)\n",
+                "\n",
+                "```md\n",
+                "two\n",
+                "```\n",
+                "## #3 alice (2026-09-17T10:00:00Z)\n",
+                "\n",
+                "```md\n",
+                "three\n",
+                "```\n",
+                "## #4 carol (2026-09-17T10:00:00Z)\n",
+                "\n",
+                "```md\n",
+                "four\n",
+                "```\n",
+            )
+            .as_bytes()
+            .to_vec(),
+            Path::new("foo.agent-besties.md"),
+            crate::time::parse("2026-09-17T10:00:00Z").unwrap(),
+        )
+        .expect("parses");
+        let mut report = Report::new("check", "foo");
+        post_rows(&mut report, &document);
+        assert_eq!(
+            field_values(&report, "authors"),
+            vec![vec!["alice, bob, carol".to_string()]]
+        );
     }
 }
