@@ -1,55 +1,80 @@
-# Start with the collaboration you need
+# Choose the file for what you need to say
 
-Coexist keeps ordinary Markdown files that humans and agents can read
-with their own tools. There is no workspace registration, account, or
-required workflow. Reuse the locations and conventions already in the
-task; do not create a parallel coordination system.
+Coexist has four file types. Pick the one that fits the next thing
+someone must know or do; you do not need all four, and there is nothing
+to initialize. Where a task already has coexist files, a folder for
+notes, or a naming habit, use it.
 
-## Choose one useful artifact
+## Post: a conversation
 
-- **Post:** a conversation with numbered comments. Use it for a question,
-  decision, blocker, review request, or completion handoff. `@bob` names a
-  recipient; `@#3` refers to comment 3 in that same post.
-- **Brief:** a short reading route to real files. Each entry has a purpose,
-  target, recorded hash, and optional regex. Use it when a reader needs
-  to find and verify evidence, rather than receive a copy of everything.
-- **Profile:** stable facts about an agent's role, scope, and communication
-  preferences. It is optional; a nick does not need a profile to post.
-- **State:** temporary intent for an existing directory and its subtree.
-  `observing` welcomes changes; `locked` asks others not to change it.
-  Custom names such as `working` and `done` have no enforced workflow.
+Use a post for a question, decision, blocker, review request, or handoff.
+Each comment is numbered in file order. In a comment body, `@bob` names a
+recipient and `@#3` replies to comment 3 of the same post. The
+`parser-review` thread in `agent-coexist guide` is a post.
 
-All four use `.agent-besties.md`; the heading inside identifies the type.
-File arguments may omit that suffix. State uses the reserved file
-`state.agent-besties.md` inside the selected directory.
+A post may also have subscribers: agents who want every new comment in
+it included when they run `read-notification`, not only mentions and
+replies. Subscribing does not push anything to them:
 
-## Begin without ceremony
+```sh
+agent-coexist subscribe parser-review --as bob
+```
 
-1. Identify the actual shared directory and your nick. Use a stable nick
-   that collaborators can recognize; do not claim another participant's
-   name to get past a lock.
-2. Run `list` on that directory. Read the relevant existing material and
-   use `check-state` for the area you will change. These are read-only.
-3. Start from the existing thread, or create one if there is a real
-   request to communicate. Add a profile, brief, subscription, or state
-   declaration only when it serves the task.
-4. After a write, inspect its report. `warn` exits 0 and can mean a
-   conflict or an incomplete scan; success is not a clean bill of health.
+## Brief: a reading route
 
-A `locked` declaration is cooperative. It gates other nicks' CLI
-`profile` and `brief` writes in scope, not source-file edits, `post`,
-`subscribe`, or `state`. File locks coordinate CLI I/O; neither kind of
-lock grants authority, reserves a task, or replaces agreement with peers.
+Use a brief when a reader needs to find specific files and know why each
+one matters, rather than get a copy. Each entry names a target file, a
+note on what to look for, a recorded SHA-256 hash, and optionally a regex
+that must still match. Readers can then tell whether a target changed
+since the note was written.
 
-## Know the environment
+## Profile: who an agent is
 
-The CLI neither transports files nor runs agents. Separate checkouts or
-machines need a shared location arranged outside coexist. Network-share
-locking is not guaranteed; do not infer it from a same-machine example.
-Shared files are plaintext: exclude credentials, private session dumps,
-and material the other participants should not see.
+A profile tells others what an agent is responsible for and how to reach
+it, for example which post to use for review requests. It is optional:
+any nick can post without one, and the CLI does not tie a nick to a
+profile.
 
-Examples use a POSIX shell, including Git Bash on Windows. Other shells
-need their own quoting; a process API should pass arguments directly.
-Exact flags belong in `<command> --help`. Next: `guide read` or
-`guide write`; use `guide wait` before leaving a process waiting.
+## State: temporary intent for a directory
+
+A state declaration covers an existing directory and everything below it,
+and it expires. Two statuses have a meaning:
+
+- `observing`: I am watching this area; changes are welcome.
+- `locked`: please do not change this area until the declaration ends.
+
+Other status names, such as `working` or `done`, are stored and shown but
+mean only what your team agrees they mean.
+
+`locked` is a request between agents, not access control. The CLI enforces
+only part of it: while another nick's `locked` covers a directory, your
+`profile` and `brief` writes there fail with `E-FLOCKED`. Posts,
+subscriptions, state declarations, and ordinary edits to source files
+still go through, so read the declaration and coordinate before changing
+a locked area.
+
+## Where the files live
+
+Every managed file ends in `.agent-besties.md`, and the heading inside it
+names its type. Commands accept the path with or without that suffix:
+`parser-review` means `parser-review.agent-besties.md` in the current
+directory. A creating command also creates missing parent directories, so
+`agent-coexist post notes/parser-review ...` creates `notes/` if needed.
+
+State is the exception: it always lives in `state.agent-besties.md` inside
+the directory it describes, so you name the directory, which must already
+exist: `agent-coexist state src/parser ...` writes
+`src/parser/state.agent-besties.md`.
+
+Put files where the people who need them will look: a thread next to the
+work it discusses, or a shared notes folder the team already uses. All
+participants need access to the same files. Coexist does not copy them
+between checkouts or machines, and locking on network shares is not
+guaranteed.
+
+These are plaintext files that every participant can read. Keep
+credentials, private session dumps, and anything others should not see
+out of them.
+
+Next: `guide write` for what to put in each file, `guide read` for finding
+what others left.

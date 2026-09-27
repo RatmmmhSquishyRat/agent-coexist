@@ -14,28 +14,119 @@ toolchain automatically.
 git clone https://github.com/RatmmmhSquishyRat/agent-coexist.git
 cd agent-coexist
 cargo build
+./target/debug/agent-coexist guide
 ```
 
 The binary is `target/debug/agent-coexist` (`agent-coexist.exe` on Windows).
 
 ## Project layout
 
-- `crates/core` (`coexist-core`) — parsing of the collaboration files,
-  raw-byte splicing, file locking, and the logic behind the fourteen
-  business commands. It does not own `guide`, `--help`, or `--version`.
-- `crates/cli` (`agent-coexist`) — the `agent-coexist` binary: argument
-  parsing and console rendering. Business commands sit on `coexist-core`.
-  `guide` is a CLI-only information branch: it embeds
-  `crates/cli/guide/*.md` and writes that Markdown to stdout before cwd,
-  clock, storage, or lock setup. Do not add a core Request or Report for
-  it.
-- `.agents/skills/agent-coexist/SKILL.md` — the canonical short discovery
+- `crates/core` (`coexist-core`): parsing of the collaboration files,
+  raw-byte splicing, file locking, the diagnostic catalog, and the logic
+  behind the fourteen business commands. It does not own `guide`,
+  `--help`, or `--version`.
+- `crates/cli` (`agent-coexist`): the binary, with argument parsing and
+  console rendering. Business commands call into `coexist-core`. `guide`
+  is a CLI-only information branch: it embeds `crates/cli/guide/*.md` and
+  writes that Markdown to stdout before any cwd, clock, storage, or lock
+  setup. Do not add a core Request or Report for it.
+- `.agents/skills/agent-coexist/SKILL.md`: the canonical short discovery
   skill. Consuming projects copy that folder; there is no installer.
-- `vendor/ignore` — pinned `ignore` 0.4.33 with a bounded local patch;
-  not a workspace member. See [Vendored `ignore` crate](#vendored-ignore-crate).
+- `vendor/ignore`: pinned `ignore` 0.4.33 with a bounded local patch; not
+  a workspace member. See [Vendored `ignore` crate](#vendored-ignore-crate).
 
 Unit tests sit next to the code they cover; integration tests live in
 `crates/core/tests/` and `crates/cli/tests/`.
+
+## Before you open a pull request
+
+1. **Check the docs first.** Operational methods live in
+   [the built-in guide](crates/cli/guide/index.md) (`agent-coexist guide`).
+   Command, flag, and line-protocol facts live in
+   [the command reference](docs/usage.md), and the on-disk format in
+   [the file format reference](docs/file-format.md).
+   To change behavior, open an issue first describing what should change
+   and why.
+2. **Keep it small.** One concern per pull request: a single bug fix or a
+   single coherent change. Pull requests target the `main` branch.
+3. **Run these checks locally.** CI runs the same on Linux, Windows, and
+   macOS:
+
+   ```console
+   cargo fmt -p agent-coexist -p coexist-core -- --check
+   cargo clippy --workspace --all-targets --locked -- -D warnings
+   cargo test --workspace --release --locked
+   cargo test --manifest-path vendor/ignore/Cargo.toml --lib --release --locked --target-dir target/vendor-check
+   ```
+
+   `cargo fmt -p agent-coexist -p coexist-core` (without `--check`)
+   applies the formatting. The package filter is intentional: it formats
+   the two product crates and leaves the pinned `ignore` tree in upstream
+   style. The last command runs the vendor library tests.
+
+## Writing tests
+
+Test what a user or script can observe: the first status line of a
+business report, the rows a script would parse, exit codes, and the bytes
+left on disk. Keep tests deterministic and self-contained: use temporary
+directories, and fix the clock with `AGENT_COEXIST_NOW` (strict
+20-character `YYYY-MM-DDTHH:MM:SSZ`; `:60` is rejected) where timestamps
+matter.
+
+Do not pin:
+
+- the full wording of `crates/cli/guide/*.md`, `SKILL.md`, or diagnostic
+  prose;
+- exact quote spelling of a `fix` command (test that its operands survive
+  a real POSIX shell instead);
+- internal search, index, or merge structures, or timing and latency.
+
+Areas where a regression would mislead or harm a user, and which a change
+in the matching area should keep covered:
+
+- **Information commands.** `guide`, `--help`, and `--version` ignore
+  business environment variables and storage; an unknown guide topic is a
+  usage error; business grammar is not bypassed.
+- **Recovery `fix` lines.** Command-form fixes address the native operand
+  (not the folded display), and a POSIX shell round-trip reaches the same
+  file. Literal headers and hand-edit instructions are never quoted as
+  commands. Operands that cannot be represented produce whole-recipe
+  manual guidance. Placeholder-looking runtime values stay literal values.
+- **Never widen a destructive recipe.** A dirty-line or not-found state
+  removal keeps the original `--status`; a same-file lock-conflict fix
+  keeps `--status=locked`; an explicit `--remove` without `--status` still
+  spans statuses. An unselected or misnamed state-content file, including
+  a wait `removed` baseline, gets hand-edit advice and never a
+  directory-level `state` command against a sibling reserved file; rename
+  advice never overwrites an existing state file.
+- **Heading repairs.** Suggested profile section names and post header
+  sequence numbers are unique across existing headings and every other
+  repair in the same report; collisions and exhaustion fall back to manual
+  advice. Invalid stored statuses and control-bearing headings get manual
+  advice, not a command the CLI would reject or normalize.
+- **Locks.** A file-symlink write honors both the supplied-parent and the
+  canonical-target-parent lock chains; a matching `--as` still writes;
+  incomplete scans warn rather than invent a lock.
+- **Order and matching.** Post `authors` keep first-occurrence order;
+  write-report mentions and `reply-to` rows keep body order, including
+  `(not found)`. `--keyword` and `--include` match the raw input; only
+  hint display is folded and sanitized.
+- **Conflict output.** `W-STATE-CONFLICT` pairs appear on explicit `check`
+  and on qualifying wait hits, never in ordinary parse or scan tests, and a
+  complete check lists every pair. Wait refuses a baseline with a
+  duplicate `(status, nick)` pair.
+
+## Documentation and changelog
+
+If a change affects user-visible behavior, update the matching surface in
+the same change: `crates/cli/guide/` for operational methods, `--help`
+text, `README.md`, `docs/usage.md`, or `docs/file-format.md`. Add a line
+under `## [Unreleased]` in `CHANGELOG.md` (the file follows
+[Keep a Changelog](https://keepachangelog.com/en/1.1.0/)) describing what a
+user or script will notice.
+
+Keep one tutorial source: the guide pages own the operational walkthrough,
+and `docs/usage.md` stays a lookup reference rather than a second copy.
 
 ## Vendored `ignore` crate
 
@@ -51,134 +142,39 @@ crates.io, patched in-tree.
   `00b69833ed729dc5aa7d19541d96d6cf8e9137194207a04916d658e43168402f`.
 - License: Unlicense OR MIT. The license texts live at
   `vendor/ignore/COPYING`, `vendor/ignore/LICENSE-MIT`, and
-  `vendor/ignore/UNLICENSE`. Keep them byte-for-byte when refreshing
-  the pin.
-- The local delta is bounded: ignore and git-config sources are opened
-  as regular files; glob matching uses native path bytes; load errors
-  are delivered to the scanner; Git metadata and source selection follow
-  worktree, separate-gitdir, gitfile, and commondir layout, and an
-  explicit global config replaces the default global files. Relative
-  gitfile paths resolve from the gitfile's directory; relative commondir
-  paths resolve from the gitdir; a missing optional commondir keeps that
-  gitdir's exclude rules. Ordinary `.git` directories consult `commondir`
-  the same way gitfiles do. Gitfile and commondir descriptors are read
-  in full; only trailing CR/LF bytes are trimmed, so an embedded LF
-  stays in the native path. In a `core.excludesFile` path read from
-  git config, only a recognized leading `~` home component expands, at
-  a component boundary and using the home directory's native bytes;
-  interior or later tildes — including Windows short native names such
-  as `RUNNER~1` — and `~user` forms stay literal. Descriptor-safe
-  reads, relative bases, optional missing sources, load errors, and
-  ignore grammar are unchanged. Unix matcher prefix stripping requires
-  a component boundary; upstream raw `./` remainder spelling is kept.
-  On Windows, ordinary and verbatim volume prefixes compare as native
-  Rust `Prefix` values (`c:` and `C:` are already the same disk; `C:\`
-  and `\\?\C:\` match as one volume). Prefix stripping consumes every
-  remaining root component, so a shorter candidate cannot be treated as
-  under that root; ordinary and verbatim spellings of the same volume
-  agree on global directory excludes. Directory components are not given
-  extra case-folding; DeviceNS (`\\.\`) is not treated as a disk; user
-  verbatim spelling is kept for I/O — paths are not canonicalized or
-  stripped of `\\?\`. Upstream glob grammar, type/directory precedence,
-  and license texts stay as published. `globset` remains the unmodified
-  crates.io crate. The patch does not attempt to maintain every upstream
-  API. The old whole-upstream `min_depth` limit remains outside product
-  scope.
-- Refreshing the pin means re-applying that delta on the new upstream
-  tree and re-running the vendor library tests below. Do not drop the
-  pin, and do not run `cargo fmt --all` against this tree:
-  workspace-wide formatting can follow the path patch and rewrite
-  upstream style.
+  `vendor/ignore/UNLICENSE`. Keep them byte-for-byte when refreshing the
+  pin.
+- The local delta is limited to what scans need:
+  - Ignore and git-config sources are opened as regular files, and load
+    errors reach the scanner.
+  - Glob matching uses native path bytes. Unix prefix stripping requires
+    a component boundary; upstream raw `./` remainder spelling is kept.
+  - Git layouts: worktree, separate-gitdir, gitfile, and `commondir`
+    layouts are followed. Relative gitfile paths resolve from the
+    gitfile's directory and relative `commondir` paths from the gitdir;
+    ordinary `.git` directories honor `commondir` the same way; a missing
+    optional `commondir` keeps that gitdir's exclude rules. Gitfile and
+    `commondir` descriptors are read in full, with only trailing CR/LF
+    trimmed. An explicit global config replaces the default global files.
+  - `core.excludesFile`: only a recognized leading `~` home component
+    expands, at a component boundary and using the home directory's
+    native bytes; `~user` and later tildes (such as Windows short names
+    like `RUNNER~1`) stay literal.
+  - Windows volumes: ordinary and verbatim prefixes compare as native
+    Rust `Prefix` values (`C:\` and `\\?\C:\` are one volume); prefix
+    stripping consumes every remaining root component; directory
+    components get no extra case-folding; DeviceNS (`\\.\`) is not a
+    disk; I/O keeps the user's spelling, without canonicalizing or
+    stripping `\\?\`.
 
-## Before you open a pull request
-
-1. **Check the docs first.** Operational methods live in
-   [the built-in guide](crates/cli/guide/index.md) (`agent-coexist guide`).
-   Command, flag, and line-protocol facts live in
-   [the command reference](docs/usage.md), and the on-disk format in
-   [the file guide](docs/file-format.md).
-   If you want to change behavior, open an issue first describing what
-   should change and why.
-2. **Keep it small.** One concern per pull request — a single bug fix or a
-   single coherent change. Pull requests target the `main` branch.
-3. **Run these checks locally.** CI also runs them on Linux, Windows, and macOS:
-
-   ```console
-   cargo fmt -p agent-coexist -p coexist-core -- --check
-   cargo clippy --workspace --all-targets --locked -- -D warnings
-   cargo test --workspace --release --locked
-   ```
-
-   (`cargo fmt -p agent-coexist -p coexist-core` applies the formatting
-   instead of checking it.) Package-filtered `fmt` is intentional: it
-   formats the two product crates and leaves the pinned `ignore` tree
-   in upstream style. CI also runs the vendor library tests with
-   `cargo test --manifest-path vendor/ignore/Cargo.toml --lib --release --locked --target-dir target/vendor-check`.
-
-## Writing tests
-
-- A good regression test pins observable behavior — the first status line
-  of a business report, the rows a script would parse, exit codes —
-  rather than exact blobs of source text or incidental formatting
-  details. Do not pin the full wording of `crates/cli/guide/*.md` or
-  `SKILL.md` as a regression. Pin that information commands ignore
-  business environment and storage, that unknown guide input is a usage
-  error, and that business grammar is not bypassed.
-- Recovery `fix` lines are either literal file content / prose or POSIX
-  words over native path operands, not the folded display column. Pin
-  that command-form operands survive a POSIX consumer; do not treat
-  exact quote spelling as the user API, and do not treat a literal
-  header or heading instruction as a quoted command. Pin that a scoped
-  dirty retry keeps the original `--status` selection; an invalid
-  stored status is repaired by a distinct valid heading, not a
-  `--status` command the CLI would reject or normalize. Pin that a
-  scoped not-found removal names the supplied status and points at
-  read-only `check-state`, not a write that drops `--status`.
-- Keep tests deterministic and self-contained: use temporary directories,
-  and fix the clock with `AGENT_COEXIST_NOW` where timestamps matter.
-  That override is the strict 20-character `YYYY-MM-DDTHH:MM:SSZ` form
-  (`:60` is rejected). Same-file lock-conflict warnings (`W-STATE-CONFLICT`)
-  are expanded on explicit `check` and qualifying wait-hit reports;
-  ordinary parse and scan tests should not expect that pair list. A
-  complete check still lists every pair. Wait still refuses a snapshot
-  at the first duplicate `(status, nick)`; pairing uses first-wins
-  raw-identity indexes while ordered vectors remain the report. Pin
-  that unmatched `--include` hint display is folded and
-  control-sanitized while matching uses the raw glob. Pin that a
-  misnamed or unselected state-content file receives hand-edit
-  advice for the inspected file and never a directory-level `state`
-  recipe against a sibling reserved file; rename advice must not
-  overwrite a separate existing state file. Pin that a profile
-  heading example is copyable only when that name is unused among
-  existing headings and other repairs in the same report; colliding
-  folded, later, or simultaneous names stay manual. Pin that post
-  `authors` keep first-occurrence order and write `mentions` /
-  `reply-to` rows keep body order, including `(not found)`. Pin
-  that `--keyword` matches as typed without whitespace folding.
-  Pin that a generated same-file lock-conflict removal keeps
-  `--status=locked` and leaves other live statuses; an explicit
-  `--remove` without `--status` still spans. Pin that a wait
-  `removed` report can keep baseline warnings while refusing a
-  mutating recipe against a later selected file. Pin that a
-  file-symlink write honors both the supplied-parent and
-  canonical-referent-parent lock chains, and that matching `--as`
-  still writes. Pin that several header repairs in one post
-  report reserve distinct unused sequence numbers, and that
-  later exhaustion stays manual. Do not assert universal
-  admission or sample latency, do not pin internal parse search,
-  membership indexes, or merge/span lookup, and do not drop
-  required conflict-pair output.
-
-## Documentation and changelog
-
-If a change affects user-visible behavior, update the matching surface in
-the same change: `crates/cli/guide/` for operational methods, `--help`
-text, `README.md`, `docs/usage.md`, or `docs/file-format.md`, and add a
-line under `## [Unreleased]` in `CHANGELOG.md` (the file follows
-[Keep a Changelog](https://keepachangelog.com/en/1.1.0/)). Keep a single
-tutorial source: do not add a second guided tour in `docs/usage.md`.
-`guide` content is owned by those crate-local pages; the command
-reference must not become a second copy.
+  Upstream glob grammar, type/directory precedence, and license texts
+  stay as published; `globset` is the unmodified crates.io crate. The
+  patch does not maintain every upstream API, and upstream's whole-tree
+  `min_depth` limit is outside product scope.
+- To refresh the pin, re-apply that delta on the new upstream tree and
+  re-run the vendor library tests. Do not drop the pin, and do not run
+  `cargo fmt --all`: workspace-wide formatting can follow the path patch
+  and rewrite upstream style.
 
 ## Reporting bugs
 
@@ -195,4 +191,4 @@ MIT License (see [LICENSE](LICENSE)). By contributing, you agree that your
 contributions are licensed under it. There is no CLA and no DCO sign-off.
 
 The cover image in `docs/assets/cover.webp` is supplied artwork and is not
-part of the MIT grant — do not reuse it under MIT terms.
+part of the MIT grant; do not reuse it under MIT terms.

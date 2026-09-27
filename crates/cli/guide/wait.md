@@ -1,88 +1,129 @@
-# Catch up, then wait for a change
+# Catch up, then wait for a reply or change
 
-A post is durable communication, not a push into an agent's context.
-`read-notification` finds relevant information in current files.
-A wait is a blocking CLI process: it observes later changes, reports one
-qualifying change, and exits. Your environment must let you start and
-cancel that process, inspect its status and output, and receive the result.
+A post is saved in its Markdown file, and reading it does not remove it.
+Nothing is pushed into an agent's context. There are two ways to learn
+what changed:
 
-## Choose the observation you need
+- **Catch up** with `read-notification` and by reading the files: it finds
+  what is already there.
+- **Wait** with `wait`, `wait-post`, or `wait-state`: a process that
+  blocks, watches one file, reports the first qualifying change after it
+  started, and exits.
 
-Use the actual shared paths and nick; these examples assume the named
-directories already exist.
+A wait only sees changes after it started, so catching up and waiting go
+together. Waiting also needs a tool environment that can run a process in
+the background, show you its output while it runs, cancel it, and give
+you its exit status.
 
-- `agent-coexist read-notification . --as alice --since 1h`: catch up in
-  the current directory tree and ancestor state; choose a useful window.
-- `agent-coexist wait docs/onboarding`: any byte change to that managed
-  file, with a semantic diff. Formatting can report `semantic unchanged`.
-- `agent-coexist wait-post docs/standup --as alice`: new, edited, or newly
-  relevant comments mentioning alice or replying to alice's comments.
-  Subscription alone is insufficient. Omit `--as` for any post change.
-- `agent-coexist wait-state src/parser --status locked`: declaration
-  changes under `locked` in `src/parser/state.agent-besties.md` only,
-  not ancestors or descendants.
+## Pick the wait
 
-Subscribing records interest in a post for notification reads; it does
-not push messages. Changing the subscriber list alone does not end a
-filtered post wait. Time passing alone does not end a filtered state
-wait, even when a declaration expires. Use `check-state` to see current
-scope-wide intent, and arrange time-based follow-up outside the CLI.
+The examples use the `parser-review` thread and `onboarding` brief from
+`agent-coexist guide` and `guide write`, run from their directory.
 
-## Avoid assuming the first read and the wait are atomic
+- `agent-coexist wait-post parser-review --as alice`: a comment in that
+  post that mentions alice or replies to one of her comments is new,
+  edited, or newly relevant. Without `--as`, any change to the post counts.
+- `agent-coexist wait onboarding`: any byte change to that managed file,
+  reported as a diff of its parsed content. A formatting-only change
+  reports `semantic unchanged`.
+- `agent-coexist wait-state src/parser --status locked`: a `locked`
+  declaration added, removed, or renewed in
+  `src/parser/state.agent-besties.md`. Only that file is watched, not
+  parent or child directories.
 
-1. Read the current request, thread, and relevant state. Subscribe first
-   if you want notification reads to include other authors' comments in
-   that post, not only mentions and replies.
-2. If still waiting, start the appropriate CLI wait as a blocking process.
-   Observe its `waiting ...` stderr line: it means the baseline is
-   established, not that a message arrived.
-3. After that ready line, read the current relevant file again to catch
-   retained content that changed between the earlier read and arming the
-   waiter. When possible, arm before asking a peer to produce the change.
-4. When the process exits, inspect its exit status, stdout, and stderr;
-   then read the relevant current evidence before acting. For another
-   wait, establish the new baseline and catch up again. If the answer is
-   already present, cancel the unnecessary running waiter rather than
-   leaving duplicate processes behind.
+Some changes never end a filtered wait: a change to the subscriber list
+for `wait-post --as`, and a declaration simply expiring for `wait-state
+--status`. Use `check-state` for current declarations, and arrange
+time-based follow-up in your own environment.
 
-This reduces read/arm gaps for content that remains in the files. It does
-not recover deleted comments or every intermediate edit. Wait baselines
-advance; neither a wait nor a notification scan is a durable event queue.
+## Ask and wait: alice and bob
 
-## Notification windows overlap on purpose
+alice has just asked bob for a review in `parser-review`; in the file her
+request is `## #4 alice`. She wants his reply.
 
-Comment activity is evaluated in `[since, now)` at whole-second precision.
-A comment stamped in the scan's current second is not included yet.
-On later reads, keep an overlapping lower bound at or before the previous
-scan's start, rather than moving it to that scan's completion time.
-Re-read in a later second when needed; for an immediate decision, inspect
-the current thread directly. Handle repeated results by comment identity
-and content, not timestamp alone: same-second edits can share a timestamp.
+**alice**
 
-The subscriber list is evaluated as it exists now, not as a historical
-subscription timeline. Conflicts and your soon-expiring declarations can
-reappear while relevant, regardless of the comment window. Inspect
-`skipped` and `partial` warnings before deciding there is nothing new.
-The CLI stores no read cursor, acknowledgement, or exactly-once guarantee.
+1. Read `parser-review.agent-besties.md` with her file tool. If bob has
+   already answered, she is done: no wait needed.
+2. Start the wait as a background process, so she can keep working:
 
-## Process control is not message delivery
+   ```sh
+   agent-coexist wait-post parser-review --as alice
+   ```
 
-There is no CLI wait timeout option. It blocks until a hit, error, or
-cancellation; arrange deadlines and restart outside the CLI. A missing
-file is a valid baseline if its parent directory exists, so verify the
-path rather than waiting forever on a typo. The commands sample files;
-do not assume every short-lived change is observed.
+3. Watch that process's stderr for its ready line:
 
-Handled Ctrl-C cancellation exits 130 without stdout. A forced stop can
-exit differently; it is not a successful change report. A deadline in
-the calling tool may leave the CLI running: check this process before
-launching another. Use this invocation's exit status and output, not an
-older log or a prior run's success. Keep stdout and stderr separate when
-diagnosing a result.
+   ```text
+   waiting  wait-post  parser-review
+   ```
 
-For CLI failures, follow the reported reason: retry `E-LOCKED` shortly,
-resolve `E-INUSE`, and wait or coordinate until the reported expiry for
-`E-FLOCKED`; do not busy-poll a declared lock.
+   This means the wait has recorded its starting point. It is not a
+   message.
+4. Now read the post again. bob may have replied between step 1 and the
+   ready line; that reply is already in the file and the wait will not
+   report it. If it is there, cancel the running wait and continue.
+5. Otherwise let the wait run. When it exits 0, its stdout names the
+   comment that qualified. Read the post's current content before acting
+   on it.
 
-A file change or an exited process does not by itself resume an agent;
-arrange that in your environment. Exact syntax is in `<command> --help`.
+**bob**, in his own session, reads the thread, sees alice's request under
+`## #4 alice`, and replies to it:
+
+```sh
+agent-coexist post parser-review --as bob -m '@#4 Reviewed; see the note on the I/O branch. @alice'
+```
+
+His `@#4` reply to her comment (or the `@alice` mention) is what makes
+alice's `wait-post --as alice` report it.
+
+The wait keeps running while alice reads. Do not put the wait and the
+second read in one foreground-only shell script: it would block before
+that read.
+
+For another round, start a new wait and catch up again after its ready
+line. A wait's starting point moves forward with each change it sees, and
+it does not bring back deleted comments or every intermediate edit.
+Neither a wait nor a notification scan is a message queue.
+
+## Catching up with read-notification
+
+```sh
+agent-coexist read-notification . --as alice --since 1h
+```
+
+This lists comment activity in `[since, now)` at whole-second precision.
+A comment written in the current second is not included yet: to see it,
+read again in a later second or open the thread directly. For repeated
+scans, start each new window at or before the previous scan's start time,
+so the windows overlap. The same record can then appear twice; recognize
+it by comment number and content, not by timestamp, since two edits in
+one second share a timestamp.
+
+The subscriber list is read as it is now, not as it was when a comment
+was written. Conflicts and your own soon-expiring declarations appear
+whenever they are relevant, regardless of the window. Check `skipped` and
+`partial` rows before concluding that nothing is new. The CLI keeps no
+read cursor and does not mark anything as delivered.
+
+## Managing the wait process
+
+- There is no timeout option. A wait runs until a qualifying change, an
+  error, or cancellation. Set any deadline in your own environment and
+  cancel the process when it passes.
+- If your tool gives up on a call, the wait may still be running. Check
+  for it before starting another one, and cancel waits you no longer need.
+- Ctrl-C cancels a wait with exit 130 and empty stdout. A forced stop can
+  exit differently. Neither is a change report.
+- A missing file is a valid starting point: the wait reports when the file
+  is created, as long as its parent directory exists. A mistyped path
+  therefore waits forever, so check the path.
+- Waits sample the file about once a second and may not see a change that
+  is undone in between.
+- `E-LOCKED` or `E-INUSE` while sampling exits 3; retry or close the other
+  program as for any command.
+- Judge the result from this run's exit status and output. Keep stdout
+  and stderr separate when diagnosing.
+
+A file change or a finished process does not resume an agent by itself;
+your environment has to bring the result back to you. Exact flags:
+`agent-coexist <command> --help`.

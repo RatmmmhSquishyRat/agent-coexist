@@ -28,13 +28,26 @@ agent-coexist --version
 agent-coexist guide
 ```
 
-`guide` prints the operational tutorial from the binary. It does not
-create workspace files. Exact topics: `agent-coexist guide --help`.
+`guide` prints the built-in tutorial for agents: when coexist fits, a
+first exchange, and the `start`, `read`, `write`, and `wait` topics. It
+creates no files.
+
+## Point your agents at it
+
+Agents need two things: the `agent-coexist` binary on PATH (or its path),
+and a reason to open the guide. The bundled skill,
+[`.agents/skills/agent-coexist/SKILL.md`](.agents/skills/agent-coexist/SKILL.md),
+is a short entry that tells an agent what coexist is for and to run
+`agent-coexist guide` first. Copy that directory into your project's
+`.agents/skills/agent-coexist/`, or `.claude/skills/agent-coexist/` for
+Claude Code. Whether and when an agent loads a skill depends on its
+harness; you can also just ask the agent to run `agent-coexist guide`.
+The CLI itself does not need or install the skill.
 
 ## Your first two-agent conversation
 
-The agents share access to one directory. A profile is optional; it is
-not required to post. Here, alice opens a conversation; bob replies:
+The agents share access to one directory. Profiles are optional. Here,
+alice opens a conversation; bob replies:
 
 ```sh
 # optional: alice describes her role
@@ -66,11 +79,12 @@ Daily standup. @bob please post your status here.
 ```
 ````
 
-`agent-coexist check docs/standup` re-reads and validates the file, and
-`agent-coexist wait-post docs/standup --as bob` blocks until a comment
-relevant to bob appears — see
-[Waiting for changes](docs/usage.md#waiting-for-changes) in the command
-reference, or `agent-coexist guide wait`.
+`agent-coexist check docs/standup` re-reads and validates the file. To
+block until a new comment relevant to bob appears, bob can run
+`agent-coexist wait-post docs/standup --as bob`; it only reports changes
+after it starts, so `agent-coexist guide wait` shows how to combine it
+with reading the file. Details:
+[Waiting for changes](docs/usage.md#waiting-for-changes).
 
 ## The four file types
 
@@ -107,9 +121,8 @@ survive.
   `locked`, eight for other statuses — and expire automatically.
 - **`warn` is still success.** Business commands print a first line of
   `ok`, `warn` or `error`, and `warn` exits 0 like `ok`; scripts should
-  parse that first line rather than trust the exit code alone. `guide`,
-  `--help`, and `--version` are information output: text on stdout, empty
-  stderr, exit 0 — not the `ok`/`warn`/`error` line protocol.
+  parse that first line rather than trust the exit code alone. See
+  [Exit codes](docs/usage.md#exit-codes).
 - **Brief entry paths are relative to the brief file**, not to your
   current directory.
 - **Managed files are capped at 16 MiB.**
@@ -123,13 +136,8 @@ survive.
   code, and the line protocol.
 - [File format reference](docs/file-format.md) — the four file types as a
   human editor sees them.
-- Project skill —
-  [`.agents/skills/agent-coexist/SKILL.md`](.agents/skills/agent-coexist/SKILL.md)
-  is the canonical discovery entry. Copy that directory into a consuming
-  project's `.agents/skills/agent-coexist/`. Claude Code's documented
-  project destination is `.claude/skills/agent-coexist/`. Placement is
-  manual; the CLI does not require the skill, install skills, or write
-  global skill directories.
+- [Project skill](.agents/skills/agent-coexist/SKILL.md) — the short
+  agent entry described in [Point your agents at it](#point-your-agents-at-it).
 - [Contributing](CONTRIBUTING.md) · [Security policy](SECURITY.md) ·
   [Changelog](CHANGELOG.md)
 

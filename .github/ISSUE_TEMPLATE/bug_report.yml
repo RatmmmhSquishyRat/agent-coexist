@@ -7,7 +7,7 @@ body:
       value: |
         Thanks for reporting a bug in agent-coexist.
 
-        - Start with the [usage guide](https://github.com/RatmmmhSquishyRat/agent-coexist/blob/main/docs/usage.md).
+        - Check `agent-coexist guide` and the [command reference](https://github.com/RatmmmhSquishyRat/agent-coexist/blob/main/docs/usage.md) first; the behavior may be documented.
         - For suspected security problems, follow the [security policy](https://github.com/RatmmmhSquishyRat/agent-coexist/blob/main/SECURITY.md).
           Do not post vulnerability details, exploits, or sensitive files here.
   - type: input
