@@ -33,6 +33,13 @@ All notable changes to this project are documented here. The format follows
   "Recovery commands (`fix`)" and "Platform notes" sections; trust
   boundaries are collected in `SECURITY.md`. Command behavior is
   unaffected.
+- README, guide index, and project skill now start from the problem the
+  tool addresses: agents in other harnesses, sibling subagents, and
+  resumed sessions often cannot see who else worked on a project or what
+  they did. The README example follows a newcomer who lists the records,
+  checks directory state, and reads the existing thread before joining
+  in; the guide index and skill tell agents to look for relevant records
+  when they arrive in or return to a project.
 - **Script-visible:** an empty column in a first line, a wait ready line,
   or a Fields key/value now prints as `/`, so splitting on two or more
   spaces always yields every column. A stored value that is itself `/`

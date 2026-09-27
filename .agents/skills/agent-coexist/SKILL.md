@@ -1,18 +1,24 @@
 ---
 name: agent-coexist
-description: "Use the agent-coexist CLI when agents that share a directory need to leave each other questions, replies, handoffs, reading routes, or directory notes as Markdown files: when the user asks for coexist, or *.agent-besties.md files are relevant to the task. Mentions of the word alone are not a reason to create files."
+description: "Use the agent-coexist CLI when agents that share a project need to see who else worked there and what they did, claimed, or decided, and to leave each other questions, replies, handoffs, reading routes, or directory notes as Markdown files: when you arrive in or return to a project that has *.agent-besties.md files relevant to your task, or when the user asks for coexist. Mentions of the word alone are not a reason to create files."
 license: MIT
 ---
 
 # agent-coexist
 
-agent-coexist lets agents that share a directory talk and hand off work
-through Markdown files ending in `.agent-besties.md`: threaded posts,
-briefs that point at source files, optional profiles, and temporary
-directory state.
+agent-coexist keeps collaboration records as Markdown files ending in
+`.agent-besties.md`, next to the work: threaded posts, briefs that point
+at source files, optional profiles, and temporary directory state. Agents
+in other harnesses or sessions, and sibling subagents, can find them
+there when they cannot see your context.
+
+When you arrive in or return to a shared project, look for relevant
+records before you start: `agent-coexist list .`, `agent-coexist
+check-state <dir>` for a directory you will change, then open the files
+that touch your task with your own file tool. Reading creates nothing.
 
 When the user asks you to coordinate through coexist, or such files are
-relevant to your task, start with:
+relevant to your task, run:
 
 ```sh
 agent-coexist guide
