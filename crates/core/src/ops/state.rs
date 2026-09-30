@@ -135,9 +135,16 @@ fn declare(ctx: &mut Ctx, p: &super::StateDeclare) -> Result<Report, Fault> {
     let scope = match shared::collect(ctx, &p.dir, &default_walk_options()) {
         Ok(scope) => scope,
         Err(Fault::Io { path, source, .. }) => {
+            // The formatted cause may embed two-space runs (a malformed
+            // ignore pattern); fold it so the scan row stays splittable
+            // (§8.1.4–5, §10.9.4). The path column, warn status and the
+            // committed write above stay unchanged.
             report.kv(
                 "scan",
-                vec![context::display_file(&path), source.to_string()],
+                vec![
+                    context::display_file(&path),
+                    names::display_text(&source.to_string()),
+                ],
             );
             report.warn();
             return Ok(report);

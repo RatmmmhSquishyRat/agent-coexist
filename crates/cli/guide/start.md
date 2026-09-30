@@ -47,11 +47,12 @@ Other status names, such as `working` or `done`, are stored and shown but
 mean only what your team agrees they mean.
 
 `locked` is a request between agents, not access control. The CLI enforces
-only part of it: while another nick's `locked` covers a directory, your
-`profile` and `brief` writes there fail with `E-FLOCKED`. Posts,
-subscriptions, state declarations, and ordinary edits to source files
-still go through, so read the declaration and coordinate before changing
-a locked area.
+only part of it: while a `locked` covers a directory, `profile` and `brief`
+writes there fail with `E-FLOCKED`. Only the nick given with `--as` is
+exempt from its own declaration; without `--as`, any holder blocks,
+including you. Posts, subscriptions, state declarations, and ordinary
+edits to source files still go through, so read the declaration and
+coordinate before changing a locked area.
 
 ## Where the files live
 
@@ -67,9 +68,12 @@ exist: `agent-coexist state src/parser ...` writes
 `src/parser/state.agent-besties.md`.
 
 Put files where the people who need them will look: a thread next to the
-work it discusses, or a shared notes folder the team already uses. All
-participants need access to the same files. Coexist does not copy them
-between checkouts or machines, and locking on network shares is not
+work it discusses, or a shared notes folder the team already uses. Records
+in a folder that ignore rules such as `.gitignore` exclude may not appear
+when others discover files below a directory by default; readers then
+need `--no-ignore` or the file's path to find them.
+All participants need access to the same files. Coexist does not copy
+them between checkouts or machines, and locking on network shares is not
 guaranteed.
 
 These are plaintext files that every participant can read. Keep

@@ -89,9 +89,9 @@ pub struct Cli {
 #[derive(Subcommand, Debug)]
 pub enum TopCommand {
     /// Print an offline operational guide page
-    #[command(after_help = H_GUIDE)]
+    #[command(override_usage = U_GUIDE, after_help = H_GUIDE)]
     Guide {
-        /// start, read, write or wait; omit for the default page
+        /// start, read, write or wait; omit for the index page
         #[arg(value_name = "start|read|write|wait", value_parser = parse_guide_topic)]
         topic: Option<GuideTopic>,
     },
@@ -171,7 +171,7 @@ fn kind_of(kind: KindArg) -> doc::Kind {
 #[derive(Subcommand, Debug)]
 pub enum Commands {
     /// Recursively list collaboration files under DIR
-    #[command(after_help = H_LIST)]
+    #[command(override_usage = U_LIST, after_help = H_LIST)]
     List {
         /// directory to scan (default: the current directory; the scan is recursive)
         dir: Option<PathBuf>,
@@ -182,13 +182,13 @@ pub enum Commands {
         walk: WalkArgs,
     },
     /// Verify one file and report status without target content
-    #[command(after_help = H_CHECK)]
+    #[command(override_usage = U_CHECK, after_help = H_CHECK)]
     Check {
         /// the collaboration file; the '.agent-besties.md' suffix may be omitted
         path: PathBuf,
     },
     /// Create or update an agent profile
-    #[command(after_help = H_PROFILE)]
+    #[command(override_usage = U_PROFILE, after_help = H_PROFILE)]
     Profile {
         /// the agent-profile file; the suffix may be omitted
         path: PathBuf,
@@ -206,7 +206,7 @@ pub enum Commands {
         remove: bool,
     },
     /// Append a comment, or edit your own
-    #[command(after_help = H_POST)]
+    #[command(override_usage = U_POST, after_help = H_POST)]
     Post {
         /// the post file; the suffix may be omitted
         path: PathBuf,
@@ -221,7 +221,7 @@ pub enum Commands {
         edit: Option<u64>,
     },
     /// Join or leave a post's subscriber list
-    #[command(after_help = H_SUBSCRIBE)]
+    #[command(override_usage = U_SUBSCRIBE, after_help = H_SUBSCRIBE)]
     Subscribe {
         /// the post file; the suffix may be omitted
         path: PathBuf,
@@ -233,7 +233,7 @@ pub enum Commands {
         cancel: bool,
     },
     /// Create or update a brief and its entries
-    #[command(after_help = H_BRIEF)]
+    #[command(override_usage = U_BRIEF, after_help = H_BRIEF)]
     Brief {
         /// the brief file; the suffix may be omitted
         path: PathBuf,
@@ -249,7 +249,7 @@ pub enum Commands {
         /// the entry title (matched after whitespace folding)
         #[arg(long, value_name = "title")]
         entry: Option<String>,
-        /// require this pattern in the target ('' deletes the regex line); only with --target; raw CR and LF are rejected
+        /// pattern checked when the entry is read (no match makes it stale; writing only checks that the pattern compiles); '' deletes every regex line of the entry; only with --target; raw CR and LF are rejected
         #[arg(long, value_name = "pattern")]
         regex: Option<String>,
         /// delete the whole --entry
@@ -260,14 +260,14 @@ pub enum Commands {
         refresh: bool,
     },
     /// Declare or remove directory state (locks, observations)
-    #[command(after_help = H_STATE)]
+    #[command(override_usage = U_STATE, after_help = H_STATE)]
     State {
         /// the directory (default: the current directory); must already exist
         dir: Option<PathBuf>,
         /// the declaring nick
         #[arg(long = "as", value_name = "nick")]
         as_nick: Option<String>,
-        /// the status name; required in the declare form
+        /// the status name; required in the declare form; in the remove form, a filter (omitted: every status)
         #[arg(long, value_name = "name")]
         status: Option<String>,
         /// duration of the declaration (declare form only)
@@ -278,7 +278,7 @@ pub enum Commands {
         remove: Option<String>,
     },
     /// List mentions, replies, subscriptions and state changes since a time
-    #[command(after_help = H_READ_NOTIFICATION)]
+    #[command(override_usage = U_READ_NOTIFICATION, after_help = H_READ_NOTIFICATION)]
     ReadNotification {
         /// directory to scan (default: the current directory; recursive, plus ancestor state files)
         dir: Option<PathBuf>,
@@ -292,7 +292,7 @@ pub enum Commands {
         walk: WalkArgs,
     },
     /// Find comments by keyword, author, mention or number
-    #[command(after_help = H_LOOKFOR)]
+    #[command(override_usage = U_LOOKFOR, after_help = H_LOOKFOR)]
     LookforComment {
         /// the post file; the suffix may be omitted
         path: PathBuf,
@@ -313,7 +313,7 @@ pub enum Commands {
         comment: Option<u64>,
     },
     /// Render a brief's description, notes and target text
-    #[command(after_help = H_READ_BRIEF)]
+    #[command(override_usage = U_READ_BRIEF, after_help = H_READ_BRIEF)]
     ReadBrief {
         /// the brief file; the suffix may be omitted
         path: PathBuf,
@@ -322,21 +322,21 @@ pub enum Commands {
         entry: Option<String>,
     },
     /// Report the states of DIR, its ancestors and subtree
-    #[command(after_help = H_CHECK_STATE)]
+    #[command(override_usage = U_CHECK_STATE, after_help = H_CHECK_STATE)]
     CheckState {
         /// directory to scan (default: the current directory; recursive, plus ancestors)
         dir: Option<PathBuf>,
         #[command(flatten)]
         walk: WalkArgs,
     },
-    /// (extension) wait for any change to one collaboration file
-    #[command(after_help = H_WAIT)]
+    /// Wait for any change to one collaboration file
+    #[command(override_usage = U_WAIT, after_help = H_WAIT)]
     Wait {
         /// the file to watch; the suffix may be omitted
         path: PathBuf,
     },
-    /// (extension) wait for a comment that mentions or replies to you
-    #[command(after_help = H_WAIT_POST)]
+    /// Wait for a comment that mentions or replies to you
+    #[command(override_usage = U_WAIT_POST, after_help = H_WAIT_POST)]
     WaitPost {
         /// the post file to watch; the suffix may be omitted
         path: PathBuf,
@@ -344,8 +344,8 @@ pub enum Commands {
         #[arg(long = "as", value_name = "nick")]
         as_nick: Option<String>,
     },
-    /// (extension) wait for changes to DIR/state.agent-besties.md
-    #[command(after_help = H_WAIT_STATE)]
+    /// Wait for changes to DIR/state.agent-besties.md
+    #[command(override_usage = U_WAIT_STATE, after_help = H_WAIT_STATE)]
     WaitState {
         /// the directory (default: the current directory); only its state file is watched
         dir: Option<PathBuf>,
@@ -619,15 +619,7 @@ pub fn resolve(command: Commands, ctx: &Ctx) -> Result<Invocation, String> {
         } => {
             let dir = dir.unwrap_or_else(|| PathBuf::from("."));
             let nick = nick_value(as_nick, "--as")?;
-            let since = time::since(&since, ctx.now).map_err(|f| {
-                fault_usage_message(
-                    &f,
-                    &format!(
-                        "--since must be an RFC 3339 time like 2026-09-17T09:12:00Z or a duration like 1h30m (got '{}')",
-                        names::fold(&since)
-                    ),
-                )
-            })?;
+            let since = time::since(&since, ctx.now).map_err(usage_message)?;
             let walk = walk_options(walk)?;
             Ok(Invocation::Base {
                 command: "read-notification",
@@ -737,12 +729,7 @@ fn walk_options(walk: WalkArgs) -> Result<fsx::walk::Options, String> {
         exclude: walk.exclude,
         no_ignore: walk.no_ignore,
     };
-    if let Err(fault) = fsx::walk::validate(&options) {
-        return Err(fault_usage_message(
-            &fault,
-            "--include/--exclude must be valid gitignore-style globs",
-        ));
-    }
+    fsx::walk::validate(&options).map_err(usage_message)?;
     Ok(options)
 }
 
@@ -750,24 +737,8 @@ fn walk_options(walk: WalkArgs) -> Result<fsx::walk::Options, String> {
 /// durations that move `now` out of the representable range (spec §1
 /// DURATION, §7.1.7).
 fn duration_secs(raw: &str, ctx: &Ctx) -> Result<i64, String> {
-    let secs = time::duration(raw).map_err(|f| {
-        fault_usage_message(
-            &f,
-            &format!(
-                "--for must be a duration like 1h30m (Nd/Nh/Nm/Ns, each unit at most once, total > 0); got '{}'",
-                names::fold(raw)
-            ),
-        )
-    })?;
-    time::until(ctx.now, secs).map_err(|f| {
-        fault_usage_message(
-            &f,
-            &format!(
-                "--for '{}' moves now out of the representable time range",
-                names::fold(raw)
-            ),
-        )
-    })?;
+    let secs = time::duration(raw).map_err(usage_message)?;
+    time::until(ctx.now, secs).map_err(usage_message)?;
     Ok(secs)
 }
 
@@ -844,56 +815,79 @@ fn opt_entry(value: Option<String>) -> Result<Option<String>, String> {
 /// `-m` normalization (spec §2.1.3): CRLF folded to LF, trailing
 /// whitespace/newlines stripped, must be non-empty afterwards.
 fn normalize_message(raw: String) -> Result<String, String> {
-    names::normalize_body(&raw).map_err(|f| {
-        fault_usage_message(
-            &f,
-            "-m is empty after normalization (CRLF folded to LF, trailing whitespace stripped)",
-        )
-    })
+    names::normalize_body(&raw).map_err(usage_message)
 }
 
-/// The one-line stderr message for a usage-class fault: Model/Storage
-/// wording when the fault is `Usage`, a CLI fallback naming the expected
-/// format otherwise (spec §7.1.7).
-pub fn fault_usage_message(fault: &Fault, fallback: &str) -> String {
+/// The one-line stderr message for a fault from a value validator or the
+/// `Ctx` environment entry points: the core-owned `Usage` text, moved out
+/// unchanged (spec §7.1.7). Those producers return only `Fault::Usage`; any
+/// other variant is an internal inconsistency and is named as such rather
+/// than dressed up as a grammar hint.
+pub fn usage_message(fault: Fault) -> String {
     match fault {
-        Fault::Usage(msg) => msg.clone(),
-        _ => fallback.to_string(),
+        Fault::Usage(msg) => msg,
+        other => format!("internal error: expected a usage fault, got {other:?}"),
     }
 }
 
 const TOP_AFTER_HELP: &str = "\
 PATH arguments name a collaboration file and may omit the '.agent-besties.md' suffix; it is appended when missing.
 DIR arguments default to the current directory; every scan is recursive.
-TIME example: 2026-09-17T09:12:00Z (UTC, seconds precision). DURATION example: 1h30m (Nd/Nh/Nm/Ns, each unit at most once, total > 0).
+TIME example: 2026-09-17T09:12:00Z (UTC, seconds precision). DURATION example: 1h30m (Nd/Nh/Nm/Ns in descending order d > h > m > s, each unit at most once, total > 0).
 Type vocabulary: post, brief, agent-profile, state ('profile' is accepted as an alias for agent-profile).
 'check' reports one file's format, diagnostics and status without target content; 'read-brief' renders a brief including target text; 'check-state' reports the state entries of a directory, its ancestors and its subtree.
 For usage judgment see 'agent-coexist guide'; for exact syntax see this help and each command's --help.
-Exit codes for business commands: 0 = first line 'ok' or 'warn' ('warn' is also exit 0; parse the first line to detect conflicts); 1 = first line 'error'; 2 = usage error (one stderr line); 3 = retryable lock failure (E-LOCKED/E-INUSE/E-FLOCKED).
-guide, --help and --version are information output: they print Markdown or clap help/version to stdout with no ok/warn/error status line and exit 0 on success; usage errors still exit 2; a failed guide write or flush exits 1.
+Exit codes for business commands: 0 = first line 'ok' or 'warn' ('warn' is also exit 0; parse the first line to detect conflicts); 1 = first line 'error'; 2 = usage error (one stderr line); 3 = retryable lock failure (E-LOCKED/E-INUSE/E-FLOCKED); 130 = only wait, wait-post or wait-state cancelled with Ctrl-C (no stdout).
+guide, help [COMMAND], --help and --version are information output: they print Markdown or clap help/version to stdout with no ok/warn/error status line and exit 0 on success; usage errors still exit 2; a failed guide write or flush exits 1.
 Progress ('scanning N dirs, M files...') is only written when stderr is a TTY; no output means the scan is still running within its bounded waits.
 Help texts and fix commands assume a POSIX shell (Git Bash on Windows); cmd.exe/PowerShell users must adjust quoting.";
 
-const H_GUIDE: &str = "\
-Usage: agent-coexist guide [start|read|write|wait]
+// Per-command synopses, shown by clap as each page's only `Usage:` block and
+// in grammar-error hints. `   or: ` lines align under the text after `Usage: `.
+const U_GUIDE: &str = "agent-coexist guide [start|read|write|wait]";
+const U_LIST: &str =
+    "agent-coexist list [DIR] [--type <type>]... [--include <glob>]... [--exclude <glob>]... [--no-ignore]";
+const U_CHECK: &str = "agent-coexist check <PATH>";
+const U_PROFILE: &str =
+    "agent-coexist profile <PATH> [--as <nick>] [--section <name> (-m <content> | --remove)]";
+const U_POST: &str = "agent-coexist post <PATH> --as <nick> -m <content> [--edit <n>]";
+const U_SUBSCRIBE: &str = "agent-coexist subscribe <PATH> --as <nick> [--cancel]";
+const U_BRIEF: &str = "\
+agent-coexist brief <PATH> [--as <nick>]
+   or: agent-coexist brief <PATH> [--as <nick>] -m <description>
+   or: agent-coexist brief <PATH> [--as <nick>] --target <path> [--entry <title>] [--regex <pattern>] [-m <note>]
+   or: agent-coexist brief <PATH> [--as <nick>] --entry <title> -m <note>
+   or: agent-coexist brief <PATH> [--as <nick>] --entry <title> --remove
+   or: agent-coexist brief <PATH> [--as <nick>] [--entry <title>] --refresh";
+const U_STATE: &str = "\
+agent-coexist state [DIR] --as <nick> --status <name> [--for <duration>]
+   or: agent-coexist state [DIR] --remove <nick> [--as <nick>] [--status <name>]";
+const U_READ_NOTIFICATION: &str =
+    "agent-coexist read-notification [DIR] --as <nick> --since <time|duration> \
+[--include <glob>]... [--exclude <glob>]... [--no-ignore]";
+const U_LOOKFOR: &str = "agent-coexist lookfor-comment <PATH> [--keyword <text>] [--by <nick>] \
+[--mention <nick>] [--reply-to <n>] [--comment <n>]";
+const U_READ_BRIEF: &str = "agent-coexist read-brief <PATH> [--entry <title>]";
+const U_CHECK_STATE: &str =
+    "agent-coexist check-state [DIR] [--include <glob>]... [--exclude <glob>]... [--no-ignore]";
+const U_WAIT: &str = "agent-coexist wait <PATH>";
+const U_WAIT_POST: &str = "agent-coexist wait-post <PATH> [--as <nick>]";
+const U_WAIT_STATE: &str = "agent-coexist wait-state [DIR] [--status <name>]";
 
-Prints one offline Markdown page to stdout and exits 0. Omit the topic for the default adoption page; pass exactly one of start, read, write, wait for that page. stdout is the page; stderr is empty. No ok/warn/error status line, pager, color, network, or workspace access.
-Topics are exact lowercase words; there is no index, overview, all, or prefix match. This command has no DIR, PATH, --as, or -m. Invalid AGENT_COEXIST_NOW / AGENT_COEXIST_LOCK_WAIT_MS do not block it.
+const H_GUIDE: &str = "\
+Prints one offline Markdown page to stdout and exits 0. Omit the topic for the index page; pass exactly one of start, read, write, wait for that page. stdout is the page; stderr is empty. No ok/warn/error status line, pager, color, network, or workspace access.
+Topics are exact lowercase words; there is no 'index', 'overview' or 'all' topic and no prefix match. This command has no DIR, PATH, --as, or -m. Invalid AGENT_COEXIST_NOW / AGENT_COEXIST_LOCK_WAIT_MS do not block it.
 Example: agent-coexist guide start";
 
 const H_LIST: &str = "\
-Usage: agent-coexist list [DIR] [--type <type>]... [--include <glob>]... [--exclude <glob>]... [--no-ignore]
-
 Lists every collaboration file under DIR (default: the current directory) as a tree with a type column. This command has no -m.
---type filters by file type; repeats form a union (post, brief, agent-profile, state; 'profile' is an alias for agent-profile); no --type shows all four.
+--type filters by file type; repeats form a union (post, brief, agent-profile, state; 'profile' is an alias for agent-profile); no --type shows all four. 'busy' and '?' leaves stay shown and counted under any --type, because their type is unknown.
 --include/--exclude are gitignore-style globs relative to DIR; --include cannot reopen directories pruned by ignore rules — pair it with --no-ignore.
-Type column legend: 'busy' = the file lock was busy, so the file was not read this run; '?' = unreadable (permissions, not UTF-8, invalid H1, or over the managed-file size limit).
+Type column legend: 'busy' = a file lock or stable read was unavailable, or a Windows open handle denied sharing (close that denying handle and retry); '?' = unreadable (permissions, not UTF-8, invalid H1, or over the managed-file size limit).
 Reading uses shared locks with a 100ms wait; busy files become 'busy' leaves and the first line becomes 'warn', never a failure.
 Example: agent-coexist list docs --type post --type brief";
 
 const H_CHECK: &str = "\
-Usage: agent-coexist check <PATH>
-
 Reports one file: 'file', 'type' (when determinable), diagnostics in line order, then counts and previews (topic/latest for posts, entries for briefs, sections for profiles, entry rows for state).
 Does not expand target-file contents; use read-brief when you need the target text.
 PATH is a single collaboration file (the '.agent-besties.md' suffix may be omitted); 'check-state' is the directory-level counterpart for state files. This command has no -m.
@@ -901,46 +895,31 @@ Reading uses a shared lock with a 1s wait; a busy file fails with E-LOCKED (exit
 Example: agent-coexist check docs/standup";
 
 const H_PROFILE: &str = "\
-Usage: agent-coexist profile <PATH> [--as <nick>] [--section <name> (-m <content> | --remove)]
-
 -m means the body of --section for this command; it is stored verbatim in a code fence. --remove deletes the whole --section. Without --section the file is created (H1 only) or reported 'unchanged'.
---as is your nick, used only for the functional-lock check and never written; without --as any other agent's 'locked' triggers E-FLOCKED. --as defaults to nothing here (there is no --remove nick default outside the state command).
+--as is your nick, used only for the functional-lock check and never written. With --as, another nick's valid 'locked' on the file's directory or an ancestor triggers E-FLOCKED; without --as, every such 'locked' does, including one you declared yourself.
 Writing takes an exclusive lock with a 200ms fast-fail (E-LOCKED exit 3). On E-FLOCKED, retry at the expiry time shown in 'reason'; do not poll at E-LOCKED's millisecond cadence.
 Example: agent-coexist profile agents/alice --section role -m 'Rust implementer. Owns crates/core.'";
 
 const H_POST: &str = "\
-Usage: agent-coexist post <PATH> --as <nick> -m <content> [--edit <n>]
-
 -m means the comment body for this command; it is stored verbatim in a code fence ('comment #n' names what was written). --as is the author nick recorded in the comment header. --edit rewrites your own comment #n (its author must match --as).
 Writing takes an exclusive lock and queues up to 5s (override with AGENT_COEXIST_LOCK_WAIT_MS); a still-busy file fails with E-LOCKED (exit 3, retry the same command shortly).
 Example: agent-coexist post docs/standup --as bob -m '@#1 parser done, see src/parser/mod.rs'";
 
 const H_SUBSCRIBE: &str = "\
-Usage: agent-coexist subscribe <PATH> --as <nick> [--cancel]
-
 Adds --as to the post's subscriber list; --cancel removes only --as. Subscribing twice or cancelling a non-member leaves the file unchanged ('unchanged <nick>'). This command has no -m.
 Locking behaves like post: exclusive, queues up to 5s (AGENT_COEXIST_LOCK_WAIT_MS overrides), then E-LOCKED exit 3.
 Example: agent-coexist subscribe docs/standup --as alice";
 
 const H_BRIEF: &str = "\
-Usage (six mutually exclusive forms):
-  agent-coexist brief <PATH> [--as <nick>]                                      create the skeleton, else 'unchanged'
-  agent-coexist brief <PATH> [--as <nick>] -m <description>                     create with / replace the description
-  agent-coexist brief <PATH> [--as <nick>] --target <path> [--entry <title>] [--regex <pattern>] [-m <note>]
-  agent-coexist brief <PATH> [--as <nick>] --entry <title> -m <note>            replace only the entry's note
-  agent-coexist brief <PATH> [--as <nick>] --entry <title> --remove             delete the entry
-  agent-coexist brief <PATH> [--as <nick>] [--entry <title>] --refresh          recompute hashes
-
+The six usage forms are mutually exclusive, in order: create the skeleton, else 'unchanged'; create with or replace the description; add or update an entry; replace only the entry's note; delete the entry; recompute hashes (every entry, or only --entry).
 -m means the description when no --target/--entry is given, and the entry's note otherwise; 'description set' / 'note set' name what was written.
---regex requires --target; --regex '' deletes the regex line. --regex and --target must not contain raw CR or LF (use \\r / \\n in a pattern to match those bytes). --remove requires --entry and excludes --target, -m. --refresh excludes --target, -m and --remove.
---as is your nick, used only for the functional-lock check and never written; without --as any other agent's 'locked' triggers E-FLOCKED.
+--regex requires --target. Writing checks only that the pattern compiles; a target it does not match makes the entry 'stale' (regex not found) in check and read-brief. --regex '' deletes every '- regex:' line of the entry, including hand-written duplicates. --regex and --target must not contain raw CR or LF (use \\r / \\n in a pattern to match those bytes). --remove requires --entry and excludes --target, -m. --refresh excludes --target, -m and --remove.
+--as is your nick, used only for the functional-lock check and never written. With --as, another nick's valid 'locked' on the file's directory or an ancestor triggers E-FLOCKED; without --as, every such 'locked' does, including one you declared yourself.
 Writing takes an exclusive lock with a 200ms fast-fail (E-LOCKED exit 3). On E-FLOCKED, retry at the expiry time shown in 'reason'; do not poll at E-LOCKED's millisecond cadence.
-Example: agent-coexist brief docs/onboarding --target src/parser/mod.rs";
+Example: agent-coexist brief docs/onboarding --target ../src/parser/mod.rs --entry 'parser entry point'";
 
 const H_STATE: &str = "\
-Usage: agent-coexist state [DIR] --as <nick> --status <name> [--for <duration>]
-   or: agent-coexist state [DIR] --remove <nick> [--as <nick>] [--status <name>]
-
+The first usage form declares a status. The second removes a nick's entries: with --status only under that status, without it under every status, including a live 'locked' declaration.
 DIR defaults to the current directory and must already exist (it is never created). This command has no -m.
 Built-in statuses: 'locked' = please do not change this directory or its subdirectories until the end time; 'observing' = I am watching, changes are welcome. Custom names are stored and shown but carry no lock meaning.
 --for sets the duration (e.g. 1h30m); default 2h for 'locked', 8h for anything else. In the remove form --as defaults to the removed nick (self-removal); a different --as adds a 'removed-other' warn row.
@@ -948,8 +927,6 @@ Writing takes an exclusive lock with a 200ms fast-fail; others' 'locked' never b
 Example: agent-coexist state src --as alice --status locked --for 1h30m";
 
 const H_READ_NOTIFICATION: &str = "\
-Usage: agent-coexist read-notification [DIR] --as <nick> --since <time|duration> [--include <glob>]... [--exclude <glob>]... [--no-ignore]
-
 DIR defaults to the current directory; the scan is recursive and also reads ancestor state files. This command has no -m and never writes files.
 --since is an RFC 3339 time (e.g. 2026-09-17T09:12:00Z) or a duration back from now (e.g. 1h30m).
 --include/--exclude are gitignore-style globs relative to DIR; --include cannot reopen directories pruned by ignore rules — pair it with --no-ignore.
@@ -957,8 +934,6 @@ Scanning uses shared 100ms waits; busy or unparseable files become 'skipped'/'pa
 Example: agent-coexist read-notification --as alice --since 1h";
 
 const H_LOOKFOR: &str = "\
-Usage: agent-coexist lookfor-comment <PATH> [--keyword <text>] [--by <nick>] [--mention <nick>] [--reply-to <n>] [--comment <n>]
-
 No filter lists every comment; several filters intersect. This command has no -m.
 --keyword matches the raw body/header text as a case-insensitive substring (bodies may contain consecutive spaces; the value is used as given, never folded).
 --by is the comment's author (the 'authors' key of check output lists a file's authors). --mention matches a body mention @nick; --reply-to matches a body @#n; --comment selects seq n.
@@ -966,41 +941,34 @@ Reading uses a shared lock with a 1s wait; a busy file fails with E-LOCKED (exit
 Example: agent-coexist lookfor-comment docs/standup --by bob";
 
 const H_READ_BRIEF: &str = "\
-Usage: agent-coexist read-brief <PATH> [--entry <title>]
-
 Renders the description and, per entry, its state, note and the target's content as verbatim text blocks. --entry renders only that entry (titles match after whitespace folding). Use check when you only need status, not the target text. This command has no -m.
 Reading uses a shared lock with a 1s wait; a busy file fails with E-LOCKED (exit 3).
 Example: agent-coexist read-brief docs/onboarding --entry 'parser entry point'";
 
 const H_CHECK_STATE: &str = "\
-Usage: agent-coexist check-state [DIR] [--include <glob>]... [--exclude <glob>]... [--no-ignore]
-
 Reports the state entries of DIR itself, its ancestors ('inherited' rows) and its subtree; 'check' is the single-file counterpart. This command has no -m.
 --include/--exclude are gitignore-style globs relative to DIR; --include cannot reopen directories pruned by ignore rules — pair it with --no-ignore.
+Each entry row can end with a mark: 'conflict' for a valid 'locked' entry when another nick holds a valid 'locked' on an overlapping directory (equal, ancestor or descendant; both entries are marked, inherited ones included), or 'expired' for an own or subtree entry that is no longer valid ('inherited' rows list valid entries only). Either mark makes the first line 'warn' (exit 0).
 Scanning uses shared 100ms waits; busy or unparseable state files become 'skipped'/'partial' rows and the first line becomes 'warn'.
 Example: agent-coexist check-state src";
 
 const H_WAIT: &str = "\
-Usage: agent-coexist wait <PATH>
-
-Waits until the file changes (any of the four types), then prints one diff report and exits 0. The file is sampled every second under a shared lock; nothing is ever written.
+Waits until the file changes (any of the four types), then prints one diff report and exits 0. The file is sampled once per second; nothing is ever written.
 Once the baseline is established, a single 'waiting  wait  <object>' line is written to stderr. Ctrl-C cancels: exit 130, no stdout.
-Lock-busy and other failures follow the base exit codes (3 for E-LOCKED/E-INUSE). PATH may omit the '.agent-besties.md' suffix.
+Each sample takes a shared lock with a 1s wait and releases it before the next; no lock is held between samples. A lock still busy after that wait ends the wait with E-LOCKED (exit 3) instead of being retried; a file another program holds open without sharing (Windows) ends it with E-INUSE (exit 3). Other failures use the exit codes listed in 'agent-coexist --help'. PATH may omit the '.agent-besties.md' suffix.
 Example: agent-coexist wait docs/onboarding";
 
 const H_WAIT_POST: &str = "\
-Usage: agent-coexist wait-post <PATH> [--as <nick>]
-
 Waits until a comment in this post directly mentions @<nick> or replies to a comment authored by <nick>; without --as any change hits.
 A single 'waiting  wait-post  <object>' line is written to stderr once the baseline is established. Ctrl-C cancels: exit 130, no stdout.
+The post is sampled once per second; each sample takes a shared lock with a 1s wait and releases it before the next. A lock still busy after that wait ends the wait with E-LOCKED (exit 3) instead of being retried; a file another program holds open without sharing (Windows) ends it with E-INUSE (exit 3).
 Example: agent-coexist wait-post docs/standup --as alice";
 
 const H_WAIT_STATE: &str = "\
-Usage: agent-coexist wait-state [DIR] [--status <name>]
-
 Watches exactly DIR/state.agent-besties.md (DIR defaults to the current directory); ancestors and the subtree are not watched.
 --status ('locked', 'observing' or a valid custom name) restricts hits to that status's declarations; without it any change to the file hits.
 A single 'waiting  wait-state  <object>' line is written to stderr once the baseline is established. Ctrl-C cancels: exit 130, no stdout.
+The state file is sampled once per second; each sample takes a shared lock with a 1s wait and releases it before the next. A lock still busy after that wait ends the wait with E-LOCKED (exit 3) instead of being retried; a file another program holds open without sharing (Windows) ends it with E-INUSE (exit 3).
 Example: agent-coexist wait-state src --status locked";
 
 #[cfg(test)]

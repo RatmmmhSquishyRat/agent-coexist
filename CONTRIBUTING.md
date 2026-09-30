@@ -7,13 +7,16 @@ changes with a clear reason.
 ## Getting set up
 
 You need Rust 1.89 or later. The repository pins 1.89.0 in
-`rust-toolchain.toml`, so a normal rustup installation picks the right
-toolchain automatically.
+`rust-toolchain.toml`, so rustup installs and selects that toolchain the
+first time you run `cargo` in the checkout. The pin uses rustup's
+minimal profile, which leaves out rustfmt and clippy; the local checks
+below need both, so add them once after the first build:
 
 ```console
 git clone https://github.com/RatmmmhSquishyRat/agent-coexist.git
 cd agent-coexist
 cargo build
+rustup component add rustfmt clippy --toolchain 1.89.0
 ./target/debug/agent-coexist guide
 ```
 
@@ -40,16 +43,18 @@ Unit tests sit next to the code they cover; integration tests live in
 
 ## Before you open a pull request
 
-1. **Check the docs first.** Operational methods live in
-   [the built-in guide](crates/cli/guide/index.md) (`agent-coexist guide`).
-   Command, flag, and line-protocol facts live in
-   [the command reference](docs/usage.md), and the on-disk format in
-   [the file format reference](docs/file-format.md).
-   To change behavior, open an issue first describing what should change
-   and why.
+1. **Behavior changes start with an issue.** Describe what should change
+   and why. Current behavior is documented in
+   [the built-in guide](crates/cli/guide/index.md) (`agent-coexist guide`)
+   for operational methods, [the command reference](docs/usage.md) for
+   commands, flags, and the line protocol, and
+   [the file format reference](docs/file-format.md) for the on-disk format.
 2. **Keep it small.** One concern per pull request: a single bug fix or a
    single coherent change. Pull requests target the `main` branch.
-3. **Run these checks locally.** CI runs the same on Linux, Windows, and
+3. **Update docs and the changelog** in the same change when a user or
+   script will notice a difference; see
+   [Documentation and changelog](#documentation-and-changelog).
+4. **Run these checks locally.** CI runs the same on Linux, Windows, and
    macOS:
 
    ```console
@@ -81,47 +86,65 @@ Do not pin:
   a real POSIX shell instead);
 - internal search, index, or merge structures, or timing and latency.
 
-Areas where a regression would mislead or harm a user, and which a change
-in the matching area should keep covered:
+If your change touches one of the areas below, keep tests covering the
+behavior listed for it; a regression there would mislead or harm a user.
+Each item links to the reference section that defines its terms:
 
-- **Information commands.** `guide`, `--help`, and `--version` ignore
-  business environment variables and storage; an unknown guide topic is a
-  usage error; business grammar is not bypassed.
-- **Recovery `fix` lines.** Command-form fixes address the native operand
-  (not the folded display), and a POSIX shell round-trip reaches the same
-  file. Literal headers and hand-edit instructions are never quoted as
-  commands. Operands that cannot be represented produce whole-recipe
-  manual guidance. Placeholder-looking runtime values stay literal values.
-- **Never widen a destructive recipe.** A dirty-line or not-found state
-  removal keeps the original `--status`; a same-file lock-conflict fix
-  keeps `--status=locked`; an explicit `--remove` without `--status` still
-  spans statuses. An unselected or misnamed state-content file, including
-  a wait `removed` baseline, gets hand-edit advice and never a
-  directory-level `state` command against a sibling reserved file; rename
-  advice never overwrites an existing state file.
-- **Heading repairs.** Suggested profile section names and post header
-  sequence numbers are unique across existing headings and every other
-  repair in the same report; collisions and exhaustion fall back to manual
-  advice. Invalid stored statuses and control-bearing headings get manual
-  advice, not a command the CLI would reject or normalize.
-- **Locks.** A file-symlink write honors both the supplied-parent and the
+- **Information commands** ([Built-in guide](docs/usage.md#built-in-guide)).
+  `guide`, `help [COMMAND]`, `--help`, and `--version` ignore business
+  environment variables and storage; an unknown guide topic is a usage
+  error. The guide and business grammars stay separate: `guide` rejects
+  business options such as `guide --as alice`; bare `read` and `start`
+  are usage errors, not commands; `wait PATH` and `list` still parse as
+  business commands, not guide pages.
+- **Recovery `fix` lines** ([Recovery commands](docs/usage.md#recovery-commands-fix)).
+  Command-form fixes address the
+  [native operand](docs/usage.md#how-operands-are-written) (not the folded
+  display), and a POSIX shell round-trip reaches the same file. Literal
+  headers and hand-edit instructions are never quoted as commands.
+  Operands that cannot be represented produce whole-recipe
+  [manual guidance](docs/usage.md#when-there-is-no-command).
+  Placeholder-looking runtime values stay literal values.
+- **Never widen a destructive recipe** ([Removing](docs/usage.md#removing)).
+  A dirty-line or not-found state removal keeps the original `--status`;
+  a same-file lock-conflict fix keeps `--status=locked`; an explicit
+  `--remove` without `--status` still spans statuses. An unselected or
+  misnamed state-content file (see the
+  [reserved file](docs/usage.md#declaring)), including a wait `removed`
+  baseline ([The wait report](docs/usage.md#the-wait-report)), gets
+  hand-edit advice and never a directory-level `state` command against a
+  sibling reserved file; rename advice never overwrites an existing state
+  file.
+- **Heading repairs** ([Headings the CLI cannot address](docs/file-format.md#headings-the-cli-cannot-address)).
+  Suggested profile section names and post header sequence numbers are
+  unique across existing headings and every other repair in the same
+  report; collisions and exhaustion fall back to manual advice. Invalid
+  stored statuses and control-bearing headings get manual advice, not a
+  command the CLI would reject or normalize.
+- **Locks** ([Functional lock](docs/usage.md#functional-lock)). A
+  file-symlink write honors both the supplied-parent and the
   canonical-target-parent lock chains; a matching `--as` still writes;
-  incomplete scans warn rather than invent a lock.
-- **Order and matching.** Post `authors` keep first-occurrence order;
-  write-report mentions and `reply-to` rows keep body order, including
-  `(not found)`. `--keyword` and `--include` match the raw input; only
-  hint display is folded and sanitized.
-- **Conflict output.** `W-STATE-CONFLICT` pairs appear on explicit `check`
-  and on qualifying wait hits, never in ordinary parse or scan tests, and a
-  complete check lists every pair. Wait refuses a baseline with a
-  duplicate `(status, nick)` pair.
+  incomplete scans warn rather than invent a lock
+  ([Incomplete lock and conflict scans](docs/usage.md#incomplete-lock-and-conflict-scans)).
+- **Order and matching** ([Comments, mentions, and replies](docs/usage.md#comments-mentions-and-replies),
+  [Scans](docs/usage.md#scans-what-is-visited-and-filter-precedence)).
+  Post `authors` keep first-occurrence order; write-report mentions and
+  `reply-to` rows keep body order, including `(not found)`. `--keyword`
+  and `--include` match the raw input; only hint display is folded and
+  sanitized.
+- **Conflict output** ([Scope, inheritance, and conflicts](docs/usage.md#scope-inheritance-and-conflicts)).
+  `W-STATE-CONFLICT` pair diagnostics appear only on explicit `check` and
+  on qualifying wait hits, and a complete check lists every pair. Wait
+  refuses a baseline with a duplicate `(status, nick)` pair
+  ([Lifecycle](docs/usage.md#lifecycle)).
 
 ## Documentation and changelog
 
 If a change affects user-visible behavior, update the matching surface in
 the same change: `crates/cli/guide/` for operational methods, `--help`
-text, `README.md`, `docs/usage.md`, or `docs/file-format.md`. Add a line
-under `## [Unreleased]` in `CHANGELOG.md` (the file follows
+text, `README.md`, `docs/usage.md`, `docs/file-format.md`, or
+`.agents/skills/agent-coexist/SKILL.md`. Add a line under
+`## [Unreleased]` in `CHANGELOG.md` (the file follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)) describing what a
 user or script will notice.
 
@@ -130,7 +153,8 @@ and `docs/usage.md` stays a lookup reference rather than a second copy.
 
 ## Vendored `ignore` crate
 
-Directory walking uses one pinned dependency: `ignore` 0.4.33 from
+You need this section only when changing scan behavior or refreshing the
+pin. Directory walking uses one pinned dependency: `ignore` 0.4.33 from
 crates.io, patched in-tree.
 
 - The workspace `Cargo.toml` pins `ignore = "=0.4.33"` and redirects it
@@ -186,9 +210,12 @@ of opening a normal bug report. For usage questions, start with
 
 ## License
 
-Code and authored documentation in this repository are licensed under the
+The project's own code and authored documentation are licensed under the
 MIT License (see [LICENSE](LICENSE)). By contributing, you agree that your
 contributions are licensed under it. There is no CLA and no DCO sign-off.
 
-The cover image in `docs/assets/cover.webp` is supplied artwork and is not
-part of the MIT grant; do not reuse it under MIT terms.
+The vendored `ignore` crate in `vendor/ignore/` keeps its upstream
+copyright notices and license (Unlicense OR MIT; see
+[Vendored `ignore` crate](#vendored-ignore-crate)). The cover image in
+`docs/assets/cover.webp` is supplied artwork and is not part of the MIT
+grant; do not reuse it under MIT terms.

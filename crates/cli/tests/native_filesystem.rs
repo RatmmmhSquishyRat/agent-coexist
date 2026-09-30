@@ -24,6 +24,11 @@
 //!   the `post` create form once released;
 //! * §10.1.1 walk skip — `list` never enters a real directory symlink
 //!   (Unix) / a real junction created with `mklink /J` (Windows).
+//! * §8.1.4–5 / §8.3.5 / §10.9.4 display columns — a malformed ignore
+//!   pattern with an internal double space (`bad  [z-a]`) fails `list`
+//!   exit 1 in reason form and warns after a committed `state` declare:
+//!   each producer folds its human cause into one splittable column and
+//!   the original ignore bytes stay untouched;
 //!
 //! Conventions:
 //!
@@ -3256,4 +3261,112 @@ fn emitted_lf_native_operand_stays_manual_not_lossy_command() {
     );
     assert_eq!(fs::read_to_string(&native).unwrap(), native_before);
     assert_eq!(fs::read_to_string(&folded).unwrap(), folded_before);
+}
+
+// ---------------------------------------------------------------------------
+// Malformed ignore scans: reason/scan display columns stay splittable
+// ---------------------------------------------------------------------------
+
+/// A malformed ignore pattern (`bad  [z-a]`, invalid range with an internal
+/// double space; an unclosed `[` is accepted by this parser and is not a
+/// failing fixture) fails a real `list` scan as an OS-level fault: exit 1,
+/// reason-form report. The composed reason must be one display column
+/// (§8.1.4–5, §8.3.5, §10.9.4): it splits on two-or-more spaces into
+/// exactly [reason, message] while keeping the scanned file, line and parse
+/// cause, and the ignore bytes are never rewritten.
+#[test]
+fn malformed_ignore_list_reason_stays_one_column_and_source_survives() {
+    let dir = tempfile::tempdir().unwrap();
+    let cwd = dir.path();
+    let room = cwd.join("room  two");
+    fs::create_dir(&room).unwrap();
+    let ignore = room.join(".ignore");
+    let ignore_bytes: &[u8] = b"bad  [z-a]\n";
+    fs::write(&ignore, ignore_bytes).unwrap();
+
+    let out = run(cwd, &["list", "room  two"]);
+    assert_eq!(out.status.code(), Some(1), "{}", describe(&out));
+    let stdout = assert_first_line(&out, "error", "list");
+
+    let reason = stdout
+        .lines()
+        .find(|line| columns(line).first() == Some(&"reason"))
+        .unwrap_or_else(|| panic!("malformed ignore must fail in reason form:\n{stdout}"));
+    let cols = columns(reason);
+    assert_eq!(
+        cols.len(),
+        2,
+        "reason must split into exactly [reason, message]:\n{stdout}"
+    );
+    assert!(
+        cols[1].contains("cannot scan")
+            && cols[1].contains("room two/.ignore")
+            && cols[1].contains("line 1")
+            && cols[1].contains("bad [z-a]")
+            && cols[1].contains("invalid range"),
+        "folded reason must keep the file, line and parse cause:\n{stdout}"
+    );
+    assert_eq!(fs::read(&ignore).unwrap(), ignore_bytes);
+}
+
+/// The same malformed ignore hit by the post-write conflict scan of a real
+/// `state` declare: the write itself succeeds — exit 0, first line `warn`,
+/// the `set` row and the committed declaration bytes — and the `scan` row
+/// keeps exactly [scan, path, cause] columns, folding only the cause text
+/// (§6.4.1, §8.1.4–5, §10.9.4). The original ignore bytes stay untouched.
+#[test]
+fn malformed_ignore_state_scan_keeps_columns_and_write_commits() {
+    let dir = tempfile::tempdir().unwrap();
+    let cwd = dir.path();
+    let room = cwd.join("room  two");
+    fs::create_dir(&room).unwrap();
+    let ignore = room.join(".ignore");
+    let ignore_bytes: &[u8] = b"bad  [z-a]\n";
+    fs::write(&ignore, ignore_bytes).unwrap();
+
+    let out = run(
+        cwd,
+        &[
+            "state",
+            "room  two",
+            "--as",
+            "carol",
+            "--status",
+            "observing",
+        ],
+    );
+    assert_eq!(out.status.code(), Some(0), "{}", describe(&out));
+    let stdout = assert_first_line(&out, "warn", "state");
+
+    let scan = stdout
+        .lines()
+        .find(|line| columns(line).first() == Some(&"scan"))
+        .unwrap_or_else(|| panic!("post-write scan fault must add a scan row:\n{stdout}"));
+    let cols = columns(scan);
+    assert_eq!(
+        cols.len(),
+        3,
+        "scan must split into exactly [scan, path, cause]:\n{stdout}"
+    );
+    assert_eq!(cols[1], "room two/.ignore");
+    assert!(
+        cols[2].contains("line 1")
+            && cols[2].contains("bad [z-a]")
+            && cols[2].contains("invalid range"),
+        "folded cause must keep the line and parse explanation:\n{stdout}"
+    );
+
+    assert!(
+        stdout
+            .lines()
+            .any(|line| columns(line).starts_with(&["set", "observing", "carol"])),
+        "the declaration itself must be reported as written:\n{stdout}"
+    );
+    let state = fs::read_to_string(room.join("state.agent-besties.md"))
+        .expect("declaration must be committed to disk");
+    assert!(
+        state.contains("carol 2026-09-17T10:00:00Z..2026-09-17T18:00:00Z"),
+        "committed state file must hold carol's observing window:\n{state}"
+    );
+    assert_eq!(fs::read(&ignore).unwrap(), ignore_bytes);
 }

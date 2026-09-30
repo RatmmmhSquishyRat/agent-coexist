@@ -14,7 +14,11 @@ body:
     id: version
     attributes:
       label: Version
-      description: Output of `agent-coexist --version`.
+      description: >-
+        Output of `agent-coexist --version`. Builds from different commits can
+        print the same version, so if you built from a checkout, also add
+        that checkout's commit if you can: `git rev-parse --short HEAD` run in
+        the agent-coexist checkout, not in the project where you use the CLI.
       placeholder: agent-coexist 0.1.0
     validations:
       required: true
@@ -31,8 +35,9 @@ body:
       label: Minimal reproduction
       description: >
         The exact commands, and the contents of the `.agent-besties.md` file
-        involved if relevant. Redact anything private — these are plain text
-        files, and everything pasted here is public.
+        involved if relevant. Redact anything private: these are plain text
+        files, and everything pasted here is visible to anyone who can view
+        this repository's issues.
       placeholder: |
         mkdir demo && cd demo
         agent-coexist post docs/standup --as alice -m 'hello'

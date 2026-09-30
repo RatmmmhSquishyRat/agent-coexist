@@ -6,43 +6,63 @@ point to. A summary tells you where to look; it does not replace looking.
 
 ## Find, then open
 
-1. **What exists.** `list` shows managed files under a directory, with
-   their types. Scans are recursive and follow ignore rules, so an empty
-   result means none were found there, not that nobody is collaborating.
-2. **What is addressed to you.** `read-notification` lists activity since
-   a time (comments that mention you, reply to you, or appear in posts you
-   subscribe to, and new state declarations), plus notices that appear
-   whenever they are currently relevant: lock conflicts with yours and
-   your own declarations that are about to expire.
-3. **One comment in a long thread.** `lookfor-comment` returns comment
+The examples run from the directory of the `parser-review` thread in
+`agent-coexist guide`.
+
+1. **What exists.** `list` shows the managed files under a directory, with
+   their types:
+
+   ```sh
+   agent-coexist list . --type post
+   ```
+
+   Scans are recursive and follow ignore rules, so an empty result means
+   none were found there, not that nobody is collaborating.
+
+2. **Who declared the directory you will change.** `check-state` shows the
+   directory's own declarations, the ones it inherits from parent
+   directories, and declarations further down:
+
+   ```sh
+   agent-coexist check-state src/parser
+   ```
+
+3. **What is addressed to you.** `read-notification` lists activity since
+   a time: comments that mention you, reply to you, or appear in posts you
+   subscribe to, and new state declarations. It also shows notices while
+   they are relevant: lock conflicts with yours, and your own
+   declarations that are about to expire.
+
+   ```sh
+   agent-coexist read-notification . --as alice --since 2h
+   ```
+
+   This scans every post under the directory, not only the threads you
+   read, and leaves out activity before the window without warning. To
+   continue an earlier directory-wide notification scan without a gap,
+   start the window at or before that scan started, with the same
+   directory, nick, and filters, such as the scan time in your handoff;
+   the time you last read a thread covers only that thread. Without such
+   a time, read the relevant threads directly instead (see `guide wait`).
+
+4. **One comment in a long thread.** `lookfor-comment` returns comment
    numbers, file lines, and excerpts. Filters combine, so use only the
-   ones you mean.
-4. **The Markdown itself.** Open the file with your own file tool and read
+   ones you mean:
+
+   ```sh
+   agent-coexist lookfor-comment parser-review --mention alice
+   agent-coexist lookfor-comment parser-review --comment 2
+   ```
+
+   The second command shows bob's reply, comment #2 in that thread; in
+   your own threads, use a number you found by listing or reading.
+
+5. **The Markdown itself.** Open the file with your own file tool and read
    the comments or notes you selected.
-5. **A brief's targets.** Read the brief's description and entry notes,
-   then open only the parts of the targets you need. Target paths are
-   relative to the brief's directory, not your current directory.
 
-Run from the directory of the `parser-review` thread in `agent-coexist
-guide`:
-
-```sh
-agent-coexist list . --type post
-agent-coexist read-notification . --as alice --since 2h
-agent-coexist lookfor-comment parser-review --mention alice
-agent-coexist lookfor-comment parser-review --comment 2
-```
-
-The last command shows bob's reply, comment #2 in that thread; in your
-own threads, use a number you found by listing or reading.
-
-Before you change a shared directory, check who has declared intent for
-it. `check-state` shows the directory's own declarations, the ones it
-inherits from parent directories, and declarations further down:
-
-```sh
-agent-coexist check-state src/parser
-```
+A brief works like a reading list: read its description and entry notes,
+then open only the parts of the targets you need. Target paths are
+relative to the brief's directory, not your current directory.
 
 ## Check a brief before trusting it
 

@@ -64,13 +64,7 @@ fn main() -> ExitCode {
     let (progress_fn, progress) = progress::make(command.traverses());
     let mut ctx = match Ctx::new(argv, progress_fn) {
         Ok(ctx) => ctx,
-        Err(fault) => {
-            return usage_stderr(&args::fault_usage_message(
-                &fault,
-                "AGENT_COEXIST_NOW must be a strict TIME like 2026-09-17T09:12:00Z and \
-                 AGENT_COEXIST_LOCK_WAIT_MS a non-negative decimal integer",
-            ));
-        }
+        Err(fault) => return usage_stderr(&args::usage_message(fault)),
     };
 
     match args::resolve(command, &ctx) {
@@ -231,9 +225,16 @@ fn io_report(
 ) -> Report {
     let mut report = Report::new(command, object);
     let display = context::display_file(path);
+    // The reason sentence is one display column (§8.1.4–5): a raw cause
+    // can embed two-space runs, so the composed human text is folded like
+    // any other (§10.9.4) — never truncated, never re-quoted. The borrowed
+    // `source` below still decides kind/raw-OS class, and the fix/argv
+    // branch keeps native operands verbatim.
     report.kv(
         "reason",
-        vec![format!("cannot {action} {display}: {source}")],
+        vec![coexist_core::names::display_text(&format!(
+            "cannot {action} {display}: {source}"
+        ))],
     );
     let path_class = matches!(
         source.kind(),

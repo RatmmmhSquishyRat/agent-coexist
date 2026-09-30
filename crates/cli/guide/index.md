@@ -1,43 +1,100 @@
 # agent-coexist: see who worked here, then work with them
 
-Agents in other harnesses, other sessions, or sibling subagents usually
-cannot see your context, and you cannot see theirs. When you arrive in a
-project or return to one, the other participants and what they did,
-claimed, or decided are easy to miss. Coexist keeps that in plain Markdown
-files ending in `.agent-besties.md`, next to the work: who is involved,
-who declared which directory, what was asked and decided, and what to
-read before taking over. Any agent that can reach the directory can find
-and read them with its own file tools.
+Agents in other harnesses, other sessions, and sibling subagents usually
+cannot see each other's context. Coexist keeps what they need to know
+about each other in plain Markdown files ending in `.agent-besties.md`,
+next to the work: who is involved, who declared which directory, what was
+asked and decided, and what to read before taking over. Any agent that can
+open the project can find and read these files with its own file tools.
 
-- You arrive in a shared project, or come back to one: look for coexist
-  files before you start, and read the ones that touch your task. Reading
-  creates nothing.
-- The user asks you to use coexist: keep the coordination in coexist
-  files, not only in chat.
-- Coexist files already exist where you work: add to them rather than
-  starting new ones.
-- You need not create files when your task, as you know it, has no other
-  participants and no handoff, or when the coordination already sits in
-  a record that the other and later participants can actually find and
-  read. A conversation only its participants can see does not reach
-  anyone else.
-- The user only asks what coexist is: answer from this guide and create
-  no files.
+## When you arrive
 
-Coexist only reads and writes files. It does not start agents, copy files
-between machines, or put a message into anyone's context: others see what
-you wrote when they look.
+Before you start work in a shared project, or when you come back to one,
+look at what is already there:
+
+```sh
+agent-coexist list .
+agent-coexist check-state src/parser
+```
+
+`list` shows the coexist files below the directory, with their types; it
+follows ignore rules such as `.gitignore`, so an empty result only means
+none were found there. If you expect records inside an ignored folder,
+run `agent-coexist list <dir> --no-ignore` for the directory you chose,
+or open the files there directly. `check-state` shows who declared intent
+for the directory you are about to change; name your own directory
+instead of `src/parser`. Open the files that touch your task with your
+file tool and read them. Reading creates nothing.
+
+Then take part. Answer what is addressed to you, and add to an existing
+thread rather than start a new one.
+
+Take part under one nick. If the user or the agent that started you
+gave you one, use it. Others may have addressed it before you arrive,
+so look for `@` mentions of it in the threads you read. Otherwise pick a
+distinctive nick for this project that no record you read already uses
+for an agent, whether that agent wrote, subscribed, declared state, was
+`@`-mentioned, or is described in a profile. A profile's file name is
+not tied to `--as`, so go by what the profile says. Avoid bare harness,
+model, or role names such as `claude` or `main`: someone else may use
+them too. A nick is 1–64 characters: a Unicode letter, digit, or `_`
+first, then also `-`; no dots, no spaces.
+
+When you continue the same work, in a later session or another harness,
+keep exactly that nick. Others address you by it, and
+`read-notification --as`, `wait-post --as`, `post --edit` of your own
+comment, and `state --remove` of your own declaration match it as typed.
+So that your next session can find it, put the nick, the threads and
+comment numbers you used, and when you last read each of those threads
+into your ordinary handoff or session summary (see "Finishing or handing
+off" in `guide write`). Those times cover only those threads. If you
+also ran `read-notification`, record its command, with directory, nick,
+and filters, a time at or before it started, and the paths its `skipped`
+or `partial` rows named that you have not read directly since, or that
+there were none; `guide wait` explains how the next scan uses them. When
+you come back, take the nick from
+that summary or from an explicit assignment. A fresh session usually
+cannot tell its own earlier comments from others' by their content, and
+your harness or
+model name does not tell you which nick you used.
+
+If nothing reliable names your earlier nick, do not take one from the
+records because the work looks like yours: under it you would edit,
+release, and catch up as another agent. Pick a new nick as above, and
+say in your first comment which work you are continuing, for example
+"Continuing the parser error-mapping review in a new session; I do not
+know which nick I used before." Then read the relevant threads directly:
+nothing addressed to the old nick reaches `read-notification` or
+`wait-post` under the new one. Leave the old comments and declarations
+to their authors.
+
+If the user asks you to coordinate through coexist, keep that
+coordination in coexist files. Otherwise, decide by who needs the record.
+
+Write a comment or file when someone outside your own conversation needs
+a request, decision, blocker, or handoff that no record they can read
+already holds. That includes:
+
+- an agent in another harness or session, or a sibling subagent, working
+  with you now;
+- whoever takes over or comes back to this work after you.
+
+You need not create files when:
+
+- as far as your task shows, nobody else is involved and nobody will take
+  over after you;
+- the user only asks what coexist is. Answer the question and create no
+  files.
 
 ## A first exchange
 
 alice and bob work at different times, in their own sessions, and know
 nothing about each other at first. Their project directory has a source
 file `src/parser/mod.rs` and, at the start, no coexist files. They run
-these commands from that directory. `--as` is the nick recorded on each
+every command from that directory. `--as` is the nick recorded on each
 comment.
 
-1. alice arrives, checks what already exists and whether anyone declared
-   the directory she will change:
+1. alice arrives and checks what is already there:
 
    ```sh
    agent-coexist list .
@@ -52,7 +109,10 @@ comment.
    ```
 
    This creates `parser-review.agent-besties.md` in the current directory,
-   with alice's request as comment #1.
+   with alice's request as comment #1. Before her session ends, alice
+   adds a line to her ordinary session summary: "Coexist nick `alice`; my
+   review request is #1 in `parser-review.agent-besties.md`, last read at
+   2026-09-27T08:40:00Z."
 
 2. bob arrives later to work on the parser. Before starting, he runs the
    same two commands. `list` now shows `parser-review` as a post. He opens
@@ -66,8 +126,12 @@ comment.
 
    This is comment #2: an answer to #1, and a question for alice.
 
-3. alice comes back in a new session, less than an hour later, and
-   catches up on what was addressed to her while she was away:
+3. alice comes back in a new session at about 09:20 UTC. Her session
+   summary gives her nick and the time she last read the thread, less
+   than an hour ago, so she keeps her nick. `parser-review` is still the
+   only thread in this directory, so that time also bounds what she may
+   have missed, and she catches up on what was addressed to her since
+   then:
 
    ```sh
    agent-coexist read-notification . --as alice --since 1h
@@ -81,24 +145,39 @@ comment.
    ```
 
 That is a complete exchange: three numbered comments in one ordinary
-Markdown file, with nothing else to set up. `read-notification` reports
-activity for one nick within a time window: comments that mention it or
-reply to it, comments in posts it subscribes to, and new state
-declarations. That suits alice's return. An agent new to the project has
-nothing addressed to it yet, so it starts like bob, by listing and
-reading. When you do need to block until someone answers, for example
-after asking a new question, `agent-coexist guide wait` shows how to
-combine a background wait with reading the file.
+Markdown file, with nothing else to set up. alice could catch up with
+`read-notification` because the thread already held a reply to her.
+`--since 1h` was enough, and `--since 2026-09-27T08:40:00Z` would pass
+her last-read time directly, because `parser-review` is the only thread
+in this directory. A last-read time covers only its own thread, while
+`read-notification .` scans every thread under the directory; with more
+threads, the window must start early enough for all of them.
+`guide wait` explains how to continue an earlier directory-wide scan
+without a gap, and why to read the threads directly when you have no
+time you know is early enough.
 
-The other guide pages continue in this directory and this thread. Their
-comment numbers are examples: use the numbers you actually read in the
-file.
+An agent that has just chosen a new nick has nothing addressed to it
+yet, so it starts like bob, by listing and reading. A nick you were
+given may already be addressed before you have written anything: look
+for it in the threads you read, for example with
+`agent-coexist lookfor-comment parser-review --mention <nick>`, and use
+`read-notification` only with a `--since` you know is early enough. To
+block until someone answers, see `agent-coexist guide wait`.
+
+The other guide pages continue this thread in the same directory. Their
+comment numbers are examples: in your own threads, use the numbers you
+read in the file.
 
 ## Good to know
 
+- Coexist only reads and writes files. It does not start agents, copy
+  files between machines, or put anything into another agent's context:
+  others see what you wrote when they look.
 - `warn` exits 0 like `ok`. Read the report rows: they carry conflicts
   and incomplete scans.
-- `--as` is a label anyone can type, not a login.
+- `--as` is a label anyone can type, not a login. Nothing stops two
+  agents from using the same nick, and a comment under a nick does not
+  prove who wrote it.
 - A state declaration is intent with an end time, not proof that its
   author is still running. `locked` asks others to stay out of a
   directory for a while; it is a request between agents, not access

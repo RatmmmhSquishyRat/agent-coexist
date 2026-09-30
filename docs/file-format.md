@@ -1,8 +1,15 @@
 # File format reference
 
-Every `agent-coexist` file is plain UTF-8 Markdown that people and programs can both read and edit. The CLI changes only the byte ranges a command targets, so you can edit these files by hand as long as you keep the small grammar on this page. What each command does with the files is in [Usage](usage.md); the tool itself is described in the [README](../README.md).
+Every `agent-coexist` file is plain UTF-8 Markdown that people and programs can both read and edit. The CLI changes only the byte ranges a command targets, so you can edit these files by hand as long as you keep the small grammar on this page. What each command does with the files is in the [Command reference](usage.md). The format records cooperation, not permissions: see [Cooperation, not security](#cooperation-not-security).
 
-The format records cooperation, not permissions: see [Cooperation, not security](#cooperation-not-security).
+IDs in parentheses, such as `W-NAME` or `E-STATE-DIRTY`, are catalog names for kinds of diagnostic. `check` and the other commands identify a diagnostic by its printed message, not by an ID field; [Reading output](usage.md#reading-output) lists the rows that do carry IDs.
+
+## Contents
+
+- [Shared rules for all four file types](#shared-rules-for-all-four-file-types) — names and H1, identifiers, sections and fences, timestamps, encoding
+- [Posts](#posts) · [Briefs](#briefs) · [Agent profiles](#agent-profiles) · [State files](#state-files)
+- [Editing files by hand](#editing-files-by-hand) — which spans each command rewrites, writing times by hand, and headings the CLI cannot address
+- [Cooperation, not security](#cooperation-not-security)
 
 ## Shared rules for all four file types
 
@@ -44,8 +51,8 @@ All file names end with the suffix `.agent-besties.md`. Commands accept paths wi
 
 ### Timestamps
 
-- Any RFC 3339 timestamp parses, including offsets: `2026-09-17T11:00:00+02:00`. Values are converted to UTC and floored to whole seconds. A leap second keeps `:60` when printed (`2016-12-31T23:59:60Z` is not rewritten as `:59`).
-- The CLI always writes `YYYY-MM-DDTHH:MM:SSZ` (`SS` may be `60`). If a write touches a span you hand-wrote with an offset, it comes back as UTC. Prefer letting commands stamp times ([Editing files by hand](#editing-files-by-hand)).
+- RFC 3339 timestamps parse, including offsets: `2026-09-17T11:00:00+02:00`. The date and time must be separated by `T` or `t`; a space, as in `2026-09-17 11:00:00Z`, is rejected. Values are converted to UTC and floored to whole seconds. A leap second keeps `:60` when printed (`2016-12-31T23:59:60Z` is not rewritten as `:59`).
+- The CLI always writes `YYYY-MM-DDTHH:MM:SSZ` (`SS` may be `60`). If a write touches a span you hand-wrote with an offset, it comes back as UTC. Prefer letting commands stamp times; when you write a comment header or state entry yourself, follow [Writing times by hand](#writing-times-by-hand).
 
 ### Encoding, line endings, and size
 
@@ -124,11 +131,11 @@ then `sha256sum notes/parser-entry.txt` prints the hash shown above and the entr
 - Directly under the header sits the property area: consecutive `- key: value` lines, with blank lines allowed inside it. Recognized keys:
   - `path`: where the target lives. Relative values resolve against the **brief file's directory**; `\` is normalized to `/`; absolute paths (including Windows drive letters) are accepted but warned about, because they only verify on this machine. The value after `: ` is stored untrimmed.
   - `hash`: exactly 64 lowercase hex characters, the SHA-256 recorded when the entry was created or last refreshed.
-  - `regex`: optional, Rust regex syntax, matched against the target's whole text (`^` and `$` anchor the whole text; use `(?m)` to anchor lines). Named capture groups are shown by `read-brief`. The value after `: ` is stored untrimmed; `\r` and `\n` escapes are valid.
+  - `regex`: optional, Rust regex syntax, matched against the target's whole text (`^` and `$` anchor the whole text; use `(?m)` to anchor lines). It selects what `read-brief` shows, not what is hashed: the whole lines of the first match and its named capture groups, while `hash` still covers the whole file ([Reading briefs](usage.md#reading-briefs)). The value after `: ` is stored untrimmed; `\r` and `\n` escapes are valid.
   - The first occurrence of each key wins; unknown keys are kept byte-for-byte with a warning.
 - The CLI refuses raw CR or LF in `--target` and `--regex`, so the written value always stays one property line. `brief --target … --regex ''` deletes every `- regex:` line in that entry's property area, including handwritten duplicates.
 - The entry's note is its first fence after the property area.
-- Verification states (`fresh`, `shifted`, `stale`, `unchecked`) are computed when `check` or `read-brief` runs; they are never stored. `brief --refresh` rewrites the `hash` values in place; entries whose target is missing are skipped with a warning.
+- Verification states (`fresh`, `shifted`, `stale`, `unchecked`) are computed when `check` or `read-brief` runs; they are never stored. `brief --refresh` rewrites the `hash` value of each selected entry in place and inserts a `- hash:` line after the `- path:` line when the entry has none. Entries with no `path` or a missing target are left unchanged and reported as `entry  <title>  skipped  no path` or `… target missing` rows, with a `warn` first line ([Refresh report example](usage.md#refresh-report-example)).
 
 ## Agent profiles
 
@@ -206,19 +213,34 @@ Example: a file with only its H1, reader comments, blank lines, and a `locked` s
 
 ## Editing files by hand
 
-Writes change only the byte spans they target. Everything else survives verbatim, including stray lines, unknown brief keys, `> ` comments, fenced examples, and dirty state lines. A new file is written as complete initial content, and a state file reduced to heading, comments, and blanks may be deleted. What each command targets:
+Writes change only the byte spans they target. Everything else survives verbatim, including stray lines, unknown brief keys, `> ` comments, fenced examples, and dirty state lines. A new file is written as complete initial content, and a state file reduced to heading, comments, and blanks may be deleted. On an existing file, each command targets these spans:
 
-| Command | Spans it rewrites or deletes |
-| ------- | ---------------------------- |
-| `subscribe` | the first `- subscribers:` line (rewritten or removed); later duplicate lines stay as stored |
-| `post --edit n` | comment #n's header line and body fence |
-| `brief --refresh` | the `hash:` values of each selected entry |
+| Command | Spans it rewrites, inserts, or deletes |
+| ------- | -------------------------------------- |
+| `post` (append) | appends one new comment section at the end of the file |
+| `post --edit n` | comment #n's header line and body fence (a missing fence is inserted after the header) |
+| `subscribe` | the first `- subscribers:` line (value rewritten, or the line removed by `--cancel`; inserted after the H1 and comment lines when absent); later duplicate lines stay as stored |
+| `profile --section <name> -m` | that section's body fence (inserted after its heading when missing); a missing section is appended at the end |
+| `brief -m` (description) | the preamble description fence (inserted after the H1 and comment lines when missing) |
+| `brief --target` on an existing entry | that entry's `path`, `hash`, and (with `--regex`) `regex` values, inserting missing property lines; `--regex ''` deletes every `- regex:` line in the property area; with `-m`, the note fence (inserted when missing). A new title is appended as a new entry at the end |
+| `brief --entry <title> -m` (note only) | that entry's note fence (inserted after the property area when missing) |
+| `brief --refresh` | the `hash` value of each selected entry, inserting a missing `- hash:` line after `- path:`; entries with no path or a missing target are skipped |
 | `brief --entry … --remove`, `profile --section … --remove` | the entry/section span, whole |
-| `state` declare / remove | clean state lines (merged or dropped); a section only when its remaining bytes are the heading plus blanks; possibly the whole file |
+| `state` declare / remove | clean state lines (merged or dropped); a new status section appended at the end; a section only when its remaining bytes are the heading plus blanks; possibly the whole file |
 
-- Let the CLI write generated fields: `post` stamps comment times. After reviewing a changed brief target and updating any outdated note, run `brief --refresh` to accept the new hash; refreshing alone does not make the note accurate.
+- When the CLI is available, prefer it for generated fields: `post` stamps comment times and `brief` computes hashes. After reviewing a changed brief target and updating any outdated note, run `brief --refresh` to accept the new hash; refreshing alone does not make the note accurate.
 - After a hand edit, run `agent-coexist check <PATH>`. Warnings usually allow continued use; blocking structural errors (such as a broken H1 or an unclosed fence) prevent writes. Waits are stricter: duplicate `(status, nick)` pairs in a state file stop a wait, although `check` reports them only as a warning.
 - To remove a whole comment, brief entry, or profile section, delete from its `## ` line up to the next `## ` line (or the end of the file), including any extra prose in it.
+
+### Writing times by hand
+
+Without the CLI, you can still append a comment or edit your own with file tools. The times you write matter: `read-notification` selects a comment by its `edited` time, or its `created` time when there is none, and a state entry by its start. A copied or guessed time can put your record outside the window a reader asks for, so they never see it.
+
+- **New comment.** Append a section at the end of the file with the header `## #<highest existing number + 1> <your nick> (<current UTC time>)`, a blank line, and a fenced body, as in the [post example](#posts). Never copy another comment's time.
+- **Editing your own comment.** Keep the original `created` time, and add or replace `, edited <current UTC time>` before the `)`: `## #2 bob (2026-09-17T09:20:00Z, edited 2026-09-17T09:22:00Z)`.
+- **State entry.** Write `<nick> <current UTC time>..<end time>` under the status heading.
+- Write times as `YYYY-MM-DDTHH:MM:SSZ`, for example from `date -u +%Y-%m-%dT%H:%M:%SZ` in a POSIX shell. If you cannot find out the current time, say so rather than guess one.
+- Run `agent-coexist check <PATH>` afterwards when the CLI becomes available.
 
 ### Headings the CLI cannot address
 
@@ -235,4 +257,4 @@ How `fix` lines are shaped (command or instruction, operand quoting) is in [Reco
 - These are plain text files. `--as` nicks are unverified labels, and `locked` is a request that only other `agent-coexist` `profile`/`brief` writes honor. The trust boundaries, including what the CLI's OS file locks do and do not exclude, are in [SECURITY.md](../SECURITY.md).
 - No server or database is involved. Agents must have access to the same files; the CLI does not sync machines or run agents.
 
-Related pages: [Usage](usage.md) · [README](../README.md) · [Security](../SECURITY.md)
+Related pages: [Command reference](usage.md) · [README](../README.md) · [Security](../SECURITY.md)
