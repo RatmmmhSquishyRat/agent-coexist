@@ -466,11 +466,24 @@ fn copyable_heading(fix: &str) -> &str {
         .unwrap_or_else(|| panic!("fix has no copyable heading:\n{fix}"))
 }
 
-/// These fixtures emit either a command or `prose: command`. Discard only
-/// that prose prefix; leave shell parsing to bash, independent of wording.
-#[cfg(unix)]
+/// A fix payload is `prose: <command>` or a bare `<command>`. A synthesized
+/// command begins with the word `agent-coexist`; an `{argv}` retry begins
+/// with `BIN` (argv[0], bare or single-quoted per §8.3.4), and the producer
+/// never puts either start inside prose. The command runs from the first
+/// such start, verbatim — a quoted `: ` inside an operand survives.
 fn shell_command_from_fix(fix: &str) -> &str {
-    fix.split_once(": ").map_or(fix, |(_, command)| command)
+    if fix.starts_with("agent-coexist ") || fix.starts_with(BIN) {
+        return fix;
+    }
+    [
+        fix.find(": agent-coexist "),
+        fix.find(&format!(": {BIN} ")),
+        fix.find(&format!(": '{BIN}' ")),
+    ]
+    .into_iter()
+    .flatten()
+    .min()
+    .map_or(fix, |at| &fix[at + 2..])
 }
 
 #[cfg(unix)]
@@ -2389,10 +2402,7 @@ fn include_hint_columns_fold_without_changing_raw_glob_matching() {
 fn state_mutation_fixes(stdout: &str) -> Vec<&str> {
     fix_payloads(stdout)
         .into_iter()
-        .filter(|fix| {
-            let command = fix.split_once(": ").map_or(*fix, |(_, command)| command);
-            command.contains("agent-coexist state")
-        })
+        .filter(|fix| shell_command_from_fix(fix).contains("agent-coexist state"))
         .collect()
 }
 
@@ -2605,6 +2615,8 @@ fn cased_reserved_state_only_selected_emits_mutation_recipes() {
 /// Canonical selected state files keep usable recipes. Consuming them mutates
 /// only that file; a state-like sibling is left byte-identical. Reader-owned
 /// placeholders are filled; DUP/RANGE/EXPIRED recipes are already concrete.
+/// A failed post on the reserved name keeps the reader's task: no state
+/// write recipe redirects it at the selected file.
 #[cfg(unix)]
 #[test]
 fn canonical_state_recovery_recipes_mutate_selected_only() {
@@ -2643,8 +2655,8 @@ fn canonical_state_recovery_recipes_mutate_selected_only() {
                 "alice 2026-09-17T09:00:00Z..2026-09-17T15:00:00Z\n",
             ),
             &["post", "state", "--as", "alice", "-m", "nope"] as &[&str],
-            Some("bob"),
-            Some("observing"),
+            None,
+            None,
             false,
         ),
     ] {
@@ -2699,6 +2711,15 @@ fn canonical_state_recovery_recipes_mutate_selected_only() {
         }
 
         let recipes = state_mutation_fixes(&stdout);
+        if label == "etype" {
+            // E-TYPE keeps the reader's task: no state write recipe may
+            // redirect a failed post at the selected file.
+            assert!(
+                recipes.is_empty(),
+                "{label} failed post must not redirect a state write:\n{stdout}"
+            );
+            continue;
+        }
         let chosen = if remove {
             recipes
                 .iter()
@@ -2752,20 +2773,6 @@ fn canonical_state_recovery_recipes_mutate_selected_only() {
                 assert!(
                     !after.contains("erin"),
                     "{label} removed nick lingered:\n{after}"
-                );
-            }
-            "etype" => {
-                assert!(
-                    written.lines().any(|line| columns(line).starts_with(&[
-                        "set",
-                        "observing",
-                        "bob"
-                    ])),
-                    "{label} consume must use filled nick and status:\n{written}"
-                );
-                assert!(
-                    after.contains("alice"),
-                    "{label} prior lock missing:\n{after}"
                 );
             }
             _ => unreachable!(),
@@ -2936,10 +2943,7 @@ fn emitted_conflict_removal_keeps_other_live_statuses() {
         .into_iter()
         .find(|fix| fix.contains("--remove"))
         .unwrap_or_else(|| panic!("missing conflict release recipe:\n{stdout}"));
-    let command = recipe
-        .split_once(": ")
-        .map_or(recipe, |(_, command)| command)
-        .replace("<nick>", "alice");
+    let command = shell_command_from_fix(recipe).replace("<nick>", "alice");
     let args: Vec<_> = command.split_ascii_whitespace().collect();
     assert_eq!(args.first(), Some(&"agent-coexist"));
     let consumed = run(cwd, &args[1..]);
@@ -3120,9 +3124,7 @@ fn removed_wait_state_recovery_does_not_recreate_or_retarget() {
             // write to the selected sibling; neither is a repair of this file.
             for recipe in &recipes {
                 let recipe = *recipe;
-                let command = recipe
-                    .split_once(": ")
-                    .map_or(recipe, |(_, command)| command);
+                let command = shell_command_from_fix(recipe);
                 let args: Vec<_> = command.split_ascii_whitespace().collect();
                 assert_eq!(args.first(), Some(&"agent-coexist"));
                 let consumed = run(cwd, &args[1..]);
@@ -3576,9 +3578,12 @@ fn emitted_lf_native_operand_stays_manual_not_lossy_command() {
         1,
         "LF operand must keep one complete recovery row:\n{stdout}"
     );
+    // The row stays manual: no concrete operand for this file survives in
+    // the fix payload, so nothing copied from it can reach the folded twin.
+    let fix = repairs[0];
     assert!(
-        !stdout.contains("--section="),
-        "LF operand must not emit an executable section command:\n{stdout}"
+        !fix.contains("room- x") && !fix.contains("alice.agent-besties.md"),
+        "LF operand must stay manual, not a lossy command:\n{stdout}"
     );
     assert_eq!(fs::read_to_string(&native).unwrap(), native_before);
     assert_eq!(fs::read_to_string(&folded).unwrap(), folded_before);
