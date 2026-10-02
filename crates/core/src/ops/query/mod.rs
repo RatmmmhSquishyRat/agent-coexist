@@ -40,27 +40,86 @@ use crate::fsx;
 use crate::names;
 use crate::ops::context::{self, Ctx};
 use crate::ops::reason_report;
+use crate::ops::shared;
 use crate::report::{Report, Status};
 use crate::Time;
 
-/// Include patterns hidden by active ignore rules are visible, uncounted hints.
-/// The glob column is human-display only (`names::display_text`); matching
-/// identity stays the original admitted string.
-fn include_hints(report: &mut Report, zero_includes: &[String]) -> bool {
+/// `include` hint rows when `--include` was given and no file survived the
+/// filters (`zero_includes`, one row per supplied glob), with or without
+/// `--no-ignore`: a glob that is not relative to DIR matches nothing either
+/// way. The walk does not record which filter removed the files, so the
+/// text states the empty final result (`empty`, worded for the command's
+/// filtered scope) and names only the causes this invocation makes
+/// possible: a glob not relative to DIR, any `--exclude` that was given,
+/// and ignore rules only when a source was in play, so `--no-ignore` is
+/// never recommended when it is already given. The glob column is
+/// human-display only (`names::display_text`); matching identity stays the
+/// original admitted string.
+fn include_hints(
+    report: &mut Report,
+    zero_includes: &[String],
+    walk: &fsx::walk::Options,
+    ignore_active: bool,
+    empty: &str,
+) -> bool {
+    if zero_includes.is_empty() {
+        return false;
+    }
+    let mut text = String::from(empty);
+    if !walk.exclude.is_empty() {
+        text.push_str(INCLUDE_HINT_EXCLUDE);
+    }
+    if ignore_active {
+        text.push_str(INCLUDE_HINT_IGNORED);
+    }
     for glob in zero_includes {
         report.record(
             "include",
-            vec![
-                names::display_text(glob),
-                "matched 0 files; ignored directories are not reopened (pass --no-ignore)"
-                    .to_string(),
-            ],
+            vec![names::display_text(glob), text.clone()],
             2,
             crate::consts::KEY_WIDTH,
         );
     }
-    !zero_includes.is_empty()
+    true
 }
+
+/// `canonicalize  <dir>  failed  <reason>` rows (§10.5.2), then a `fix`
+/// that names path existence and ancestor search permission before retrying
+/// this command. Not counted in `total`. Returns whether any row was added.
+fn canonicalize_notes(
+    report: &mut Report,
+    failed: &[shared::CanonicalizeFail],
+    width: usize,
+) -> bool {
+    if failed.is_empty() {
+        return false;
+    }
+    for fail in failed {
+        report.record(
+            "canonicalize",
+            shared::canonicalize_values(&fail.dir, &fail.reason),
+            2,
+            width,
+        );
+    }
+    report.kv("fix", vec![diag::FIX_CANONICALIZE.to_string()]);
+    true
+}
+
+/// `include` hint of `list` and `read-notification`, whose every file comes
+/// from the filtered walk: what happened, and the first cause to check.
+const INCLUDE_HINT_EMPTY: &str =
+    "no file is left after the filters; check that this glob is relative to DIR";
+/// `include` hint of `check-state`: the filters apply only to the walk
+/// under DIR, while the state files of DIR and its ancestors are always
+/// read, so rows from them may stand next to this hint.
+const INCLUDE_HINT_EMPTY_STATE: &str = "no file under DIR is left after the filters (the state files of DIR and its ancestors are read regardless); check that this glob is relative to DIR";
+/// Appended when `--exclude` was given: exclude wins over include.
+const INCLUDE_HINT_EXCLUDE: &str = ", and that --exclude does not remove the files it matches";
+/// Appended when an ignore source was in play: `--include` cannot reopen a
+/// directory those rules pruned.
+const INCLUDE_HINT_IGNORED: &str =
+    "; if the files are in a directory that ignore rules skip, --include cannot reach them: add --no-ignore";
 
 /// Failure half of the shared single-file load: every outcome that
 /// yields no document, business results and faults alike.
@@ -84,6 +143,8 @@ enum LoadError {
 /// parsed document; a missing path, a busy lock and read/parse
 /// refusals are business outcomes folded into [`LoadError`], while
 /// OS-level conditions stay `Fault::Io` (mapped by the CLI per §8.3.5).
+/// The document's stem is the listed spelling ([`fsx::listed_path`]);
+/// report rows keep `path` as typed.
 fn load_file(path: &Path, now: Time, wait_ms: u64) -> Result<doc::Document, LoadError> {
     match std::fs::metadata(path) {
         Ok(_) => {}
@@ -96,7 +157,7 @@ fn load_file(path: &Path, now: Time, wait_ms: u64) -> Result<doc::Document, Load
         Err(Fault::Diagnostics(diags)) => return Err(LoadError::Blocking(diags)),
         Err(f) => return Err(LoadError::Fault(f)),
     };
-    match doc::parse(bytes, path, now) {
+    match doc::parse(bytes, &fsx::listed_path(path), now) {
         Ok(document) => Ok(document),
         Err(Fault::Diagnostics(diags)) => Err(LoadError::Blocking(diags)),
         Err(f) => Err(LoadError::Fault(f)),
@@ -148,6 +209,11 @@ fn body_excerpt(document: &doc::Document, section: usize) -> Option<String> {
 /// §7.3.3 DIR preconditions for the DIR-taking commands (`list`,
 /// `read-notification`, `check-state`). `Ok(None)` = usable;
 /// `Ok(Some(report))` = the `E-DIR-MISSING` / `E-NOT-DIR` reason form.
+/// `E-DIR-MISSING` `parent_arg` is the nearest existing lexical ancestor
+/// (same walk as `file_missing_params`); `missing_dir` is set when that
+/// ancestor is not the immediate parent, so the catalog can say so.
+/// `E-NOT-DIR` still names the immediate parent. State and wait keep
+/// their own DIR checks.
 fn dir_error(ctx: &Ctx, command: &'static str, dir: &Path) -> Result<Option<Report>, Fault> {
     let object = context::object_of_dir(dir);
     let dctx = context::diag_context_for_dir(ctx, command, dir);
@@ -167,26 +233,34 @@ fn dir_error(ctx: &Ctx, command: &'static str, dir: &Path) -> Result<Option<Repo
                 ),
             ],
         ))),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Some(reason_report(
-            &dctx,
-            command,
-            &object,
-            "E-DIR-MISSING",
-            vec![
-                ("dir", object.clone().into()),
-                (
-                    "parent_arg",
-                    context::parent_dir(dir).as_os_str().to_os_string(),
-                ),
-            ],
-        ))),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            let (existing, missing_parent) = context::nearest_existing_ancestor(dir);
+            let parent_arg = existing.as_os_str().to_os_string();
+            let params = if missing_parent {
+                vec![
+                    ("dir", object.clone().into()),
+                    ("parent_arg", parent_arg),
+                    ("missing_dir", "1".into()),
+                ]
+            } else {
+                vec![("dir", object.clone().into()), ("parent_arg", parent_arg)]
+            };
+            Ok(Some(reason_report(
+                &dctx,
+                command,
+                &object,
+                "E-DIR-MISSING",
+                params,
+            )))
+        }
         Err(e) => Err(Fault::io("read", dir.to_path_buf(), e)),
     }
 }
 
 /// `E-FILE-MISSING` reason form for the PATH-taking read commands
 /// (§7.3.2). `{file}` carries the suffix — it is the file that does not
-/// exist; the fix uses the native parent from `dctx.dir_arg`.
+/// exist; params (including the directory-given variant) are shared with
+/// the write forms.
 fn file_missing_report(
     dctx: &diag::Context,
     command: &'static str,
@@ -198,15 +272,13 @@ fn file_missing_report(
         command,
         object,
         "E-FILE-MISSING",
-        vec![("file", context::display_file(path).into())],
+        crate::ops::post::file_missing_params(path),
     )
 }
 
-/// `E-TYPE` reason form (§9 补充1): the `cmd_for_actual` mapping for every
-/// actual kind — the catalog placeholder is `{cmd_for_actual}`, so the
-/// param key must match it exactly or the fix renders the placeholder
-/// literally. State recovery additionally requires the actual inspected file
-/// to be the selected reserved state file, rather than merely carrying that type.
+/// `E-TYPE` reason form: the fix asks for a path of the `expected` type in
+/// the inspected file's directory (`dctx.dir_arg`), never for a command
+/// that acts on the actual type.
 fn type_report(
     dctx: &diag::Context,
     command: &'static str,
@@ -214,12 +286,6 @@ fn type_report(
     actual: doc::Kind,
     expected: &str,
 ) -> Report {
-    let cmd_for_actual = match actual {
-        doc::Kind::Post => "post",
-        doc::Kind::Brief => "brief",
-        doc::Kind::Profile => "profile",
-        doc::Kind::State => "state",
-    };
     reason_report(
         dctx,
         command,
@@ -228,7 +294,6 @@ fn type_report(
         vec![
             ("actual", actual.as_str().into()),
             ("expected", expected.into()),
-            ("cmd_for_actual", cmd_for_actual.into()),
         ],
     )
 }

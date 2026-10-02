@@ -24,7 +24,7 @@ use std::path::{Component, Path, PathBuf, Prefix};
 use globset::{Candidate, GlobBuilder};
 use ignore::WalkBuilder;
 
-use crate::error::Fault;
+use crate::error::{Fault, SourceProblem};
 
 /// File name of the per-directory state file (spec §2.4.2, §10.1.6).
 const STATE_FILE_NAME: &str = "state.agent-besties.md";
@@ -59,9 +59,9 @@ pub struct WalkResult {
     /// subset of `.gitignore` / `.ignore` / `exclude` / `global`, `none`
     /// when empty, or `--no-ignore`.
     pub ignore_sources: Vec<String>,
-    /// The original `--include` arguments when they matched nothing while
-    /// ignore rules were active (drives the `include ... matched 0 files`
-    /// warn line); empty otherwise.
+    /// The original `--include` arguments when at least one was given and
+    /// no file survived the filters (drives the `include` hint rows, with
+    /// or without `--no-ignore`); empty otherwise.
     pub zero_includes: Vec<String>,
     /// Directories entered, root included. Pruned (`.git`, ignored) and
     /// never-entered (dir symlinks, junctions) directories do not count.
@@ -118,11 +118,11 @@ impl Pattern {
 /// to `/`, one leading `/` stripping to root-anchored form (relative paths
 /// carry no leading slash), one trailing `/` marking a directory pattern,
 /// gitignore glob semantics (`*` / `?` never cross `/`, `**` does;
-/// case-insensitive on Windows and macOS). `Err` carries the message for
-/// `invalid glob '<p>': …`.
+/// case-insensitive on Windows and macOS). `Err` carries the cause shown
+/// after `--include '<p>' is not a valid glob: ` (see [`glob_usage`]).
 fn compile_pattern(original: &str) -> Result<Pattern, String> {
     if original.is_empty() {
-        return Err("empty pattern".to_string());
+        return Err("the pattern is empty".to_string());
     }
     let normalized = original.replace('\\', "/");
     // A leading `/` anchors the pattern to the scan root; the relative
@@ -141,13 +141,15 @@ fn compile_pattern(original: &str) -> Result<Pattern, String> {
         unsuffixed.to_string()
     };
     if pattern.is_empty() {
-        return Err("empty pattern".to_string());
+        return Err("nothing is left after removing the leading and trailing '/'".to_string());
     }
+    // globset's Display repeats the pattern (`error parsing glob '<p>': …`);
+    // the caller already names it, so keep only the kind's cause.
     let glob = GlobBuilder::new(&pattern)
         .literal_separator(true)
         .case_insensitive(cfg!(windows) || cfg!(target_os = "macos"))
         .build()
-        .map_err(|e| e.to_string())?;
+        .map_err(|e| e.kind().to_string())?;
     Ok(Pattern {
         matcher: glob.compile_matcher(),
         anchored: root_anchored || pattern.contains('/'),
@@ -155,12 +157,22 @@ fn compile_pattern(original: &str) -> Result<Pattern, String> {
     })
 }
 
-fn compile_patterns(patterns: &[String]) -> Result<Vec<Pattern>, Fault> {
+/// The one usage message for a pattern that does not compile, naming the
+/// option it came from. The value and the cause are echoed as typed
+/// (`names::echo_raw`), so whitespace that makes it fail stays visible
+/// and a control in the cause cannot reach the terminal.
+fn glob_usage(flag: &str, pattern: &str, cause: &str) -> Fault {
+    Fault::Usage(format!(
+        "{flag} '{}' is not a valid glob: {}",
+        crate::names::echo_raw(pattern),
+        crate::names::echo_raw(cause)
+    ))
+}
+
+fn compile_patterns(flag: &str, patterns: &[String]) -> Result<Vec<Pattern>, Fault> {
     patterns
         .iter()
-        .map(|p| {
-            compile_pattern(p).map_err(|msg| Fault::Usage(format!("invalid glob '{}': {}", p, msg)))
-        })
+        .map(|p| compile_pattern(p).map_err(|cause| glob_usage(flag, p, &cause)))
         .collect()
 }
 
@@ -168,9 +180,14 @@ fn compile_patterns(patterns: &[String]) -> Result<Vec<Pattern>, Fault> {
 /// non-empty and must build as a glob with the exact settings [`scan`]
 /// applies. No other checks.
 pub fn validate(opts: &Options) -> Result<(), Fault> {
-    for pattern in opts.include.iter().chain(opts.exclude.iter()) {
-        if let Err(msg) = compile_pattern(pattern) {
-            return Err(Fault::Usage(format!("invalid glob '{}': {}", pattern, msg)));
+    let flagged = opts
+        .include
+        .iter()
+        .map(|p| ("--include", p))
+        .chain(opts.exclude.iter().map(|p| ("--exclude", p)));
+    for (flag, pattern) in flagged {
+        if let Err(cause) = compile_pattern(pattern) {
+            return Err(glob_usage(flag, pattern, &cause));
         }
     }
     Ok(())
@@ -246,13 +263,17 @@ enum WalkErrorFact {
     /// read): the path is reported unreadable and the scan continues with
     /// its siblings (§10.1.5).
     Unreadable(PathBuf),
-    /// Anything else — a malformed ignore file, a pathless I/O error, an
-    /// unrecognized definition. Surfacing as a scan fault is strictly better
-    /// than returning a silently incomplete success.
-    Fatal {
-        path: Option<PathBuf>,
-        message: String,
+    /// An ignore or git config file could not be used. The scan fails with
+    /// [`Fault::Source`] instead of returning a silently incomplete success.
+    Source {
+        path: PathBuf,
+        problem: SourceProblem,
+        cause: String,
     },
+    /// An OS failure that names no file, e.g. the current directory needed
+    /// for global rules is gone. Reported against the scan root with its
+    /// real error kind, so the generic §8.3.5 advice matches the cause.
+    PathlessIo(std::io::Error),
 }
 
 /// `true` when the error is ultimately an I/O error behind the
@@ -288,29 +309,129 @@ fn is_directory_access_error(err: &ignore::Error) -> bool {
 /// `WithLineNumber` / `WithDepth` unwrap to their inner. Only directory
 /// traversal I/O (tagged by the walker with its depth) and loops are
 /// unreadable-directory facts. Ignore/config source I/O and parse errors
-/// are fatal, keeping their actual source path.
-fn classify_error(err: &ignore::Error) -> Vec<WalkErrorFact> {
+/// are fatal, keeping their actual source path. `rules_dir` is the
+/// directory whose rules were being loaded (named when the walker reports
+/// a rule failure without a file); `gitfile_dirs` are the directories whose
+/// `.git` file may hold a broken gitdir reference.
+fn classify_error(
+    err: &ignore::Error,
+    rules_dir: &Path,
+    gitfile_dirs: &[PathBuf],
+) -> Vec<WalkErrorFact> {
     match err {
-        ignore::Error::Partial(errors) => errors.iter().flat_map(classify_error).collect(),
-        ignore::Error::WithLineNumber { err, .. } => classify_error(err),
-        ignore::Error::WithDepth { err, .. } => classify_error(err),
+        ignore::Error::Partial(errors) => errors
+            .iter()
+            .flat_map(|err| classify_error(err, rules_dir, gitfile_dirs))
+            .collect(),
+        ignore::Error::WithLineNumber { err, .. } => classify_error(err, rules_dir, gitfile_dirs),
+        ignore::Error::WithDepth { err, .. } => classify_error(err, rules_dir, gitfile_dirs),
         ignore::Error::WithPath { path, err } => {
             if matches!(&**err, ignore::Error::WithDepth { err, .. } if is_io_cause(err)) {
                 vec![WalkErrorFact::Unreadable(path.clone())]
             } else {
-                // Source rules could not be read or compiled. Never turn
-                // that into an empty-looking successful scan.
-                vec![WalkErrorFact::Fatal {
-                    path: Some(path.clone()),
-                    message: format!("{}", &**err),
-                }]
+                vec![source_fact(path, err, gitfile_dirs)]
             }
         }
         ignore::Error::Loop { child, .. } => vec![WalkErrorFact::Unreadable(child.clone())],
-        other => vec![WalkErrorFact::Fatal {
-            path: None,
-            message: format!("{other}"),
+        ignore::Error::Io(io) => vec![WalkErrorFact::PathlessIo(std::io::Error::new(
+            io.kind(),
+            io.to_string(),
+        ))],
+        // A rule failure that names no file. `scan` loads only single-file
+        // rule sets (`.ignore`, `.gitignore`, `info/exclude`, the global
+        // excludes file), and each names its file when its rules fail to
+        // compile together (see `source_fact`); no file types, overrides or
+        // custom ignore names are configured. Kept fatal, attributed to the
+        // directory whose rules were being loaded, never silently dropped.
+        other => vec![WalkErrorFact::Source {
+            path: rules_dir.to_path_buf(),
+            problem: SourceProblem::Rules,
+            cause: other.to_string(),
         }],
+    }
+}
+
+/// Decide what is wrong with one failing source file, so the report can
+/// say how to repair it (§8.3.5). The cause text stays the walker's own.
+fn source_fact(path: &Path, err: &ignore::Error, gitfile_dirs: &[PathBuf]) -> WalkErrorFact {
+    let cause = err.to_string();
+    let (line, inner) = match err {
+        ignore::Error::WithLineNumber { line, err } => (Some(*line), &**err),
+        other => (None, other),
+    };
+    let problem = match inner {
+        ignore::Error::Io(io) => match io.kind() {
+            // Non-UTF-8 text, or a malformed gitdir / commondir reference.
+            ErrorKind::InvalidData => SourceProblem::Content { line },
+            ErrorKind::Unsupported | ErrorKind::IsADirectory => SourceProblem::NotRegularFile,
+            // Windows refuses to open a directory as a file with the same
+            // error as a permission denial; the file type tells them apart.
+            ErrorKind::PermissionDenied
+                if std::fs::metadata(path).is_ok_and(|meta| !meta.is_file()) =>
+            {
+                SourceProblem::NotRegularFile
+            }
+            // The walker skips missing ignore files, so a missing path here
+            // is the target of a `.git` file's gitdir reference. The repair
+            // belongs in that `.git` file, not at the missing path.
+            ErrorKind::NotFound | ErrorKind::NotADirectory => {
+                match gitfile_referrer(gitfile_dirs, path) {
+                    Some(gitfile) => {
+                        return WalkErrorFact::Source {
+                            path: gitfile,
+                            problem: SourceProblem::Content { line: None },
+                            cause: format!("gitdir points to {}: {cause}", display_path(path)),
+                        }
+                    }
+                    None => SourceProblem::Access,
+                }
+            }
+            _ => SourceProblem::Access,
+        },
+        // The file's lines each parsed, but its rules could not be compiled
+        // together (size or nesting limit): shorten, simplify or remove rules.
+        ignore::Error::Glob { glob: None, .. } => SourceProblem::Rules,
+        // Glob syntax and every other rule the walker could not compile.
+        _ => SourceProblem::Content { line },
+    };
+    WalkErrorFact::Source {
+        path: path.to_path_buf(),
+        problem,
+        cause,
+    }
+}
+
+/// The `<dir>/.git` file among `dirs` whose `gitdir:` reference names
+/// `target`, read and resolved exactly as the walker does: the whole file
+/// minus trailing CR/LF, native bytes on Unix, relative to `dir`.
+fn gitfile_referrer(dirs: &[PathBuf], target: &Path) -> Option<PathBuf> {
+    dirs.iter().find_map(|dir| {
+        let gitfile = dir.join(".git");
+        let mut bytes = std::fs::read(&gitfile).ok()?;
+        while matches!(bytes.last(), Some(b'\n' | b'\r')) {
+            bytes.pop();
+        }
+        let reference = native_path(bytes.strip_prefix(b"gitdir: ")?)?;
+        let resolved = if reference.is_absolute() {
+            reference
+        } else {
+            dir.join(reference)
+        };
+        (resolved == target).then_some(gitfile)
+    })
+}
+
+/// Descriptor bytes as a native path: raw bytes on Unix, UTF-8 elsewhere
+/// (the walker rejects other bytes there before any target lookup).
+fn native_path(bytes: &[u8]) -> Option<PathBuf> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::ffi::OsStrExt;
+        Some(PathBuf::from(OsStr::from_bytes(bytes)))
+    }
+    #[cfg(not(unix))]
+    {
+        std::str::from_utf8(bytes).ok().map(PathBuf::from)
     }
 }
 
@@ -325,9 +446,9 @@ fn classify_error(err: &ignore::Error) -> Vec<WalkErrorFact> {
 /// Hidden entries are traversed,
 /// `.git` directories and never-entered link directories are pruned, ignore
 /// rules prune subtrees unless disabled, unreadable directories are recorded
-/// and skipped (§10.1.5), and every other walk error — a malformed ignore
-/// file, a pathless I/O failure — surfaces as `Fault::Io` instead of a
-/// silently incomplete success. The `--include` / `--exclude` post-filter
+/// and skipped (§10.1.5), and an ignore or git config file that cannot be
+/// read or parsed surfaces as [`Fault::Source`] instead of a silently
+/// incomplete success. The `--include` / `--exclude` post-filter
 /// runs on the collected names only.
 pub fn scan(
     root: &Path,
@@ -394,14 +515,22 @@ pub fn scan(
         for fact in facts {
             match fact {
                 WalkErrorFact::Unreadable(path) => unreadable_dirs.push(original_path(&path)),
-                WalkErrorFact::Fatal { path, message } => {
+                WalkErrorFact::Source {
+                    path,
+                    problem,
+                    cause,
+                } => {
                     if fatal.is_none() {
-                        fatal = Some(Fault::io(
-                            "scan",
-                            path.map(|p| original_path(&p))
-                                .unwrap_or_else(|| root.to_path_buf()),
-                            std::io::Error::new(ErrorKind::InvalidData, message),
-                        ));
+                        fatal = Some(Fault::Source {
+                            path: original_path(&path),
+                            problem,
+                            cause,
+                        });
+                    }
+                }
+                WalkErrorFact::PathlessIo(error) => {
+                    if fatal.is_none() {
+                        fatal = Some(Fault::io("scan", root.to_path_buf(), error));
                     }
                 }
             }
@@ -421,16 +550,22 @@ pub fn scan(
                     // open its optional ignore files. Keep that failure at
                     // the unreadable-directory boundary, not as a fatal
                     // source failure. Probe only after an actual I/O error.
+                    // Listing alone is not entering: a Unix directory with
+                    // read but no search permission lists its names yet
+                    // refuses every lookup inside it, including `.`.
                     if is_entered_directory(&e)
                         && is_directory_access_error(err)
-                        && std::fs::read_dir(e.path()).is_err()
+                        && (std::fs::read_dir(e.path()).is_err()
+                            || std::fs::symlink_metadata(e.path().join(".")).is_err())
                     {
                         let _ = absorb_walk_errors(vec![WalkErrorFact::Unreadable(
                             e.path().to_path_buf(),
                         )]);
                         continue;
                     }
-                    if let Some(fault) = absorb_walk_errors(classify_error(err)) {
+                    let entered = [e.path().to_path_buf()];
+                    let facts = classify_error(err, e.path(), &entered);
+                    if let Some(fault) = absorb_walk_errors(facts) {
                         return Err(fault);
                     }
                 }
@@ -452,7 +587,16 @@ pub fn scan(
                 }
             }
             Err(err) => {
-                if let Some(fault) = absorb_walk_errors(classify_error(&err)) {
+                // Item-level source errors come from the scan root's
+                // ancestors (parent ignore rules) or global configuration,
+                // all of which apply to the scan root.
+                let parents: Vec<PathBuf> = walk_root
+                    .ancestors()
+                    .skip(1)
+                    .map(Path::to_path_buf)
+                    .collect();
+                let facts = classify_error(&err, &walk_root, &parents);
+                if let Some(fault) = absorb_walk_errors(facts) {
                     return Err(fault);
                 }
             }
@@ -461,8 +605,8 @@ pub fn scan(
 
     // Post-filter on the collected files only (§10.1.3); unreachable after
     // validate(), but a bad pattern is never silently dropped.
-    let includes = compile_patterns(&opts.include)?;
-    let excludes = compile_patterns(&opts.exclude)?;
+    let includes = compile_patterns("--include", &opts.include)?;
+    let excludes = compile_patterns("--exclude", &opts.exclude)?;
 
     let mut files: Vec<PathBuf> = managed
         .into_iter()
@@ -486,7 +630,7 @@ pub fn scan(
     unreadable_dirs.sort();
     unreadable_dirs.dedup();
 
-    let zero_includes = if !opts.include.is_empty() && files.is_empty() && !opts.no_ignore {
+    let zero_includes = if !opts.include.is_empty() && files.is_empty() {
         opts.include.clone()
     } else {
         Vec::new()
@@ -1155,6 +1299,55 @@ mod tests {
         assert_eq!(res.files.len(), 1);
         assert!(display_path(&res.files[0]).ends_with("kept/y.agent-besties.md"));
         assert!(res.ignore_sources.contains(&".gitignore".to_string()));
+        let _ = fs::remove_dir_all(&base);
+    }
+
+    /// Valid lines whose combined patterns exceed the pattern size limit
+    /// name the file to shorten, not the directory or a line.
+    #[test]
+    fn oversized_rule_set_names_its_file() {
+        let root = scratch("rules-too-large");
+        touch(&root, "note.agent-besties.md");
+        let rule = |i: usize| format!("gen-{i}-{}\n", "?".repeat(50_000));
+        fs::write(root.join(".ignore"), (0..10).map(rule).collect::<String>()).unwrap();
+        let walk = Options::default();
+        match scan(&root, &walk, &mut sink) {
+            Err(Fault::Source { path, problem, .. }) => {
+                assert_eq!(path, root.join(".ignore"));
+                assert_eq!(problem, SourceProblem::Rules);
+            }
+            other => panic!("expected a rules source fault, got {other:?}"),
+        }
+        fs::write(root.join(".ignore"), rule(0)).unwrap();
+        assert!(scan(&root, &walk, &mut sink).is_ok());
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    /// A gitdir reference to a regular file is repaired in the `.git` file
+    /// on every platform (Unix opens `<file>/commondir` with ENOTDIR).
+    #[test]
+    fn gitdir_pointing_at_a_file_names_the_git_file() {
+        let base = scratch("gitdir-file");
+        let root = base.join("work");
+        touch(&root, "note.agent-besties.md");
+        fs::write(base.join("gitdata"), "not a directory\n").unwrap();
+        fs::write(root.join(".git"), "gitdir: ../gitdata\n").unwrap();
+        let walk = Options::default();
+        match scan(&root, &walk, &mut sink) {
+            Err(Fault::Source {
+                path,
+                problem,
+                cause,
+            }) => {
+                assert_eq!(path, root.join(".git"));
+                assert_eq!(problem, SourceProblem::Content { line: None });
+                assert!(cause.starts_with("gitdir points to "), "{cause}");
+            }
+            other => panic!("expected a gitfile source fault, got {other:?}"),
+        }
+        fs::remove_file(base.join("gitdata")).unwrap();
+        fs::create_dir(base.join("gitdata")).unwrap();
+        assert!(scan(&root, &walk, &mut sink).is_ok());
         let _ = fs::remove_dir_all(&base);
     }
 

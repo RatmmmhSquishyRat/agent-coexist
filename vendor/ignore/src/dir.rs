@@ -1045,6 +1045,8 @@ impl IgnoreBuilder {
 /// precedence than later names).
 ///
 /// Missing optional sources are ignored; other load errors are retained.
+/// When the rules come from a single file, a failure to build them together
+/// (for example a size limit) names that file.
 pub(crate) fn create_gitignore<T: AsRef<OsStr>>(
     dir: &Path,
     dir_for_ignorefile: &Path,
@@ -1063,7 +1065,10 @@ pub(crate) fn create_gitignore<T: AsRef<OsStr>>(
     let gi = match builder.build() {
         Ok(gi) => gi,
         Err(err) => {
-            errs.push(err);
+            errs.push(match names {
+                [name] => err.with_path(dir_for_ignorefile.join(name.as_ref())),
+                _ => err,
+            });
             GitignoreBuilder::new(dir).build().unwrap()
         }
     };
@@ -1146,7 +1151,14 @@ fn resolve_git_commondir(
     let git_commondir_file = real_git_dir.join("commondir");
     let mut file = match open_regular_file(&git_commondir_file) {
         Ok(file) => file,
-        Err(err) if err.kind() == io::ErrorKind::NotFound => {
+        // Unix reports ENOTDIR when the gitdir itself is a regular file;
+        // the gitdir check below then names the reference, as on Windows.
+        Err(err)
+            if matches!(
+                err.kind(),
+                io::ErrorKind::NotFound | io::ErrorKind::NotADirectory
+            ) =>
+        {
             // The gitdir reference is required even though commondir is not.
             let metadata = real_git_dir
                 .metadata()
@@ -1925,11 +1937,9 @@ mod tests {
             err.io_error().unwrap().kind(),
             std::io::ErrorKind::NotADirectory
         );
-        assert!(matches!(
-            err,
-            Error::WithPath { path, .. }
-                if path == git_dir || path == git_dir.join("commondir")
-        ));
+        // Every platform names the gitdir reference, not `<file>/commondir`
+        // (Unix opens it with ENOTDIR, Windows with NotFound).
+        assert!(matches!(err, Error::WithPath { path, .. } if path == git_dir));
         assert!(!ignore.local_sources().git_exclude);
 
         // The required directory now exists; its exclude file is optional.

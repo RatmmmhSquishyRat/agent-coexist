@@ -206,7 +206,9 @@ pub fn parse(bytes: Vec<u8>, path: &Path, now: DateTime<Utc>) -> Result<Document
     // case-insensitively, like the walker's managed-file test (§10.1.4);
     // a name without it (bare-stem paths) is the stem as-is, dots
     // included (NAME allows them, §2.3). The name is borrowed as `&str` —
-    // no lossy codec on the normal path.
+    // no lossy codec on the normal path. Callers reading a user operand
+    // pass `fsx::listed_path`, so on case-insensitive filesystems this is
+    // the directory entry's spelling, not the typed case.
     let stem: String = match path.file_name().and_then(|n| n.to_str()) {
         Some(name) => {
             let bytes = name.as_bytes();
@@ -362,38 +364,17 @@ pub fn parse(bytes: Vec<u8>, path: &Path, now: DateTime<Utc>) -> Result<Document
     };
     let (post, brief, profile, state) = match kind {
         Some(Kind::Post) => {
-            let mut ctx = ScanCtx::new(
-                &source,
-                &lines,
-                &fence.inside,
-                &fence.blocks,
-                now,
-                &mut diagnostics,
-            );
+            let mut ctx = ScanCtx::new(&source, &lines, &fence, now, &mut diagnostics);
             let post = types::post::scan(&mut ctx, preamble_lines.clone(), &sections);
             (post, empty_brief(), Vec::new(), Vec::new())
         }
         Some(Kind::Brief) => {
-            let mut ctx = ScanCtx::new(
-                &source,
-                &lines,
-                &fence.inside,
-                &fence.blocks,
-                now,
-                &mut diagnostics,
-            );
+            let mut ctx = ScanCtx::new(&source, &lines, &fence, now, &mut diagnostics);
             let brief = types::brief::scan(&mut ctx, preamble_lines.clone(), &sections);
             (empty_post(), brief, Vec::new(), Vec::new())
         }
         Some(Kind::Profile) => {
-            let mut ctx = ScanCtx::new(
-                &source,
-                &lines,
-                &fence.inside,
-                &fence.blocks,
-                now,
-                &mut diagnostics,
-            );
+            let mut ctx = ScanCtx::new(&source, &lines, &fence, now, &mut diagnostics);
             ctx.stray_preamble(preamble_lines.clone());
             let profile = types::profile::scan(&mut ctx, &sections);
             if sections.is_empty() {
@@ -403,14 +384,7 @@ pub fn parse(bytes: Vec<u8>, path: &Path, now: DateTime<Utc>) -> Result<Document
             (empty_post(), empty_brief(), profile, Vec::new())
         }
         Some(Kind::State) => {
-            let mut ctx = ScanCtx::new(
-                &source,
-                &lines,
-                &fence.inside,
-                &fence.blocks,
-                now,
-                &mut diagnostics,
-            );
+            let mut ctx = ScanCtx::new(&source, &lines, &fence, now, &mut diagnostics);
             ctx.stray_preamble(preamble_lines.clone());
             let state = types::state::scan(&mut ctx, &sections);
             (empty_post(), empty_brief(), Vec::new(), state)
@@ -605,15 +579,23 @@ mod tests {
 
     #[test]
     fn fence_rules() {
-        // unclosed fence truncates structure and blocks; the section
-        // before it survives without a body (W-BODY from the post scan)
+        // unclosed fence truncates structure and blocks; the section it
+        // opens in survives without a body, and E-FENCE alone reports it
+        // (a W-BODY would ask to rewrite a body that is inside the fence)
         let src = "# a.post\n\n## #1 alice (2026-09-17T09:12:00Z)\n\n```md\nnever closed\n";
         let d = parse_str(src, "a");
-        assert_eq!(ids(&d), vec!["W-BODY", "E-FENCE"]);
-        assert_eq!(d.diagnostics[1].line, 5);
-        assert_eq!(d.diagnostics[1].params[1].1, "3"); // ticks
+        assert_eq!(ids(&d), vec!["E-FENCE"]);
+        assert_eq!(d.diagnostics[0].line, 5);
+        assert_eq!(d.diagnostics[0].params[1].1, "3"); // ticks
         assert_eq!(d.sections.len(), 1);
         assert!(d.sections[0].body.is_none());
+
+        // a bodyless comment before the section holding the unclosed
+        // fence still warns: its body is really missing
+        let src = "# a.post\n\n## #1 alice (2026-09-17T09:12:00Z)\n\n## #2 bob (2026-09-17T09:13:00Z)\n\n```md\nnever closed\n";
+        let d = parse_str(src, "a");
+        assert_eq!(ids(&d), vec!["W-BODY", "E-FENCE"]);
+        assert_eq!(d.diagnostics[0].line, 3);
 
         // a close with MORE backticks closes; the info string may contain
         // spaces but no backtick; a preamble fence is not a section body

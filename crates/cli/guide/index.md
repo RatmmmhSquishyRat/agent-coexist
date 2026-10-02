@@ -52,11 +52,10 @@ also ran `read-notification`, record its command, with directory, nick,
 and filters, a time at or before it started, and the paths its `skipped`
 or `partial` rows named that you have not read directly since, or that
 there were none; `guide wait` explains how the next scan uses them. When
-you come back, take the nick from
-that summary or from an explicit assignment. A fresh session usually
-cannot tell its own earlier comments from others' by their content, and
-your harness or
-model name does not tell you which nick you used.
+you come back, take the nick from that summary or from an explicit
+assignment. A fresh session usually cannot tell its own earlier comments
+from others' by their content, and your harness or model name does not
+tell you which nick you used.
 
 If nothing reliable names your earlier nick, do not take one from the
 records because the work looks like yours: under it you would edit,

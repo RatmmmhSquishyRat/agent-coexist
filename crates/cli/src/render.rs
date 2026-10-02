@@ -13,8 +13,11 @@
 //!   synthetic value column, so every line splits reliably on `/ {2,}/`
 //!   (spec §8.1.4–5).
 //! - `Row::Text`: a line with two spaces + the key, then one `    | ` line
-//!   per content line, split on `\n`, verbatim — never folded, never
-//!   truncated, never slash-substituted (spec §8.1.7).
+//!   per content line, verbatim — never folded, never truncated, never
+//!   slash-substituted (spec §8.1.7). Lines are the content's
+//!   `\n`-terminated lines: a final `\n` ends the last line instead of
+//!   opening an empty one, so a block shows as many lines as its
+//!   `L<a>..L<b>` range; empty content is the key line alone.
 //! - `Row::Diagnostic`: two spaces + level padded to 5 + two spaces +
 //!   `L<line>` + two spaces + message, then `why` / `fix` lines at a
 //!   9-space indent (spec §8.1.6). Message / why / fix come from the diag
@@ -60,7 +63,7 @@ pub fn render(report: &Report, dctx: &diag::Context, out: &mut dyn Write) -> std
             }
             Row::Text { key, content } => {
                 writeln!(out, "  {key}")?;
-                for line in content.split('\n') {
+                for line in content.split_terminator('\n') {
                     writeln!(out, "    | {line}")?;
                 }
             }
@@ -103,4 +106,39 @@ fn write_padded(out: &mut dyn Write, text: &str, width: usize) -> std::io::Resul
         write!(out, "{}", " ".repeat(width - len))?;
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn rendered_block(content: &str) -> String {
+        let mut report = Report::new("read-brief", "docs/b");
+        report.text("content", content);
+        let mut out = Vec::new();
+        render(&report, &diag::Context::default(), &mut out).unwrap();
+        String::from_utf8(out).unwrap()
+    }
+
+    /// A block shows the content's lines: a final LF closes the last line
+    /// (so a one-line target reported as `L1..L1` shows one line), a real
+    /// blank line stays visible, and empty content is the key alone.
+    #[test]
+    fn text_block_lines_follow_content_lines_not_the_terminator() {
+        let head = "ok  read-brief  docs/b\n  content\n";
+        assert_eq!(
+            rendered_block("fn a(){}\n"),
+            format!("{head}    | fn a(){{}}\n")
+        );
+        assert_eq!(
+            rendered_block("fn a(){}"),
+            format!("{head}    | fn a(){{}}\n")
+        );
+        assert_eq!(rendered_block("a\n\n"), format!("{head}    | a\n    | \n"));
+        assert_eq!(
+            rendered_block("a\n\nb"),
+            format!("{head}    | a\n    | \n    | b\n")
+        );
+        assert_eq!(rendered_block(""), head);
+    }
 }

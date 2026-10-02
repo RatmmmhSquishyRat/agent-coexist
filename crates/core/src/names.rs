@@ -95,6 +95,78 @@ pub fn display_text(s: &str) -> String {
         .collect()
 }
 
+/// A rejected input value as typed, for a one-line usage message. Unlike
+/// [`display_text`] nothing is folded or trimmed, so the space or control
+/// character that made the value invalid stays visible. Every character a
+/// reader cannot see, that would break the line, or that could reorder
+/// the terminal line is written as `<U+XXXX>`: what std's `Debug` escaping
+/// treats as non-printable (controls, format characters such as U+FEFF,
+/// U+200B and the bidi overrides U+202A-U+202E, line and paragraph
+/// separators, and whitespace other than U+0020). That notation is not
+/// confused with a value that contains a backslash, such as a Windows-style
+/// glob, and the value itself is never changed or stripped.
+pub fn echo_raw(raw: &str) -> String {
+    use std::fmt::Write;
+    let mut out = String::with_capacity(raw.len());
+    for c in raw.chars() {
+        if unseen(c) {
+            let _ = write!(out, "<U+{:04X}>", c as u32);
+        } else {
+            out.push(c);
+        }
+    }
+    out
+}
+
+/// Whether [`echo_raw`] must spell `c` out: a control, whitespace other
+/// than U+0020, or anything else std's `str::escape_debug` treats as
+/// non-printable, which keeps the Unicode table current with the
+/// toolchain. `c` is probed after a leading `.` so that a visible
+/// combining mark (a grapheme extender) stays as typed; only
+/// non-printable characters then come out as an escape. The quote and
+/// backslash escapes are `Debug` syntax, not invisibility, so those stay
+/// as typed.
+fn unseen(c: char) -> bool {
+    if c.is_control() || (c.is_whitespace() && c != ' ') {
+        return true;
+    }
+    if c == ' ' || matches!(c, '\\' | '\'' | '"') {
+        return false;
+    }
+    let mut buf = [0u8; 5];
+    buf[0] = b'.';
+    let len = 1 + c.encode_utf8(&mut buf[1..]).len();
+    let probe = std::str::from_utf8(&buf[..len]).expect("ASCII plus one encoded char");
+    probe.escape_debug().nth(1) == Some('\\')
+}
+
+/// The repair for a value that only the whitespace at its ends makes
+/// invalid: `remove the space before or after '<trimmed>'`, or `whitespace`
+/// when that edge holds anything but U+0020. `None` when trimming does not
+/// make the value `valid`, since then the whitespace is not the only thing
+/// wrong.
+pub fn edge_space_fix(raw: &str, valid: impl Fn(&str) -> bool) -> Option<String> {
+    let trimmed = raw.trim();
+    if trimmed.len() == raw.len() || !valid(trimmed) {
+        return None;
+    }
+    let only_spaces = raw.chars().filter(|c| c.is_whitespace()).all(|c| c == ' ');
+    let what = if only_spaces { "space" } else { "whitespace" };
+    Some(format!(
+        "remove the {what} before or after '{}'",
+        echo_raw(trimmed)
+    ))
+}
+
+/// `(got '<raw>')` for a rejected grammar value, shown by [`echo_raw`],
+/// followed by `; <edge_space_fix>` when only edge whitespace is wrong.
+pub fn got_raw(raw: &str, valid: impl Fn(&str) -> bool) -> String {
+    match edge_space_fix(raw, valid) {
+        Some(fix) => format!("(got '{}'); {fix}", echo_raw(raw)),
+        None => format!("(got '{}')", echo_raw(raw)),
+    }
+}
+
 /// Excerpt: the first non-blank line of a body, whitespace-folded; longer
 /// than [`consts::EXCERPT_MAX`] chars it is cut to the first 77 chars plus
 /// `...` (spec §8.1.8). An empty body excerpts to the empty string.
@@ -206,6 +278,24 @@ pub fn normalize_body(s: &str) -> Result<String, Fault> {
     Ok(trimmed.to_string())
 }
 
+/// The one-line cause of a regex compile failure. regex-syntax renders the
+/// pattern with a `^` marker line and ends with `error: <cause>`; the
+/// marker cannot survive single-line display (usage stderr, diagnostic
+/// messages), so only the cause is kept. The size-limit variant names the
+/// limit and the next step.
+pub fn regex_reason(err: &regex::Error) -> String {
+    match err {
+        regex::Error::Syntax(text) => {
+            let cause = text.rsplit_once("error: ").map_or(text.as_str(), |(_, c)| c);
+            display_text(cause)
+        }
+        regex::Error::CompiledTooBig(limit) => format!(
+            "the compiled pattern exceeds the {limit}-byte size limit; use a shorter or less repetitive pattern"
+        ),
+        other => display_text(&other.to_string()),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -252,6 +342,40 @@ mod tests {
     fn display_text_replaces_controls() {
         assert_eq!(display_text("a\u{1}b"), "a\u{FFFD}b");
         assert_eq!(display_text("a\tb"), "a b"); // tab folded, not replaced
+    }
+
+    #[test]
+    fn rejected_values_echo_edges_and_controls() {
+        // Nothing folded or trimmed; invisible characters made visible.
+        assert_eq!(echo_raw(" a  b\t"), " a  b<U+0009>");
+        assert_eq!(echo_raw("x\r"), "x<U+000D>");
+        assert_eq!(echo_raw("a\\b\u{1b}"), "a\\b<U+001B>");
+        // Format and bidi characters never reach the terminal as typed,
+        // while visible letters, combining marks and quotes stay as typed.
+        assert_eq!(echo_raw("\u{feff}alice"), "<U+FEFF>alice");
+        assert_eq!(echo_raw("ali\u{200b}ce"), "ali<U+200B>ce");
+        assert_eq!(echo_raw("\u{202e}locked"), "<U+202E>locked");
+        assert_eq!(echo_raw("a\u{2028}b\u{a0}"), "a<U+2028>b<U+00A0>");
+        assert_eq!(
+            echo_raw("e\u{301} maría 日本 'x\""),
+            "e\u{301} maría 日本 'x\""
+        );
+        // No repair strips a format character: the value stays invalid.
+        assert_eq!(
+            got_raw("\u{feff}alice", valid_nick),
+            "(got '<U+FEFF>alice')"
+        );
+        // The edge repair appears only when trimming alone makes it valid.
+        assert_eq!(
+            got_raw("alice ", valid_nick),
+            "(got 'alice '); remove the space before or after 'alice'"
+        );
+        assert_eq!(
+            got_raw("alice\r", valid_nick),
+            "(got 'alice<U+000D>'); remove the whitespace before or after 'alice'"
+        );
+        assert_eq!(got_raw(" a b ", valid_nick), "(got ' a b ')");
+        assert_eq!(edge_space_fix("alice", valid_nick), None);
     }
 
     #[test]

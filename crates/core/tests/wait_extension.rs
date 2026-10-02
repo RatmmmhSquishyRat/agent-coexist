@@ -126,6 +126,10 @@ fn fault_summary(fault: &Fault) -> String {
         ),
         Fault::Reason { id, .. } => format!("reason {}", id),
         Fault::Io { action, path, .. } => format!("io {}: {}", action, path.display()),
+        Fault::WriteUncertain { path, cause, .. } => {
+            format!("write uncertain {}: {}", path.display(), cause)
+        }
+        Fault::Source { path, cause, .. } => format!("source {}: {}", path.display(), cause),
         Fault::Cancelled => "cancelled".to_string(),
     }
 }
@@ -516,7 +520,7 @@ fn state_file_deletion_with_selected_declarations_hits() {
 }
 
 #[test]
-fn wait_hit_and_deletion_report_state_conflict_warnings() {
+fn wait_hit_reports_state_conflict_and_deletion_drops_it() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("state.agent-besties.md");
     write_file(
@@ -566,23 +570,14 @@ fn wait_hit_and_deletion_report_state_conflict_warnings() {
     waiting.wait_ready();
     remove_file(&path);
     let removed = waiting.expect_hit("conflicting state file deleted");
-    assert_eq!(removed.status, Status::Warn);
+    // The conflict belonged to the deleted file: the removal is reported
+    // as the event, with no stale warning or fix asking for a repair.
+    assert_eq!(removed.status, Status::Ok);
     assert_eq!(removed.exit, 0);
-    let removed_lines: Vec<usize> = removed
-        .rows
-        .iter()
-        .filter_map(|row| match row {
-            Row::Diagnostic(diagnostic) if diagnostic.id == "W-STATE-CONFLICT" => {
-                Some(diagnostic.line)
-            }
-            _ => None,
-        })
-        .collect();
     assert!(
-        !removed_lines.is_empty() && removed_lines.iter().all(|line| *line > 0),
-        "deletion must emit the before snapshot's conflict warnings, ids={:?} lines={:?}",
-        diagnostic_ids(&removed),
-        removed_lines
+        diagnostic_ids(&removed).is_empty(),
+        "deletion must not carry the deleted snapshot's diagnostics, ids={:?}",
+        diagnostic_ids(&removed)
     );
 }
 

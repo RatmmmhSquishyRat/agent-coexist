@@ -3,24 +3,28 @@
 //!
 //! Unreadable files stay visible as leaves with type `?`, lock-busy
 //! files as `busy` — both counted and both warn (§1, §10.1.1); `list`
-//! never emits file-level `skipped` rows. The type column is one
+//! never emits file-level `skipped` rows. A `fix` row (not counted)
+//! names `check` for each such leaf and `list` for each unreadable
+//! directory, through the shared scan follow-up. The type column is one
 //! tree-wide start column (§8.2): `max(TREE_TYPE_COL, max over shown
 //! leaves of (indent + stem chars) + 2)`, computed after collecting so
 //! the rows are built last.
 
 use std::ffi::OsString;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use crate::consts;
+use crate::diag;
 use crate::doc;
 use crate::error::Fault;
 use crate::fsx;
 use crate::names;
 use crate::ops::context::{self, Ctx};
+use crate::ops::shared::{self, Follow};
 use crate::ops::ListParams;
 use crate::report::Report;
 
-use super::{dir_error, include_hints};
+use super::{dir_error, include_hints, INCLUDE_HINT_EMPTY};
 
 /// Native directory identity; `display` is folded once for emit.
 struct DirKey {
@@ -42,8 +46,9 @@ struct Leaf {
     stem: String,
     indent: usize,
     type_col: String,
-    /// `busy` or `?`: the type is unknown — warns (§8.1.11).
-    unreadable: bool,
+    /// `busy` or `?`: the type is unknown — warns (§8.1.11) and is named
+    /// in the `fix` row with this scanned path.
+    unreadable: Option<PathBuf>,
 }
 
 enum LeafKind {
@@ -95,9 +100,9 @@ pub fn list(ctx: &mut Ctx, p: &ListParams) -> Result<Report, Fault> {
             continue;
         }
         let (type_col, unreadable) = match kind {
-            LeafKind::Known(k) => (k.as_str().to_string(), false),
-            LeafKind::Unknown => ("?".to_string(), true),
-            LeafKind::Busy => ("busy".to_string(), true),
+            LeafKind::Known(k) => (k.as_str().to_string(), None),
+            LeafKind::Unknown => ("?".to_string(), Some(file.clone())),
+            LeafKind::Busy => ("busy".to_string(), Some(file.clone())),
         };
         leaves.push(Leaf {
             dirs,
@@ -136,32 +141,55 @@ pub fn list(ctx: &mut Ctx, p: &ListParams) -> Result<Report, Fault> {
         );
     }
 
-    let mut warn = leaves.iter().any(|leaf| leaf.unreadable);
+    // Leaves of unknown type, then unreadable directories: what the `fix`
+    // row names to open, in displayed order.
+    let mut follows: Vec<Follow> = leaves
+        .iter()
+        .filter_map(|leaf| leaf.unreadable.clone().map(Follow::Leaf))
+        .collect();
     let mut count = leaves.len();
 
     // §10.1.5: unreadable directories — `skipped` rows, counted.
-    let mut skipped: Vec<String> = scanned
+    let mut skipped: Vec<(String, &PathBuf)> = scanned
         .unreadable_dirs
         .iter()
-        .map(|dir| context::display_file(dir))
+        .map(|dir| (context::display_file(dir), dir))
         .collect();
     skipped.sort();
-    for dir in skipped {
+    for (display, dir) in skipped {
         report.record(
             "skipped",
-            vec![dir, "unreadable".to_string()],
+            vec![display, "unreadable".to_string()],
             2,
             consts::KEY_WIDTH,
         );
+        follows.push(Follow::Listing(dir.clone()));
         count += 1;
-        warn = true;
+    }
+    let mut warn = !follows.is_empty();
+    // `check` reads a `?`/`busy` leaf again and says what it is or why it
+    // cannot be read (a busy file gets the longer single-file lock wait);
+    // a skipped directory is listed again once it is readable.
+    if warn {
+        report.kv(
+            "fix",
+            vec![shared::scan_fix(
+                &follows,
+                diag::FIX_LIST_UNREAD,
+                diag::FIX_LIST_UNREAD_MANUAL,
+            )],
+        );
     }
 
-    // §10.1.3 / §8.2: include globs that matched nothing while ignore
-    // rules were active (not counted, §8.1.10).
-    if !p.walk.no_ignore {
-        warn |= include_hints(&mut report, &scanned.zero_includes);
-    }
+    // §10.1.3 / §8.2: `--include` given and no file left after the
+    // filters (not counted, §8.1.10).
+    warn |= include_hints(
+        &mut report,
+        &scanned.zero_includes,
+        &p.walk,
+        shared::ignore_in_play(&scanned.ignore_sources),
+        INCLUDE_HINT_EMPTY,
+    );
 
     report.total(count);
     if warn {

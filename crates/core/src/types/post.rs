@@ -207,6 +207,151 @@ fn parse_header(text: &str) -> Option<ParsedHeader> {
     })
 }
 
+/// Whatever a malformed comment header still shows (§9 E-HEAD fix), kept
+/// only where it can be told apart from the other fields:
+///
+/// * number: the digits right after `#` (leading zeros allowed); when a
+///   space slipped in after `#` (`# 2 bob (…)`), an all-digit first word is
+///   the number, never the nick;
+/// * nick: the word after the number; with no number, the first word, or
+///   the next one when a garbled first word replaced the number (`#x bob`)
+///   unless that one opens the time. An all-digit word is a valid nick but
+///   is kept only when a number precedes it and the time (or the end)
+///   follows it (`#3 7 <time>`); anywhere else it may be a misplaced number,
+///   so the nick is missing. `edited` is a valid nick too, but is kept only
+///   when the parenthesized times follow it (`#01 edited (<time>)`); without
+///   the parenthesis it may be the marker after a missing nick;
+/// * times: read from the words after the nick (from the nick slot when it
+///   held none and opens the times), so a nick `edited` is not the marker.
+///   The first RFC 3339 time before the marker `edited` is the creation
+///   time, the first one after it the edit time. An edit time never stands
+///   in for a missing creation time.
+///
+/// Missing parts stay `None`; the repair never substitutes the command
+/// clock for them.
+struct Salvage {
+    seq: Option<u64>,
+    nick: Option<String>,
+    created: Option<DateTime<Utc>>,
+    edited: Option<DateTime<Utc>>,
+}
+
+/// A header word without the `(`, `)` and `,` that surround the times.
+fn bare(word: &str) -> &str {
+    word.trim_matches(|c| matches!(c, '(' | ')' | ','))
+}
+
+fn all_digits(word: &str) -> bool {
+    !word.is_empty() && word.bytes().all(|b| b.is_ascii_digit())
+}
+
+fn salvage_header(text: &str) -> Salvage {
+    let rest = text.strip_prefix('#').unwrap_or(text);
+    let digits = rest.len() - rest.trim_start_matches(|c: char| c.is_ascii_digit()).len();
+    let after = &rest[digits..];
+    let spaced = after.starts_with(char::is_whitespace);
+    let words: Vec<&str> = after.split_whitespace().collect();
+    // `# 2 bob (…)`: the number is the first word, the nick the second.
+    let separated = digits == 0 && spaced && words.first().is_some_and(|w| all_digits(w));
+    let number = if separated { words[0] } else { &rest[..digits] };
+    let seq = number
+        .parse::<u64>()
+        .ok()
+        .filter(|n| *n != 0 && *n != u64::MAX);
+    let numbered = digits != 0 || separated;
+    let slot = if separated {
+        1
+    } else if digits != 0 || spaced {
+        0
+    } else {
+        // `#x bob (…)`: the first word replaced the number.
+        match words.get(1) {
+            Some(word) if !word.starts_with('(') => 1,
+            _ => 0,
+        }
+    };
+    // A word that opens the times: `(`, the `edited` marker, or a bare time.
+    let opens_times = |word: &str| {
+        word.starts_with('(') || bare(word) == "edited" || crate::time::parse(bare(word)).is_ok()
+    };
+    let slot_word = words.get(slot).copied();
+    let parenthesis_follows = words
+        .get(slot + 1)
+        .is_some_and(|next| next.starts_with('('));
+    let time_or_end = words.get(slot + 1).is_none_or(|&next| opens_times(next));
+    let nick = slot_word
+        .filter(|word| names::valid_nick(word))
+        // `edited` is a valid nick; it is the author only when the
+        // parenthesized times follow it, otherwise it may be the marker
+        .filter(|word| *word != "edited" || parenthesis_follows)
+        .filter(|word| !all_digits(word) || (numbered && time_or_end));
+    // The times are read after the author's slot, so an author named
+    // `edited` is not taken for the marker; an unused slot word that opens
+    // the times is part of them.
+    let meta = match slot_word {
+        Some(word) if nick.is_some() || !opens_times(word) => slot + 1,
+        _ => slot,
+    };
+    let (mut created, mut edited, mut saw_edited) = (None, None, false);
+    for token in words.iter().skip(meta) {
+        let token = bare(token);
+        if token == "edited" {
+            saw_edited = true;
+        } else if let Ok(time) = crate::time::parse(token) {
+            if saw_edited {
+                edited = edited.or(Some(time));
+            } else {
+                created = created.or(Some(time));
+            }
+        }
+    }
+    let nick = nick.map(str::to_string);
+    Salvage {
+        seq,
+        nick,
+        created,
+        edited,
+    }
+}
+
+/// The header of a salvaged comment numbered `number` (a number, or the
+/// `<n>` marker of the exhausted repair): its own nick and times where
+/// readable, `<nick>` / `<time>` markers otherwise. The flag is true when
+/// a marker for the nick or the time had to be used.
+fn salvaged_header(s: &Salvage, number: &str) -> (String, bool) {
+    let nick = s.nick.as_deref().unwrap_or("<nick>");
+    let created = s
+        .created
+        .map_or_else(|| "<time>".to_string(), crate::time::format);
+    let times = match s.edited {
+        Some(edited) => format!("{created}, edited {}", crate::time::format(edited)),
+        None => created,
+    };
+    (
+        format!("## #{number} {nick} ({times})"),
+        s.nick.is_none() || s.created.is_none(),
+    )
+}
+
+/// The E-HEAD repair for a salvaged header numbered `n` (`fill` selects
+/// the fix that asks the reader to supply the nick or time). When `n` is
+/// not the number the header shows, `n` (with `shown` when it showed one)
+/// selects the fix that says which replies to change.
+fn head_repair(d: Diagnostic, s: &Salvage, n: u64) -> Diagnostic {
+    let (header, fill) = salvaged_header(s, &n.to_string());
+    let mut d = d.with("header", header);
+    match s.seq {
+        Some(shown) if shown == n => {}
+        Some(shown) => d = d.with("shown", shown.to_string()).with("n", n.to_string()),
+        None => d = d.with("n", n.to_string()),
+    }
+    if fill {
+        d.with("fill", "1")
+    } else {
+        d
+    }
+}
+
 /// Scan a post (spec §3): the preamble subscribers line (§3.2), then every
 /// H2 section as a comment header attempt (§3.3), body strays (§2.5.5) and
 /// the derived references (§3.4). Diagnostics are pushed through `ctx`;
@@ -219,7 +364,13 @@ pub(crate) fn scan(ctx: &mut ScanCtx, preamble: Range<usize>, sections: &[Sectio
     // stored legal seq is known (§9 suppl. 3). Held back and pushed at
     // the end; `doc::parse` sorts by (line, catalog order), so the later
     // push cannot change the rendered order.
-    let mut deferred: Vec<Diagnostic> = Vec::new();
+    let mut deferred: Vec<(Diagnostic, Option<Salvage>)> = Vec::new();
+    // A malformed header since the previous legal one may be the comment
+    // a later W-SEQ-GAP is missing (not necessarily a hand deletion).
+    let mut malformed_since_prev = false;
+    // W-SEQ-GAP `(line, a, b, malformed)`: whether the numbers between a
+    // and b are absent or only appear later is known after every header.
+    let mut gaps: Vec<(usize, u64, u64, bool)> = Vec::new();
     // 1-based header line of each comment, for W-REPLY-DANGLING anchors
     let mut head_lines: Vec<usize> = Vec::new();
     let mut seen: HashSet<u64> = HashSet::new();
@@ -290,7 +441,11 @@ pub(crate) fn scan(ctx: &mut ScanCtx, preamble: Range<usize>, sections: &[Sectio
             Some(ok) => ok,
             None => {
                 let disp = names::display_text(raw);
-                deferred.push(Diagnostic::new("E-HEAD", head_no).with("line", disp));
+                deferred.push((
+                    Diagnostic::new("E-HEAD", head_no).with("line", disp),
+                    Some(salvage_header(text)),
+                ));
+                malformed_since_prev = true;
                 // not a comment (§3.3.2); still scan unfenced body text (§2.5.5)
                 scan_body_strays(ctx, sec);
                 continue;
@@ -300,14 +455,12 @@ pub(crate) fn scan(ctx: &mut ScanCtx, preamble: Range<usize>, sections: &[Sectio
         // prev begins at 0 so a first legal seq > 1 is the existing
         // nonblocking W-SEQ-GAP (no renumbering, no write refusal).
         if !seen.insert(seq) {
-            deferred.push(Diagnostic::new("E-SEQ-DUP", head_no).with("n", seq.to_string()));
+            deferred.push((
+                Diagnostic::new("E-SEQ-DUP", head_no).with("n", seq.to_string()),
+                None,
+            ));
         } else if seq > prev + 1 {
-            ctx.push(
-                Diagnostic::new("W-SEQ-GAP", head_no)
-                    .with("a", prev.to_string())
-                    .with("b", seq.to_string())
-                    .with("m", (prev + 1).to_string()),
-            );
+            gaps.push((head_no, prev, seq, malformed_since_prev));
         } else if seq < prev {
             ctx.push(
                 Diagnostic::new("W-SEQ-ORDER", head_no)
@@ -316,14 +469,17 @@ pub(crate) fn scan(ctx: &mut ScanCtx, preamble: Range<usize>, sections: &[Sectio
             );
         }
         prev = seq;
+        malformed_since_prev = false;
         if seq > max_legal {
             max_legal = seq;
         }
         // stray text outside fences (§2.5.5)
         scan_body_strays(ctx, sec);
-        // body and derived references (§3.4); no fence -> W-BODY
+        // body and derived references (§3.4); no fence -> W-BODY, unless
+        // the body is the unclosed fence E-FENCE already reports
         let (mentions, replies) = match &sec.body {
             Some(body) => references(ctx.text(&body.content)),
+            None if ctx.holds_unclosed_fence(sec) => (Vec::new(), Vec::new()),
             None => {
                 ctx.push(
                     Diagnostic::new("W-BODY", head_no)
@@ -360,21 +516,80 @@ pub(crate) fn scan(ctx: &mut ScanCtx, preamble: Range<usize>, sections: &[Sectio
             }
         }
     }
+    // W-SEQ-GAP names the first number between a and b that no legal
+    // header carries; when every one of them appears later in the file, the
+    // numbers are only out of order: nothing is missing, so neither a hand
+    // deletion nor the malformed-header explanation applies. The walk stops
+    // at the first absent number, so it is bounded by `seen`. `a == 0` is
+    // the `prev` seed, not a comment (seqs start at 1): `first` makes the
+    // text say numbering starts at #b instead of naming a #0.
+    for (line, a, b, malformed) in gaps {
+        let mut gap = Diagnostic::new("W-SEQ-GAP", line)
+            .with("a", a.to_string())
+            .with("b", b.to_string());
+        if a == 0 {
+            gap = gap.with("first", "1");
+        }
+        let mut m = a + 1;
+        while m < b && seen.contains(&m) {
+            m += 1;
+        }
+        ctx.push(if m == b {
+            gap.with("later", "1")
+        } else if malformed {
+            gap.with("m", m.to_string()).with("malformed", "1")
+        } else {
+            gap.with("m", m.to_string())
+        });
+    }
     // `{next}` / `{exhausted}` for deferred E-HEAD / E-SEQ-DUP (§9
-    // suppl. 3). After stored legal seqs are known, assign distinct
-    // unused numbers in source order from max_legal+1. Each emitted
-    // repair reserves its number. Do not rewrite stored seqs, wrap, or
-    // suggest u64::MAX; later repairs use the exhausted form.
+    // suppl. 3). A malformed header keeps its own number when no legal
+    // comment and no earlier repair uses it; every other repair takes a
+    // distinct unused number in source order from max_legal+1. Each
+    // emitted repair reserves its number. Do not rewrite stored seqs,
+    // wrap, or suggest u64::MAX; later repairs use the exhausted form,
+    // which names the highest legal number (`max`) and leaves the choice
+    // of an unused lower number to the reader.
+    let mut reserved: HashSet<u64> = HashSet::new();
+    let kept: Vec<Option<u64>> = deferred
+        .iter()
+        .map(|(_, salvage)| {
+            salvage
+                .as_ref()
+                .and_then(|s| s.seq)
+                .filter(|n| !seen.contains(n) && reserved.insert(*n))
+        })
+        .collect();
     let mut assigned = max_legal;
-    for mut d in deferred {
-        d = match assigned.checked_add(1) {
-            Some(n) if n < u64::MAX => {
-                assigned = n;
-                d.with("next", n.to_string())
+    for ((d, salvage), kept) in deferred.into_iter().zip(kept) {
+        let number = kept.or_else(|| loop {
+            match assigned.checked_add(1) {
+                Some(n) if n < u64::MAX => {
+                    assigned = n;
+                    if !reserved.contains(&n) {
+                        break Some(n);
+                    }
+                }
+                _ => break None,
             }
-            _ => d.with("exhausted", "1"),
-        };
-        ctx.push(d);
+        });
+        ctx.push(match (salvage, number) {
+            (Some(s), Some(n)) => head_repair(d, &s, n),
+            (Some(s), None) => {
+                let (header, fill) = salvaged_header(&s, "<n>");
+                let d = d
+                    .with("exhausted", "1")
+                    .with("max", max_legal.to_string())
+                    .with("header", header);
+                if fill {
+                    d.with("fill", "1")
+                } else {
+                    d
+                }
+            }
+            (None, Some(n)) => d.with("next", n.to_string()),
+            (None, None) => d.with("exhausted", "1").with("max", max_legal.to_string()),
+        });
     }
 
     Post {
@@ -772,6 +987,149 @@ mod tests {
             .and_then(|(_, v)| v.to_str())
     }
 
+    /// Comment number of an E-HEAD's suggested header.
+    fn head_number(d: &Diagnostic) -> Option<&str> {
+        param(d, "header")?.strip_prefix("## #")?.split(' ').next()
+    }
+
+    #[test]
+    fn malformed_header_repair_keeps_its_own_number_nick_and_time() {
+        let doc = parse_post(concat!(
+            "# foo.post\n\n",
+            "## #1 alice (2026-09-17T09:00:00Z)\n\n```md\na\n```\n\n",
+            "## #2 bob 2026-09-17T09:05:00Z\n\n```md\nb\n```\n\n",
+            "## #02 carol (2026-09-17T09:10:00Z, edited 2026-09-17T09:12:00Z)\n\n```md\nc\n```\n\n",
+            "## #x dave (2026-09-17T09:20:00Z)\n\n```md\nd\n```\n\n",
+            "## #5 erin (2026-09-17T09:30:00Z)\n\n```md\ne\n```\n",
+        ));
+        let heads: Vec<_> = doc
+            .diagnostics
+            .iter()
+            .filter(|d| d.id == "E-HEAD")
+            .collect();
+        // bob keeps #2 and his time; carol's #02 collides with bob's kept
+        // #2, so she gets the next free number with her own times; dave's
+        // number is unreadable but his nick and time are kept.
+        let headers: Vec<_> = heads.iter().map(|d| param(d, "header")).collect();
+        assert_eq!(
+            headers,
+            [
+                Some("## #2 bob (2026-09-17T09:05:00Z)"),
+                Some("## #6 carol (2026-09-17T09:10:00Z, edited 2026-09-17T09:12:00Z)"),
+                Some("## #7 dave (2026-09-17T09:20:00Z)"),
+            ]
+        );
+        assert!(heads.iter().all(|d| param(d, "fill").is_none()));
+        // Only the renumbered and the unnumbered repairs ask the reader to
+        // change replies: bob keeps #2, so his @#2 replies stay valid.
+        let renumbered: Vec<_> = heads
+            .iter()
+            .map(|d| (param(d, "shown"), param(d, "n")))
+            .collect();
+        assert_eq!(
+            renumbered,
+            [(None, None), (Some("2"), Some("6")), (None, Some("7"))]
+        );
+        // The gap before #5 is explained by the malformed headers.
+        let gap = doc
+            .diagnostics
+            .iter()
+            .find(|d| d.id == "W-SEQ-GAP")
+            .expect("gap");
+        assert_eq!(param(gap, "malformed"), Some("1"));
+
+        // Nothing readable: markers, never the command clock.
+        let doc = parse_post("# foo.post\n\n## #\n\n```md\nx\n```\n");
+        let head = doc.diagnostics.iter().find(|d| d.id == "E-HEAD").unwrap();
+        assert_eq!(param(head, "header"), Some("## #1 <nick> (<time>)"));
+        assert_eq!(param(head, "fill"), Some("1"));
+
+        // A number or `edited` can stand in the nick slot only where a
+        // nick is certain; otherwise the reader fills in the author. An
+        // edit time never becomes the creation time.
+        for (broken, header, fill) in [
+            (
+                "## # 2 bob (2026-09-17T09:05:00Z)",
+                "## #2 bob (2026-09-17T09:05:00Z)",
+                false,
+            ),
+            // parentheses missing, so the header is malformed; the
+            // all-digit word between the number and the time is the author
+            (
+                "## #2 7 2026-09-17T09:05:00Z",
+                "## #2 7 (2026-09-17T09:05:00Z)",
+                false,
+            ),
+            (
+                "## # 2 (2026-09-17T09:05:00Z)",
+                "## #2 <nick> (2026-09-17T09:05:00Z)",
+                true,
+            ),
+            (
+                "## #2 3 bob (2026-09-17T09:05:00Z)",
+                "## #2 <nick> (2026-09-17T09:05:00Z)",
+                true,
+            ),
+            (
+                "## #x 2 (2026-09-17T09:05:00Z)",
+                "## #2 <nick> (2026-09-17T09:05:00Z)",
+                true,
+            ),
+            (
+                "## #2 bob (edited 2026-09-17T09:20:00Z)",
+                "## #2 bob (<time>, edited 2026-09-17T09:20:00Z)",
+                true,
+            ),
+            (
+                "## #2 (edited 2026-09-17T09:20:00Z)",
+                "## #2 <nick> (<time>, edited 2026-09-17T09:20:00Z)",
+                true,
+            ),
+            // `edited` before the parenthesized time is the author
+            (
+                "## #02 edited (2026-09-17T09:05:00Z)",
+                "## #2 edited (2026-09-17T09:05:00Z)",
+                false,
+            ),
+            (
+                "## # 2 edited (2026-09-17T09:05:00Z)",
+                "## #2 edited (2026-09-17T09:05:00Z)",
+                false,
+            ),
+            (
+                "## #02 edited (2026-09-17T09:05:00Z, edited 2026-09-17T09:20:00Z)",
+                "## #2 edited (2026-09-17T09:05:00Z, edited 2026-09-17T09:20:00Z)",
+                false,
+            ),
+            // without the parenthesis it may be the marker after a lost nick
+            (
+                "## #2 edited 2026-09-17T09:20:00Z",
+                "## #2 <nick> (<time>, edited 2026-09-17T09:20:00Z)",
+                true,
+            ),
+        ] {
+            let doc = parse_post(&format!(
+                "# foo.post\n\n## #1 a (2026-09-17T09:00:00Z)\n\n```md\na\n```\n\n{broken}\n\n```md\nb\n```\n"
+            ));
+            let head = doc.diagnostics.iter().find(|d| d.id == "E-HEAD").unwrap();
+            assert_eq!(param(head, "header"), Some(header), "{broken}");
+            assert_eq!(param(head, "fill").is_some(), fill, "{broken}");
+        }
+
+        // A plain gap with no malformed header stays the deletion case.
+        let doc = parse_post(concat!(
+            "# foo.post\n\n",
+            "## #1 a (2026-09-17T09:00:00Z)\n\n```md\na\n```\n\n",
+            "## #3 b (2026-09-17T09:10:00Z)\n\n```md\nb\n```\n",
+        ));
+        let gap = doc
+            .diagnostics
+            .iter()
+            .find(|d| d.id == "W-SEQ-GAP")
+            .unwrap();
+        assert_eq!(param(gap, "malformed"), None);
+    }
+
     #[test]
     fn same_report_emitted_next_repairs_malformed_and_duplicate_headers() {
         let time = "2026-09-17T10:00:00Z";
@@ -805,8 +1163,10 @@ mod tests {
             .iter()
             .filter(|d| d.id == "E-HEAD")
             .collect();
-        let n0 = param(heads[0], "next").expect("first E-HEAD next");
-        let n1 = param(heads[1], "next").expect("second E-HEAD next");
+        // Both headers ask for #1; the first keeps it, the second gets the
+        // next free number, so copying both repairs is conflict-free.
+        let n0 = head_number(heads[0]).expect("first E-HEAD number");
+        let n1 = head_number(heads[1]).expect("second E-HEAD number");
         assert_eq!((n0, n1), ("1", "2"));
         let repaired_src = two_invalid
             .replace("## #1 alice (bad)", &format!("## #{n0} alice ({time})"))
@@ -898,8 +1258,10 @@ mod tests {
         let almost = u64::MAX - 2;
         let time = "2026-09-17T09:00:00Z";
 
+        // bob's header shows no number, so its repair draws from the pool
+        // above the highest legal number.
         let mixed = format!(
-            "# ceil.post\n\n## #{almost} alice ({time})\n\n```md\nkeep-high\n```\n\n## #1 bob (not-a-time)\n\n```md\nkeep-head\n```\n\n## #{almost} carol ({time})\n\n```md\nkeep-dup\n```\n"
+            "# ceil.post\n\n## #{almost} alice ({time})\n\n```md\nkeep-high\n```\n\n## #x bob (not-a-time)\n\n```md\nkeep-head\n```\n\n## #{almost} carol ({time})\n\n```md\nkeep-dup\n```\n"
         );
         let doc = parse_post(&mixed);
         let head = doc
@@ -917,17 +1279,17 @@ mod tests {
             "source order of mixed deferred repairs"
         );
         let last_s = last.to_string();
-        assert_eq!(param(head, "next"), Some(last_s.as_str()));
+        assert_eq!(head_number(head), Some(last_s.as_str()));
         assert!(param(head, "exhausted").is_none());
         assert_eq!(param(dup, "next"), None);
         assert!(param(dup, "exhausted").is_some());
-        let n: u64 = param(head, "next").unwrap().parse().unwrap();
+        let n: u64 = head_number(head).unwrap().parse().unwrap();
         assert_ne!(n, 0);
         assert_ne!(n, u64::MAX);
         assert!(n < u64::MAX);
 
         let repaired_src = mixed.replace(
-            "## #1 bob (not-a-time)",
+            "## #x bob (not-a-time)",
             &format!("## #{n} bob (2026-09-17T10:00:00Z)"),
         );
         assert!(repaired_src.contains(&format!("## #{almost} alice ({time})")));
@@ -947,7 +1309,7 @@ mod tests {
         assert!(repaired_src.contains("```md\nkeep-dup\n```"));
 
         let exhausted = format!(
-            "# ceil.post\n\n## #{last} alice ({time})\n\n```md\nkeep-high\n```\n\n## #1 bob (not-a-time)\n\n```md\nkeep-head\n```\n\n## #{last} carol ({time})\n\n```md\nkeep-dup\n```\n"
+            "# ceil.post\n\n## #{last} alice ({time})\n\n```md\nkeep-high\n```\n\n## #x bob (not-a-time)\n\n```md\nkeep-head\n```\n\n## #{last} carol ({time})\n\n```md\nkeep-dup\n```\n"
         );
         let doc = parse_post(&exhausted);
         let deferred: Vec<_> = doc
@@ -959,6 +1321,12 @@ mod tests {
         for d in deferred {
             assert_eq!(param(d, "next"), None);
             assert!(param(d, "exhausted").is_some());
+            assert_eq!(param(d, "max"), Some(last_s.as_str()));
         }
+        // The exhausted E-HEAD keeps bob's header, with only the number
+        // left for the reader to choose.
+        let head = doc.diagnostics.iter().find(|d| d.id == "E-HEAD").unwrap();
+        assert_eq!(param(head, "header"), Some("## #<n> bob (<time>)"));
+        assert_eq!(param(head, "fill"), Some("1"));
     }
 }

@@ -17,7 +17,7 @@ use chrono::{DateTime, Utc};
 
 use crate::doc::{Body, Section};
 use crate::error::Diagnostic;
-use crate::text::{FenceBlock, LineIndex, Span};
+use crate::text::{FenceBlock, FenceScan, LineIndex, Span};
 
 /// Read-only scan context over one parsed document (frozen interface; type
 /// scanners never touch the raw line/fence structures directly).
@@ -26,6 +26,8 @@ pub(crate) struct ScanCtx<'a> {
     lines: &'a LineIndex,
     inside: &'a [bool],
     blocks: &'a [FenceBlock],
+    /// 0-based open line of the unclosed fence (E-FENCE), if any.
+    unclosed: Option<usize>,
     pub(crate) now: DateTime<Utc>,
     diag: &'a mut Vec<Diagnostic>,
 }
@@ -34,19 +36,27 @@ impl<'a> ScanCtx<'a> {
     pub(crate) fn new(
         source: &'a str,
         lines: &'a LineIndex,
-        inside: &'a [bool],
-        blocks: &'a [FenceBlock],
+        fence: &'a FenceScan,
         now: DateTime<Utc>,
         diag: &'a mut Vec<Diagnostic>,
     ) -> Self {
         ScanCtx {
             source,
             lines,
-            inside,
-            blocks,
+            inside: &fence.inside,
+            blocks: &fence.blocks,
+            unclosed: fence.unclosed.map(|(open, _)| open),
             now,
             diag,
         }
+    }
+
+    /// True when the unclosed fence (E-FENCE) opens inside this section:
+    /// its content is the intended body, so a missing-body warning would
+    /// only repeat the fence error with a misleading rewrite.
+    pub(crate) fn holds_unclosed_fence(&self, section: &Section) -> bool {
+        self.unclosed
+            .is_some_and(|open| self.section_body_lines(section).contains(&open))
     }
 
     /// Append a diagnostic. Ordering (anchor line, catalog order) happens

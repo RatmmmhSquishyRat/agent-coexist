@@ -111,7 +111,7 @@ impl Gitignore {
         match builder.build() {
             Ok(gi) => (gi, errs.into_error_option()),
             Err(err) => {
-                errs.push(err);
+                errs.push(err.with_path(path));
                 (Gitignore::empty(), errs.into_error_option())
             }
         }
@@ -398,7 +398,8 @@ impl GitignoreBuilder {
                 match self.build() {
                     Ok(gi) => (gi, errs.into_error_option()),
                     Err(err) => {
-                        errs.push(err);
+                        // The rules come from this one file; name it.
+                        errs.push(err.with_path(&path));
                         (Gitignore::empty(), errs.into_error_option())
                     }
                 }

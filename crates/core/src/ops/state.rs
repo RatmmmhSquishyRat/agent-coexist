@@ -73,8 +73,8 @@ fn declare(ctx: &mut Ctx, p: &super::StateDeclare) -> Result<Report, Fault> {
             create: true,
             create_parents: false,
         },
-        |bytes: Vec<u8>, _initial: bool| {
-            let plan = plan_declare(&bytes, &file_for_parse, now, &nick, &status, until)?;
+        |bytes: &[u8], _initial: bool| {
+            let plan = plan_declare(bytes, &file_for_parse, now, &nick, &status, until)?;
             Ok(match plan {
                 DeclarePlan::Write {
                     bytes: new_bytes,
@@ -134,31 +134,60 @@ fn declare(ctx: &mut Ctx, p: &super::StateDeclare) -> Result<Report, Fault> {
     // state writes are never functional-lock blocked (§6.4.3).
     let scope = match shared::collect(ctx, &p.dir, &default_walk_options()) {
         Ok(scope) => scope,
-        Err(Fault::Io { path, source, .. }) => {
-            // The formatted cause may embed two-space runs (a malformed
-            // ignore pattern); fold it so the scan row stays splittable
-            // (§8.1.4–5, §10.9.4). The path column, warn status and the
-            // committed write above stay unchanged.
-            report.kv(
-                "scan",
-                vec![
-                    context::display_file(&path),
-                    names::display_text(&source.to_string()),
-                ],
-            );
-            report.warn();
-            return Ok(report);
-        }
-        Err(_) => {
-            report.kv("scan", vec![object.clone(), "failed".to_string()]);
+        Err(fault) => {
+            // The declaration is already committed; only the conflict check
+            // is missing. The `scan` row keeps the actual cause, folded so
+            // it stays splittable (§8.1.4–5, §10.9.4). The fix resolves that
+            // cause and reruns just the read-only conflict check, never the
+            // write (§10.5.4).
+            let dir_arg = diag::path_operand(p.dir.as_os_str());
+            let (scan, fix) = match fault {
+                Fault::Source {
+                    path,
+                    problem,
+                    cause,
+                } => {
+                    let source = context::display_file(&path);
+                    let check = dir_arg
+                        .as_deref()
+                        .map(|dir| format!("agent-coexist check-state {dir}"));
+                    // Without a copyable command the sentence still names the
+                    // command, as other manual fixes do (`run agent-coexist
+                    // <sub> by hand`); its operand is this report's directory.
+                    let next = if check.is_some() {
+                        "check for conflicts without declaring again"
+                    } else {
+                        "check for conflicts without declaring again: run agent-coexist check-state on this directory"
+                    };
+                    let fix = problem.fix(&source, next, check.as_deref());
+                    (vec![source, names::display_text(&cause)], fix)
+                }
+                Fault::Io { path, source, .. } => (
+                    vec![
+                        context::display_file(&path),
+                        names::display_text(&source.to_string()),
+                    ],
+                    scan_stopped_fix(dir_arg.as_deref()),
+                ),
+                // `collect` returns no other fault for these walk options
+                // (no include/exclude patterns to reject); should one
+                // appear, the committed write is still never reported as
+                // unwritten.
+                _ => (
+                    vec![object.clone(), "failed".to_string()],
+                    scan_stopped_fix(dir_arg.as_deref()),
+                ),
+            };
+            report.kv("scan", scan);
+            report.kv("fix", vec![fix]);
             report.warn();
             return Ok(report);
         }
     };
-    for dir in &scope.canonicalize_failed {
+    for fail in &scope.canonicalize_failed {
         report.kv(
             "canonicalize",
-            vec![context::object_of_dir(dir), "failed".to_string()],
+            shared::canonicalize_values(&fail.dir, &fail.reason),
         );
         report.warn();
     }
@@ -179,35 +208,22 @@ fn declare(ctx: &mut Ctx, p: &super::StateDeclare) -> Result<Report, Fault> {
     if has_conflict {
         report.warn();
     }
-    let mut tail: Vec<(&Path, &'static str, String)> = Vec::new();
-    for (dir, issue) in &scope.issues {
-        match issue {
-            shared::ScanIssue::Busy => {
-                tail.push((dir.as_path(), "skipped", "busy".to_string()));
-            }
-            shared::ScanIssue::Blocking(id) => {
-                tail.push((dir.as_path(), "skipped", (*id).to_string()));
-            }
-            shared::ScanIssue::Partial { id, line } => {
-                tail.push((dir.as_path(), "partial", format!("{id} L{line}")));
-            }
+    // The declaration is committed; a skipped or partial state file (or an
+    // unlisted directory) may hold a conflicting lock this check did not
+    // see. Name what to open, never a second declaration (§10.5.6).
+    let rows = shared::scan_rows(&scope.issues, &scope.unreadable_dirs);
+    if !rows.is_empty() {
+        for row in &rows {
+            report.kv(row.key, row.values.clone());
         }
-    }
-    for dir in &scope.unreadable_dirs {
-        tail.push((dir.as_path(), "skipped", "unreadable".to_string()));
-    }
-    tail.sort();
-    tail.dedup();
-    // Display paths may collide; rendering changes ordering, never identity.
-    let mut tail: Vec<_> = tail
-        .into_iter()
-        .map(|(dir, key, detail)| (context::object_of_dir(dir), key, detail))
-        .collect();
-    tail.sort();
-    if !tail.is_empty() {
-        for (dir, key, detail) in tail {
-            report.kv(key, vec![dir, detail]);
-        }
+        report.kv(
+            "fix",
+            vec![shared::scan_fix(
+                rows.iter().map(|row| &row.follow),
+                diag::FIX_STATE_SCAN_INCOMPLETE,
+                diag::FIX_STATE_SCAN_INCOMPLETE_MANUAL,
+            )],
+        );
         report.warn();
     }
     Ok(report)
@@ -392,14 +408,8 @@ fn remove(ctx: &mut Ctx, p: &super::StateRemove) -> Result<Report, Fault> {
             create: false,
             create_parents: false,
         },
-        |bytes: Vec<u8>, _initial: bool| {
-            let plan = plan_remove(
-                &bytes,
-                &file_for_parse,
-                now,
-                &nick,
-                status_filter.as_deref(),
-            )?;
+        |bytes: &[u8], _initial: bool| {
+            let plan = plan_remove(bytes, &file_for_parse, now, &nick, status_filter.as_deref())?;
             Ok(match plan {
                 RemovePlan::Write {
                     bytes: new_bytes,
@@ -782,39 +792,28 @@ fn refusal_report(
     if let Some(k) = kind {
         report.kv("type", vec![k.to_string()]);
     }
+    let refused = diag::write_refusal(&diagnostics);
     for d in diagnostics {
         report.diagnostic(d);
+    }
+    if let Some(text) = refused {
+        report.kv("refused", vec![text]);
     }
     report.status = Status::Error;
     report.exit = 1;
     report
 }
 
-/// E-TYPE reason report. The §9-supplement-1 state fix variant is chosen
-/// by the actual type in the shared renderer (A1 repair), not by a `dir`
-/// param's presence; the actual type is never `state` here, so the
-/// plain fix applies.
+/// E-TYPE reason report: `state.agent-besties.md` holds another type. The
+/// renderer's expected-state branch asks to rename it and retry `{argv}`.
 fn e_type_report(dctx: &diag::Context, object: &str, actual: &'static str) -> Report {
     reason_report(
         dctx,
         "state",
         object,
         "E-TYPE",
-        vec![
-            ("actual", actual.into()),
-            ("expected", "state".into()),
-            ("cmd_for_actual", cmd_for_kind(actual).into()),
-        ],
+        vec![("actual", actual.into()), ("expected", "state".into())],
     )
-}
-
-fn cmd_for_kind(kind: &str) -> &'static str {
-    match kind {
-        "post" => "post",
-        "brief" => "brief",
-        "agent-profile" => "profile",
-        _ => "state",
-    }
 }
 
 fn state_notfound(dctx: &diag::Context, object: &str, nick: &str, status: Option<&str>) -> Report {
@@ -870,6 +869,17 @@ fn default_walk_options() -> fsx::walk::Options {
         include: Vec::new(),
         exclude: Vec::new(),
         no_ignore: false,
+    }
+}
+
+/// Fix row after a committed declaration whose conflict scan stopped on an
+/// error that is not an ignore/config source (the `scan` row shows it):
+/// resolve it, then run only the read-only conflict check on `dir_arg`
+/// (§8.3.4-quoted DIR), or the by-hand form when DIR cannot be quoted.
+fn scan_stopped_fix(dir_arg: Option<&str>) -> String {
+    match dir_arg {
+        Some(dir) => diag::FIX_STATE_SCAN_STOPPED.replace("{dir_arg}", dir),
+        None => diag::FIX_STATE_SCAN_STOPPED_MANUAL.to_string(),
     }
 }
 
@@ -1328,12 +1338,101 @@ mod tests {
         assert_eq!(scans[0][0], context::display_file(&dir.join(".ignore")));
         assert_ne!(scans[0][1], "unreadable");
         assert!(!scans[0][1].is_empty());
+        // The fix repairs the named line and reruns only the conflict
+        // check: the declaration must not be written a second time.
+        let fixes = row_values(&report, "fix");
+        assert_eq!(fixes.len(), 1, "{report:?}");
+        let (advice, command) = fixes[0][0]
+            .rsplit_once(": ")
+            .expect("fix ends in a command");
+        assert!(advice.contains("line 1 of"), "{advice}");
+        assert!(
+            command.starts_with("agent-coexist check-state "),
+            "{command}"
+        );
         let written = std::fs::read_to_string(dir.join("state.agent-besties.md")).unwrap();
         assert!(
             written.contains("bob 2026-09-25T12:00:00Z..2026-09-25T20:00:00Z"),
             "committed observing line missing: {written:?}"
         );
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// With the current directory deleted, the post-write conflict scan
+    /// stops on an OS error (global ignore rules need the cwd). The
+    /// declaration stays written and the fix reruns only the read-only
+    /// conflict check on DIR, never the declaration.
+    #[cfg(unix)]
+    #[test]
+    fn declare_keeps_the_write_when_post_write_conflict_scan_hits_an_io_error() {
+        const CHILD: &str = "COEXIST_STATE_SCAN_CWD_GONE_CHILD";
+        let Some(dir) = std::env::var_os(CHILD).map(PathBuf::from) else {
+            let dir = scratch("declare-scan-io");
+            let result = std::process::Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    "ops::state::tests::declare_keeps_the_write_when_post_write_conflict_scan_hits_an_io_error",
+                ])
+                .env(CHILD, &dir)
+                .status()
+                .expect("spawn isolated cwd child");
+            let _ = std::fs::remove_dir_all(&dir);
+            assert!(result.success(), "post-write scan I/O child failed");
+            return;
+        };
+        let sub = dir.join("sub");
+        std::fs::create_dir(&sub).unwrap();
+        let alice = concat!(
+            "# .state\n\n## locked\n",
+            "alice 2026-09-25T11:00:00Z..2026-09-25T14:00:00Z\n",
+        );
+        std::fs::write(sub.join("state.agent-besties.md"), alice).unwrap();
+        let gone = dir.join("gone");
+        std::fs::create_dir(&gone).unwrap();
+        std::env::set_current_dir(&gone).unwrap();
+        std::fs::remove_dir(&gone).unwrap();
+
+        let mut ctx = context::test_ctx(time::parse("2026-09-25T12:00:00Z").unwrap());
+        let report = run(
+            &mut ctx,
+            &StateParams::Declare(StateDeclare {
+                dir: dir.clone(),
+                nick: "bob".into(),
+                status: "locked".into(),
+                for_secs: None,
+            }),
+        )
+        .expect("committed write must not fail as if unwritten");
+        assert_eq!(report.exit, 0, "{report:?}");
+        assert_eq!(report.status, Status::Warn);
+        assert_eq!(row_values(&report, "set").len(), 1, "{report:?}");
+        // The scan row keeps the walker's actual cause against DIR.
+        let scans = row_values(&report, "scan");
+        assert_eq!(scans.len(), 1, "{report:?}");
+        assert_eq!(scans[0][0], context::display_file(&dir));
+        assert_ne!(scans[0][1], "failed");
+        // The fix ends in the read-only conflict check on DIR.
+        let fixes = row_values(&report, "fix");
+        assert_eq!(fixes.len(), 1, "{report:?}");
+        let (_, command) = fixes[0][0]
+            .rsplit_once(": ")
+            .expect("fix ends in a command");
+        assert_eq!(
+            command,
+            format!(
+                "agent-coexist check-state {}",
+                diag::path_operand(dir.as_os_str()).unwrap()
+            )
+        );
+        let written = std::fs::read_to_string(dir.join("state.agent-besties.md")).unwrap();
+        assert!(
+            written.contains("bob 2026-09-25T12:00:00Z..2026-09-25T14:00:00Z"),
+            "committed locked line missing: {written:?}"
+        );
+        assert_eq!(
+            std::fs::read_to_string(sub.join("state.agent-besties.md")).unwrap(),
+            alice
+        );
     }
 
     // -- E-STATE-DIRTY: honest refusal before any splice --

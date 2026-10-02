@@ -55,9 +55,20 @@ fn hex_encode(bytes: &[u8]) -> String {
 /// hasher and, when the target is within `MAX_TARGET_BYTES`, the in-memory
 /// content. Over the limit, the remaining bytes are streamed to the hasher
 /// with no size cap and `content` is `None`. Read errors propagate as the
-/// raw [`io::Error`] — callers embed `{err}` in `E-ENTRY-TARGET`.
+/// raw [`io::Error`] — callers embed `{err}` in `E-ENTRY-TARGET` — except
+/// that a directory is reported as [`io::ErrorKind::IsADirectory`] on every
+/// platform: Windows refuses to open it with the same error as a permission
+/// denial and Unix opens it as a non-regular file, and neither cause text
+/// says that the path names a directory.
 pub fn read_target(path: &Path) -> Result<Target, io::Error> {
-    let mut file = crate::fsx::open_regular(path, OpenOptions::new().read(true))?;
+    let mut file =
+        crate::fsx::open_regular(path, OpenOptions::new().read(true)).map_err(|err| {
+            if std::fs::metadata(path).is_ok_and(|meta| meta.is_dir()) {
+                io::Error::new(io::ErrorKind::IsADirectory, "is a directory, not a file")
+            } else {
+                err
+            }
+        })?;
     let mut hasher = Sha256::new();
     let mut chunk = vec![0u8; HASH_CHUNK_SIZE];
     // In-memory cap: MAX_TARGET_BYTES + 1. Reading the extra byte is how
@@ -281,11 +292,15 @@ pub fn verify(brief_path: &Path, entry: &Entry) -> Verification {
             };
         }
         Err(err) => {
+            let mut diagnostic = Diagnostic::new("E-ENTRY-TARGET", path_prop.line)
+                .with("title", entry.title.clone())
+                .with("target", names::display_text(&normalized))
+                .with("err", err.to_string());
+            if err.kind() == io::ErrorKind::IsADirectory {
+                diagnostic = diagnostic.with("is_dir", "1");
+            }
             return Verification {
-                diagnostics: vec![Diagnostic::new("E-ENTRY-TARGET", path_prop.line)
-                    .with("title", entry.title.clone())
-                    .with("target", names::display_text(&normalized))
-                    .with("err", err.to_string())],
+                diagnostics: vec![diagnostic],
                 ..Verification::empty("unchecked", Some("target unreadable"))
             };
         }
@@ -337,7 +352,8 @@ pub fn verify(brief_path: &Path, entry: &Entry) -> Verification {
             target: Some(target),
             diagnostics: vec![Diagnostic::new("W-ENTRY-STALE", entry.head_line)
                 .with("title", entry.title.clone())
-                .with("reason", "regex not found")],
+                .with("reason", "regex not found")
+                .with("target_arg", path_prop.value.clone())],
             ..Verification::empty("stale", Some("regex not found"))
         };
     }
@@ -457,6 +473,17 @@ mod tests {
             "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
         );
         let _ = fs::remove_file(&full);
+    }
+
+    /// A directory target must be named as such on every platform, so the
+    /// report gives the path repair instead of a permission/space retry.
+    #[test]
+    fn read_target_reports_directory_as_is_a_directory() {
+        let dir = std::env::temp_dir().join(format!("coexist-hash-dir-{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        let err = read_target(&dir).unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::IsADirectory);
+        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]

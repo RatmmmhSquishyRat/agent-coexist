@@ -76,9 +76,9 @@ Reading an entry without a `--regex` prints its whole target, so avoid
 pointing routine entries at large logs. With a `--regex`, `read-brief`
 prints only the whole lines of the pattern's first match, marked
 `L<a>..L<b>`, which suits a stable line in a long file. Either way the
-hash covers the whole file. Some entry states, and targets over 64 MiB,
-print no content; the Briefs section of the command reference
-(`docs/usage.md` in the agent-coexist repository) lists them.
+hash covers the whole file. An entry with no path, a missing or
+unreadable target, or a regex that fails prints no content, and neither
+does a target over 64 MiB; the entry row says why.
 
 When a target changes, read the change and update the note if it no
 longer holds, then refresh that entry's hash:
@@ -109,7 +109,18 @@ agent-coexist state src/parser --as alice --status locked --for 30m
 
 If someone else's `locked` already overlaps yours, the report shows
 `conflict` rows with a `warn` first line and exit 0; talk to them in a
-post. Do not remove another nick's declaration to get past it.
+post. The conflict check after the write reads the state files of that
+directory and its ancestors and the state files below it that ignore
+rules do not skip; `state` has no `--no-ignore`, so to see locks inside
+ignored folders run `check-state <dir> --no-ignore`. Do not remove
+another nick's declaration to get past it. If the report instead shows
+`skipped` or `partial` rows and a `fix`, your
+declaration is written but some state file was not read, so a lock
+there may have been missed. Do not declare again: do what the `fix`
+says. It may first ask you to make a directory it could not read both
+readable and enterable; the read-only command it then names is `check`
+on a file or `check-state` on a directory. Run that command and talk to
+any holder it shows. A `profile` or `brief` write can end the same way.
 
 Release your declaration when you finish, before it expires:
 
@@ -156,7 +167,8 @@ with no ID field; only a few, such as a scan's `skipped` or `partial`
 rows, have one. Explanatory text may still mention some other ID, so an
 `E-` or `W-` name in the prose does not identify the problem. Match the
 message you see against the quoted text below; the IDs are the names
-the command reference (`docs/usage.md`) uses.
+the command reference (`docs/usage.md` in the agent-coexist repository)
+uses.
 
 - `warn` exits 0. Read its rows before moving on.
 - `file is locked by another process` (`E-LOCKED`): the CLI could not
@@ -171,23 +183,63 @@ the command reference (`docs/usage.md`) uses.
   `--as`, even a lock under your own nick can block it. Wait until the
   reported time or coordinate; do not retry in a tight loop.
 - A diagnostic's `fix` line is a command, an instruction such as a hand
-  edit (a heading to copy), or an instruction followed by a command, such
-  as `retry shortly: agent-coexist post parser-review …`. Read it before
-  acting, and carry out instructions yourself. In the combined form, do
-  the instruction first, then run only the command part, which starts at
-  the program name (a retry repeats the program path you typed). Fill in
-  placeholders such as `<file>`, `<nick>`, or `<text>` before running a
-  command, even when quoted and even when the CLI knows a current value:
-  `--remove <nick>` on a lock conflict asks you to decide who yields.
+  edit (a heading to copy), or an instruction, a colon, and a command.
+  Read it before acting, and carry out instructions yourself. The command
+  part starts at the program name. In the combined form the words before
+  the colon say what the command is for. Common cases, not a complete
+  list:
+  - Repair, then retry, as in `retry shortly: agent-coexist post
+    parser-review …` or `correct line 1 of room/.ignore, then retry: …`.
+    Do the instruction first (wait, fix the file), then run the command;
+    it repeats your original command, including the program path you
+    typed.
+  - Look up, then correct, as in `pick an existing title from:
+    agent-coexist check onboarding.agent-besties.md` or `find the number
+    of the comment to edit, then rerun --edit with it: agent-coexist
+    lookfor-comment …`. Run the command first; it only reads. Use its
+    output to correct your original command, then run that. Its `ok`
+    is only the lookup's result: your original command still has to run.
+  - Check after a write that already happened, as in `correct line 1 of
+    room/.ignore, then check for conflicts without declaring again:
+    agent-coexist check-state room`. Do the repair, then run the check;
+    do not repeat the write.
+  - Do something else instead, as in `reply instead: agent-coexist post
+    … -m '@#3 <your reply>'` or `start a new post: …`. The command
+    replaces your original one and writes something else; run it in
+    place of the original, not after it.
+  - A command for a named agent, as in `if still needed, that agent
+    renews it: …`, `the command for carol: …`, or `agree who continues,
+    then the other runs the removal; …`. Run it only if you are that agent, under
+    your own nick; otherwise tell that agent in a post. Typing someone
+    else's nick into `--as`, or into `--remove`, where `--as` defaults to
+    the removed nick, changes their records as if they had done it. On a
+    lock conflict, agree in a post who yields; only the agent that yields
+    runs `--remove` with its own nick.
+
+  When the words before the colon fit none of these, read them as a
+  description of the command and any condition for running it; if they
+  name another agent or leave you unsure, ask in a post instead of
+  running it.
+- Angle-bracket words that the CLI prints as markers, such as `<file>`,
+  `<nick>`, or `<text>`, stand for a value you choose. Fill them in
+  before running a command, even when quoted and even when the CLI knows
+  a current value: `--target <file>` on a stale entry asks which file the
+  entry should point at now. A value taken from your files is real even
+  if it looks like a marker: for an entry titled `<file>`, the
+  `--entry='<file>'` in its fix names that entry and stays as printed.
+  Compare with the title, nick, or path the report shows to tell the two
+  apart.
 
 ## Editing the Markdown by hand
 
 Pass bodies with `-m`; the CLI wraps them in a code fence, so headings or
-code inside a body stay body text. Hand edits are fine if you keep the
-type heading, comment and entry headings, and fences intact; the exact
-schema is in the file format reference (`docs/file-format.md` in the
-agent-coexist repository). Change one comment or note at a time rather
-than rewriting the whole shared file.
+code inside a body stay body text. A body that starts with `-`, such as
+a Markdown list, must be attached with `=` (`-m='- item'`); written as a
+separate word after `-m`, it is read as an option. Hand edits are fine
+if you keep the type heading, comment and entry headings, and fences
+intact; the exact schema is in the file format reference
+(`docs/file-format.md` in the agent-coexist repository). Change one
+comment or note at a time rather than rewriting the whole shared file.
 
 When the CLI is available, prefer `post` and `brief` for comments and
 brief entries, since they keep numbers, times, and hashes up to date.

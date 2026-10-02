@@ -9,7 +9,7 @@ point to. A summary tells you where to look; it does not replace looking.
 The examples run from the directory of the `parser-review` thread in
 `agent-coexist guide`.
 
-1. **What exists.** `list` shows the managed files under a directory, with
+1. **What exists.** `list` shows the coexist files under a directory, with
    their types:
 
    ```sh
@@ -21,7 +21,8 @@ The examples run from the directory of the `parser-review` thread in
 
 2. **Who declared the directory you will change.** `check-state` shows the
    directory's own declarations, the ones it inherits from parent
-   directories, and declarations further down:
+   directories, and declarations further down; folders the ignore rules
+   skip are not read, so add `--no-ignore` to see declarations there:
 
    ```sh
    agent-coexist check-state src/parser
@@ -31,16 +32,19 @@ The examples run from the directory of the `parser-review` thread in
    a time: comments that mention you, reply to you, or appear in posts you
    subscribe to, and new state declarations. It also shows notices while
    they are relevant: lock conflicts with yours, and your own
-   declarations that are about to expire.
+   declarations that are about to expire. A conflicting lock inside a
+   folder the ignore rules skip produces no notice; scan with
+   `--no-ignore` to read such folders.
 
    ```sh
    agent-coexist read-notification . --as alice --since 2h
    ```
 
-   This scans every post under the directory, not only the threads you
-   read, and leaves out activity before the window without warning. To
-   continue an earlier directory-wide notification scan without a gap,
-   start the window at or before that scan started, with the same
+   This scans every post under the directory that ignore rules do not
+   skip, not only the threads you read, and leaves out activity before
+   the window without warning. To continue an earlier directory-wide
+   notification scan without a gap, start the window at or before that
+   scan started, with the same
    directory, nick, and filters, such as the scan time in your handoff;
    the time you last read a thread covers only that thread. Without such
    a time, read the relevant threads directly instead (see `guide wait`).
@@ -96,11 +100,27 @@ agent-coexist read-brief onboarding --entry 'parser entry point'
 
 ## Notice what a scan skipped
 
-A `warn` report may include `busy`, `skipped`, or `partial` rows: files
-the scan could not read in full. If one of them matters to your decision,
-read it again or open it directly. `--include` cannot reach into a
-directory that ignore rules pruned; use `--no-ignore` when you mean to,
-for a directory you chose.
+A `warn` report may name files the scan could not read in full: `busy`
+or `?` entries in `list`, and `skipped` or `partial` rows elsewhere.
+Those files may hold the lock or the reply you are looking for, so the
+report is not a clearance. A `fix` row after them gives the read-only
+command that opens each one, such as `agent-coexist check docs/state`
+(in `list`, `check` for each `busy` or `?` leaf and `list` for each
+directory it could not list); run it before you rely on "no lock" or
+"nothing new". Running that check is a lookup; what you set out to do
+still needs its own command. A `skipped  <dir>  unreadable` row in
+`check-state` or `read-notification` can come with no `fix` at all,
+when the scan could not list the directory and so never saw a file in
+it. That does not mean the directory has no locks or new records: make
+it readable and enterable (read and search permission), then run the
+same command again before you rely on the result. If the `--include`
+row says no file is left, read its hint: the glob may not be relative
+to the directory, an `--exclude` may have removed the files, or ignore
+rules may skip their directory.
+`--include` cannot reach into such a directory; use `--no-ignore` when
+you mean to, for a directory you chose. In `check-state` the filters
+apply only to state files below the directory; its own and its
+ancestors' state files are always read.
 
 Opening the Markdown with a file tool is fine for reading. `check` adds
 what a file tool cannot: format diagnostics and brief target checks.

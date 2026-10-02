@@ -13,14 +13,15 @@
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
-use super::{dir_error, include_hints, sort_diagnostics};
+use super::{canonicalize_notes, dir_error, include_hints, sort_diagnostics, INCLUDE_HINT_EMPTY};
 use crate::consts;
+use crate::diag;
 use crate::doc;
 use crate::error::{Diagnostic, Fault};
 use crate::fsx;
 use crate::names;
 use crate::ops::context::{self, Ctx};
-use crate::ops::shared::{self, ScanIssue, StateFileInfo};
+use crate::ops::shared::{self, Follow, ScanIssue, StateFileInfo};
 use crate::ops::ReadNotificationParams;
 use crate::report::Report;
 use crate::time;
@@ -57,17 +58,38 @@ struct AuxRecord {
     source: PathBuf,
     path: String,
     key: &'static str,
-    cause: String,
+    /// Cause columns: `busy` / `unreadable` / `<ID>`, or `<ID>` and `L<n>`.
+    causes: Vec<String>,
+    /// What the reader opens to see what was not read.
+    follow: Follow,
 }
 
 impl AuxRecord {
-    fn new(source: &Path, path: &str, key: &'static str, cause: String) -> Self {
+    fn new(
+        source: &Path,
+        path: &str,
+        key: &'static str,
+        causes: Vec<String>,
+        follow: Follow,
+    ) -> Self {
         Self {
             source: source.to_path_buf(),
             path: path.to_string(),
             key,
-            cause,
+            causes,
+            follow,
         }
+    }
+
+    /// `skipped <dir> unreadable`: a directory that could not be read or entered.
+    fn unreadable_dir(source: &Path, dir: &Path) -> Self {
+        Self::new(
+            source,
+            &context::object_of_dir(dir),
+            "skipped",
+            vec!["unreadable".to_string()],
+            Follow::Unreadable(dir.to_path_buf()),
+        )
     }
 }
 
@@ -103,65 +125,53 @@ pub fn read_notification(ctx: &mut Ctx, p: &ReadNotificationParams) -> Result<Re
             Ok(reserved) => reserved,
             Err(_) => {
                 let source = shared::directory_identity(parent);
-                aux.push(AuxRecord::new(
-                    &source,
-                    &context::object_of_dir(parent),
-                    "skipped",
-                    "unreadable".to_string(),
-                ));
+                aux.push(AuxRecord::unreadable_dir(&source, parent));
                 false
             }
         };
-        let (issue_source, issue_path) = if is_reserved {
+        let (issue_source, issue_path, follow) = if is_reserved {
             // Root, ancestor and descendant metadata share a native source
             // identity, even when H1 names another kind.
             let source = state_source_path(file);
             seen_state.insert(source.clone());
-            (source, context::object_of_dir(parent))
+            (
+                source,
+                context::object_of_dir(parent),
+                Follow::StateOf(parent.to_path_buf()),
+            )
         } else {
-            (file.clone(), path_key.clone())
+            (file.clone(), path_key.clone(), Follow::File(file.clone()))
+        };
+        let skipped = |cause: &str| {
+            AuxRecord::new(
+                &issue_source,
+                &issue_path,
+                "skipped",
+                vec![cause.to_string()],
+                follow.clone(),
+            )
         };
         match fsx::read(file, consts::SCAN_READ_WAIT_MS, None) {
-            Err(Fault::Reason { .. }) => {
-                aux.push(AuxRecord::new(
-                    &issue_source,
-                    &issue_path,
-                    "skipped",
-                    "busy".to_string(),
-                ));
-            }
+            Err(Fault::Reason { .. }) => aux.push(skipped("busy")),
             Err(Fault::Diagnostics(diags)) => {
-                let id = blocking_id(&diags).unwrap_or("E-TOO-LARGE");
-                aux.push(AuxRecord::new(
-                    &issue_source,
-                    &issue_path,
-                    "skipped",
-                    id.to_string(),
-                ));
+                aux.push(skipped(blocking_id(&diags).unwrap_or("E-TOO-LARGE")));
             }
-            Err(_) => {
-                aux.push(AuxRecord::new(
-                    &issue_source,
-                    &issue_path,
-                    "skipped",
-                    "unreadable".to_string(),
-                ));
-            }
+            Err(_) => aux.push(skipped("unreadable")),
             Ok(bytes) => match doc::parse(bytes, file, now) {
                 Err(Fault::Diagnostics(diags)) => {
-                    let id = blocking_id(&diags).unwrap_or("E-UTF8");
-                    aux.push(AuxRecord::new(
-                        &issue_source,
-                        &issue_path,
-                        "skipped",
-                        id.to_string(),
-                    ));
+                    aux.push(skipped(blocking_id(&diags).unwrap_or("E-UTF8")));
                 }
                 Err(f) => return Err(f),
                 Ok(parsed) => {
                     if is_reserved || parsed.kind == Some(doc::Kind::State) {
                         let info = shared::state_file_info(file, &parsed);
-                        append_state_issue(&mut aux, &issue_source, &issue_path, &info.issue);
+                        append_state_issue(
+                            &mut aux,
+                            &issue_source,
+                            &issue_path,
+                            &follow,
+                            &info.issue,
+                        );
                         if parsed.kind == Some(doc::Kind::State) {
                             // Misnamed .state files still provide their real
                             // history and parse diagnostics, never directory locks.
@@ -173,29 +183,23 @@ pub fn read_notification(ctx: &mut Ctx, p: &ReadNotificationParams) -> Result<Re
                     }
                     match parsed.kind {
                         None if !is_reserved => {
-                            let id = blocking_id(&parsed.diagnostics).unwrap_or("E-H1");
-                            aux.push(AuxRecord::new(
-                                &issue_source,
-                                &issue_path,
-                                "skipped",
-                                id.to_string(),
-                            ));
+                            aux.push(skipped(blocking_id(&parsed.diagnostics).unwrap_or("E-H1")));
                         }
                         Some(doc::Kind::Post) => {
                             if let Some(d) = first_diag(&parsed.diagnostics, &SKIP_CLASS) {
-                                aux.push(AuxRecord::new(
-                                    &issue_source,
-                                    &issue_path,
-                                    "skipped",
-                                    d.id.to_string(),
-                                ));
+                                aux.push(skipped(d.id));
                             } else {
                                 if let Some(d) = first_diag(&parsed.diagnostics, &PARTIAL_CLASS) {
+                                    let (key, causes) = shared::issue_row(&ScanIssue::Partial {
+                                        id: d.id,
+                                        line: d.line,
+                                    });
                                     aux.push(AuxRecord::new(
                                         &issue_source,
                                         &issue_path,
-                                        "partial",
-                                        format!("{} L{}", d.id, d.line),
+                                        key,
+                                        causes,
+                                        follow.clone(),
                                     ));
                                 }
                                 post_events(&parsed, &p.nick, since, now, &path_key, &mut events);
@@ -216,14 +220,8 @@ pub fn read_notification(ctx: &mut Ctx, p: &ReadNotificationParams) -> Result<Re
             Ok(None) => continue,
             Err(Fault::Io { .. }) => {
                 // §10.1.6: an unreadable ancestor is reported, not fatal.
-                let dir_display = context::object_of_dir(&ancestor);
                 let source = shared::directory_identity(&ancestor);
-                aux.push(AuxRecord::new(
-                    &source,
-                    &dir_display,
-                    "skipped",
-                    "unreadable".to_string(),
-                ));
+                aux.push(AuxRecord::unreadable_dir(&source, &ancestor));
                 continue;
             }
             Err(f) => return Err(f),
@@ -233,7 +231,13 @@ pub fn read_notification(ctx: &mut Ctx, p: &ReadNotificationParams) -> Result<Re
             continue;
         }
         let info = shared::read_state_file(ctx, &state_file);
-        append_state_issue(&mut aux, &canonical, &info.display_dir, &info.issue);
+        append_state_issue(
+            &mut aux,
+            &canonical,
+            &info.display_dir,
+            &Follow::StateOf(ancestor.clone()),
+            &info.issue,
+        );
         seen_state.insert(canonical);
         state_events(&info, &p.nick, since, now, &mut events, &mut tie);
         state_infos.push(info);
@@ -243,12 +247,7 @@ pub fn read_notification(ctx: &mut Ctx, p: &ReadNotificationParams) -> Result<Re
     let unreadable = scanned.unreadable_dirs;
     for dir in &unreadable {
         let source = shared::directory_identity(dir);
-        aux.push(AuxRecord::new(
-            &source,
-            &context::object_of_dir(dir),
-            "skipped",
-            "unreadable".to_string(),
-        ));
+        aux.push(AuxRecord::unreadable_dir(&source, dir));
     }
 
     // Conflicts and own-entry records on the assembled scope.
@@ -285,28 +284,50 @@ pub fn read_notification(ctx: &mut Ctx, p: &ReadNotificationParams) -> Result<Re
 
     dedup_aux(&mut aux);
     let aux_count = aux.len();
+    let mut unread: Vec<Follow> = Vec::new();
     for row in aux {
-        report.record(row.key, vec![row.path, row.cause], 2, consts::KIND_WIDTH);
+        let mut values = Vec::with_capacity(1 + row.causes.len());
+        values.push(row.path);
+        values.extend(row.causes);
+        report.record(row.key, values, 2, consts::KIND_WIDTH);
+        if !matches!(row.follow, Follow::Unreadable(_)) {
+            unread.push(row.follow);
+        }
+    }
+    // Skipped or partial files may hold records this report does not show:
+    // name each one to open (one in an unreadable directory says to make the
+    // directory readable first). Unreadable directories with no known file
+    // inside already say what blocks them.
+    if !unread.is_empty() {
+        report.kv(
+            "fix",
+            vec![shared::scan_fix(
+                &unread,
+                diag::FIX_NOTIFY_UNREAD,
+                diag::FIX_NOTIFY_UNREAD_MANUAL,
+            )],
+        );
     }
 
     // §10.5.2: lexical identity fallback warns, but is metadata rather
-    // than a notification or skipped/partial record (§8.1.10).
-    for dir in &scope.canonicalize_failed {
-        report.record(
-            "canonicalize",
-            vec![context::object_of_dir(dir), "failed".to_string()],
-            2,
-            consts::KIND_WIDTH,
-        );
-    }
-    let include_warn = include_hints(&mut report, &scanned.zero_includes);
+    // than a notification or skipped/partial record (§8.1.10). The fix
+    // names existence and ancestor search permission before retrying.
+    let canonicalize_warn =
+        canonicalize_notes(&mut report, &scope.canonicalize_failed, consts::KIND_WIDTH);
+    let include_warn = include_hints(
+        &mut report,
+        &scanned.zero_includes,
+        &p.walk,
+        shared::ignore_in_play(&scanned.ignore_sources),
+        INCLUDE_HINT_EMPTY,
+    );
 
     report.total(record_count + aux_count);
     // §8.1.11: conflict rows (row-keyed), skipped / partial rows, scope
     // warnings, and the include hint all warn.
     if events.iter().any(|event| event.key == "conflict")
         || aux_count > 0
-        || !scope.canonicalize_failed.is_empty()
+        || canonicalize_warn
         || include_warn
     {
         report.warn();
@@ -457,15 +478,13 @@ fn append_state_issue(
     aux: &mut Vec<AuxRecord>,
     source: &Path,
     path: &str,
+    follow: &Follow,
     issue: &Option<ScanIssue>,
 ) {
-    let (key, cause) = match issue {
-        Some(ScanIssue::Busy) => ("skipped", "busy".to_string()),
-        Some(ScanIssue::Blocking(id)) => ("skipped", id.to_string()),
-        Some(ScanIssue::Partial { id, line }) => ("partial", format!("{id} L{line}")),
-        None => return,
-    };
-    aux.push(AuxRecord::new(source, path, key, cause));
+    if let Some(issue) = issue {
+        let (key, causes) = shared::issue_row(issue);
+        aux.push(AuxRecord::new(source, path, key, causes, follow.clone()));
+    }
 }
 
 fn state_source_path(file: &Path) -> PathBuf {
@@ -491,19 +510,59 @@ fn blocking_id(diags: &[Diagnostic]) -> Option<&'static str> {
 /// Deduplicate only repeat encounters of the same native source and cause,
 /// then order the displayed rows (§10.6.5). Distinct sources remain distinct
 /// records even when their display paths, row kinds and causes all match.
+///
+/// One merge, matching `shared::scan_rows`: a state file that could not be
+/// opened (`skipped <dir> unreadable`) in a directory the walk could not read
+/// either displays exactly like that directory's row. It is one row whose
+/// next step names the state file and says the directory must be made
+/// readable first.
 fn dedup_aux(aux: &mut Vec<AuxRecord>) {
     aux.sort_by(|a, b| {
         a.source
             .cmp(&b.source)
             .then_with(|| a.key.cmp(b.key))
-            .then_with(|| a.cause.cmp(&b.cause))
+            .then_with(|| a.causes.cmp(&b.causes))
     });
-    aux.dedup_by(|a, b| a.source == b.source && a.key == b.key && a.cause == b.cause);
+    aux.dedup_by(|a, b| a.source == b.source && a.key == b.key && a.causes == b.causes);
+    let unreadable_state = |row: &AuxRecord| {
+        matches!(row.follow, Follow::StateOf(_))
+            && row.key == "skipped"
+            && row.causes.len() == 1
+            && row.causes[0] == "unreadable"
+    };
+    let merged: HashMap<PathBuf, PathBuf> = aux
+        .iter()
+        .filter(|row| unreadable_state(row))
+        .filter_map(|row| match &row.follow {
+            Follow::StateOf(dir) => Some((row.source.parent()?.to_path_buf(), dir.clone())),
+            _ => None,
+        })
+        .filter(|(identity, _)| {
+            aux.iter()
+                .any(|row| matches!(row.follow, Follow::Unreadable(_)) && row.source == *identity)
+        })
+        .collect();
+    if !merged.is_empty() {
+        aux.retain(|row| {
+            !(unreadable_state(row)
+                && row
+                    .source
+                    .parent()
+                    .is_some_and(|dir| merged.contains_key(dir)))
+        });
+        for row in aux.iter_mut() {
+            if matches!(row.follow, Follow::Unreadable(_)) {
+                if let Some(dir) = merged.get(&row.source) {
+                    row.follow = Follow::StateInUnreadable(dir.clone());
+                }
+            }
+        }
+    }
     aux.sort_by(|a, b| {
         a.path
             .cmp(&b.path)
             .then_with(|| a.key.cmp(b.key))
-            .then_with(|| a.cause.cmp(&b.cause))
+            .then_with(|| a.causes.cmp(&b.causes))
     });
 }
 
@@ -630,7 +689,8 @@ mod tests {
                 // The post's malformed remainder is a different cause, not
                 // a duplicate of the reserved-name metadata type failure.
                 assert_eq!(partial.len(), 1);
-                assert!(partial[0][1].starts_with("E-HEAD "));
+                assert_eq!(partial[0][1], "E-HEAD");
+                assert!(partial[0][2].starts_with('L'));
             } else {
                 assert!(mentions.is_empty());
                 assert!(partial.is_empty());
@@ -719,7 +779,8 @@ mod tests {
                 partial[0][0],
                 context::object_of_path(&sub.join("a.agent-besties.md"))
             );
-            assert!(partial[0][1].starts_with("W-STATE-ENTRY "));
+            assert_eq!(partial[0][1], "W-STATE-ENTRY");
+            assert!(partial[0][2].starts_with('L'));
         }
         let _ = std::fs::remove_dir_all(&dir);
     }

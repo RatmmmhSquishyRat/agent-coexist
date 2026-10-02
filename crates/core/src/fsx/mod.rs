@@ -8,10 +8,12 @@
 //!   (bounded by `MAX_MANAGED_FILE_BYTES`) → release. Never reads without holding the
 //!   lock.
 //! * writes: open (read+write) or `create_new` → exclusive lock → same-file
-//!   identity re-check → read all bytes → run the caller's plan → identity
-//!   re-check → `seek(0)` → `write_all` → `set_len` (write before truncate) →
-//!   `flush` → `sync_data` → release. Deletion (`Mutation::Delete`) also
-//!   rechecks identity and happens on the held lock via `remove_file`,
+//!   identity re-check → read all bytes → run the caller's plan on them →
+//!   identity re-check → in-place commit through the locked handle
+//!   (`commit`: growth first, then the changed bytes, then shrink, then
+//!   `sync_data`; a failure before `sync_data` restores the previous bytes
+//!   read under the same lock) → release. Deletion (`Mutation::Delete`)
+//!   also rechecks identity and happens on the held lock via `remove_file`,
 //!   never via truncation.
 //!
 //! Error signalling (consumed by `ops`):
@@ -29,6 +31,12 @@
 //! * content beyond `MAX_MANAGED_FILE_BYTES` (and splice results beyond it)
 //!   surface as `Fault::Diagnostics([E-TOO-LARGE])` with `params = {limit}`,
 //!   leaving the file untouched.
+//! * a failed write whose file shows its previous content again (never
+//!   changed, or restored) is `Fault::Io { action: "write" }`, or E-LOCKED
+//!   for write-stage lock contention: running the command again is safe.
+//!   A write that leaves the file changed or unconfirmed is
+//!   `Fault::WriteUncertain`, whatever the cause: running it again could
+//!   apply the change twice.
 //! * `mutate` on a missing file with `create = false` returns
 //!   `Reason { id: "E-FILE-MISSING" }` (params `{file}` = cwd-relative
 //!   display); the `state --remove` → `E-STATE-NOTFOUND` translation belongs
@@ -41,14 +49,18 @@
 //! permissions and instability are errors. The base `read` never depends on
 //! it.
 
+mod commit;
 pub mod walk;
 
+use std::borrow::Cow;
+use std::ffi::{OsStr, OsString};
 use std::fs::{File, OpenOptions, TryLockError};
-use std::io::{self, Read, Seek, SeekFrom, Write};
+use std::io::{self, Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
+use self::commit::CommitError;
 use crate::consts;
 use crate::error::{Diagnostic, Fault};
 use crate::names;
@@ -259,7 +271,7 @@ pub struct WritePolicy {
 /// What the caller's plan decided to do with the file.
 #[derive(Debug)]
 pub enum Mutation {
-    /// Replace the file's content with these bytes (write before truncate).
+    /// Replace the file's content with these bytes, in place (`commit`).
     Write(Vec<u8>),
     /// Leave the file's bytes exactly as they are.
     Unchanged,
@@ -300,7 +312,8 @@ struct CreatedDir {
 /// initial-content mode) and `initial == true` exactly when this call is
 /// supposed to produce complete initial content (fresh creation or takeover
 /// of an abandoned zero-byte file); it returns the splice result and a value
-/// to pass through. `plan` must not re-create content or perform I/O on the
+/// to pass through. `plan` borrows the bytes, which stay the restore source
+/// for a failed commit; it must not re-create content or perform I/O on the
 /// target itself. All of the following live here and only here:
 ///
 /// * `create_new` followed by a mandatory re-read: non-empty means another
@@ -325,11 +338,14 @@ struct CreatedDir {
 ///   identity capture are separate operations, as are the final identity
 ///   checks and unlink calls; these short windows against non-cooperating
 ///   replacements are not claimed as atomic ownership guarantees;
-/// * write before `set_len`, then `flush` and `sync_data`.
+/// * in-place commit through the held handle (`commit`); a failure before
+///   `sync_data` restores the previous bytes, and a creation is then empty
+///   again and rolled back as above. A failed restore or `sync_data` is
+///   [`Fault::WriteUncertain`] and keeps the file and its directories.
 pub fn mutate<T>(
     path: &Path,
     policy: WritePolicy,
-    mut plan: impl FnMut(Vec<u8>, bool) -> Result<(Mutation, T), Fault>,
+    mut plan: impl FnMut(&[u8], bool) -> Result<(Mutation, T), Fault>,
 ) -> Result<WriteResult<T>, Fault> {
     let deadline = Deadline::new(policy.wait_ms);
     let mut reopens = 0usize;
@@ -575,17 +591,20 @@ pub fn mutate<T>(
 /// `initial` is the create/takeover flag passed to `plan`; `created_by_us`
 /// drives the creation rollback ([`fail_with_rollback`]). `created_dirs` is
 /// reported on success and rolled back on failure.
-fn run_plan<T>(
+fn run_plan<T, P>(
     mut file: LockedFile,
     path: &Path,
     bytes: Vec<u8>,
     initial: bool,
     created_by_us: bool,
     created_dirs: Vec<CreatedDir>,
-    plan: &mut dyn FnMut(Vec<u8>, bool) -> Result<(Mutation, T), Fault>,
-) -> Result<WriteResult<T>, Fault> {
+    plan: &mut P,
+) -> Result<WriteResult<T>, Fault>
+where
+    P: FnMut(&[u8], bool) -> Result<(Mutation, T), Fault>,
+{
     let outcome = (|| {
-        let (mutation, value) = plan(bytes, initial)?;
+        let (mutation, value) = plan(&bytes, initial)?;
         if matches!(&mutation, Mutation::Write(_) | Mutation::Delete)
             && !same_file_identity(&file.0, path)?
         {
@@ -599,13 +618,16 @@ fn run_plan<T>(
                 if new_bytes.len() > consts::MAX_MANAGED_FILE_BYTES {
                     return Err(too_large_fault());
                 }
-                let new_len = new_bytes.len() as u64;
-                write_step(path, || file.0.seek(SeekFrom::Start(0)).map(|_| ()))?;
-                // Write before truncate: partial bytes survive any failure.
-                write_step(path, || file.0.write_all(&new_bytes))?;
-                write_step(path, || file.0.set_len(new_len))?;
-                write_step(path, || file.0.flush())?;
-                write_step(path, || file.0.sync_data())?;
+                // Through the held handle, never reopened by path: a file
+                // renamed meanwhile still gets its own bytes back.
+                commit::commit(&mut file.0, &bytes, &new_bytes).map_err(|e| match e {
+                    CommitError::Restored(e) => write_fault(path, e),
+                    CommitError::Uncertain { cause, left } => Fault::WriteUncertain {
+                        path: path.to_path_buf(),
+                        cause,
+                        left,
+                    },
+                })?;
                 Ok((value, initial, false))
             }
             Mutation::Unchanged => Ok((value, initial, false)),
@@ -652,7 +674,8 @@ fn run_plan<T>(
 /// then verified empty directories. An unlocked handle cannot enter this
 /// function. Existing/adopted files, nonempty partial writes and unknown
 /// identities retain their directories as well. Real cleanup failures
-/// surface as `Fault::Io` instead of hiding behind `fault`.
+/// surface as `Fault::Io` instead of hiding behind `fault`. A
+/// [`Fault::WriteUncertain`] file is kept as reported, with its directories.
 ///
 /// File handles are closed before directory cleanup; directory identity
 /// handles are closed inner→outer so Windows pending deletion completes
@@ -665,6 +688,9 @@ fn fail_with_rollback(
     created_by_us: bool,
     created_dirs: Vec<CreatedDir>,
 ) -> Fault {
+    if matches!(fault, Fault::WriteUncertain { .. }) {
+        return fault;
+    }
     if let Some(file) = file {
         match rollback_created_file(file, path, created_by_us) {
             Ok(true) => {}
@@ -754,6 +780,174 @@ fn is_current_created_dir(dir: &CreatedDir) -> Result<bool, Fault> {
 }
 
 // ---------------------------------------------------------------------------
+// directory-entry spelling
+// ---------------------------------------------------------------------------
+
+/// `path` with its final component spelled as the directory lists it.
+///
+/// On Windows and macOS an operand such as `ROOM/STANDUP` opens
+/// `room/standup.agent-besties.md`; the file name that `list` shows and
+/// that `W-NAME` compares is the entry's own spelling, not the typed one.
+/// One native lookup of the final component (Windows `FindFirstFileW`,
+/// macOS `getattrlist(ATTR_CMN_NAME)`), neither of which follows a final
+/// symlink: an alias keeps its own name. Only a spelling that differs from
+/// the typed name by case is adopted. Everything else — no such lookup on
+/// this platform (Linux names are case-sensitive), a failed lookup, or a
+/// different name (a Windows 8.3 short-name alias) — keeps `path` as
+/// typed, which is never a reason to drop a warning.
+pub fn listed_path(path: &Path) -> Cow<'_, Path> {
+    let Some(typed) = path.file_name() else {
+        return Cow::Borrowed(path);
+    };
+    match listed_name(path) {
+        Some(listed) if listed != typed && same_ignoring_case(&listed, typed) => {
+            Cow::Owned(path.with_file_name(listed))
+        }
+        _ => Cow::Borrowed(path),
+    }
+}
+
+/// Same name up to letter case. Names that are not Unicode never compare
+/// equal here, so a lossy decoding cannot make two names look alike.
+fn same_ignoring_case(a: &OsStr, b: &OsStr) -> bool {
+    match (a.to_str(), b.to_str()) {
+        (Some(a), Some(b)) => a
+            .chars()
+            .flat_map(char::to_lowercase)
+            .eq(b.chars().flat_map(char::to_lowercase)),
+        _ => false,
+    }
+}
+
+#[cfg(windows)]
+fn listed_name(path: &Path) -> Option<OsString> {
+    use std::os::windows::ffi::{OsStrExt, OsStringExt};
+
+    type Handle = *mut core::ffi::c_void;
+    const INVALID_HANDLE_VALUE: Handle = !0usize as Handle;
+
+    /// Win32 `WIN32_FIND_DATAW`; `FILETIME` is two `u32`s. Only the name
+    /// is read; the other fields size the struct.
+    #[repr(C)]
+    struct FindData {
+        _attributes: u32,
+        _times: [[u32; 2]; 3],
+        _size: [u32; 2],
+        _reserved: [u32; 2],
+        file_name: [u16; 260],
+        _alternate_file_name: [u16; 14],
+    }
+
+    #[link(name = "kernel32")]
+    extern "system" {
+        fn FindFirstFileW(file_name: *const u16, find_data: *mut FindData) -> Handle;
+        fn FindClose(find_file: Handle) -> i32;
+    }
+
+    // `* ? < > "` are wildcards to FindFirstFileW and could match another
+    // entry; no Windows file name contains them (or a NUL, which would cut
+    // the lookup short), so such a final component has no listed spelling.
+    // Only the final component is checked: `\\?\` prefixes contain `?`.
+    if path
+        .file_name()?
+        .encode_wide()
+        .any(|c| matches!(c, 0 | 0x2A | 0x3F | 0x3C | 0x3E | 0x22))
+    {
+        return None;
+    }
+    if path.as_os_str().encode_wide().any(|c| c == 0) {
+        return None;
+    }
+    let wide: Vec<u16> = path.as_os_str().encode_wide().chain(Some(0)).collect();
+    let mut data = std::mem::MaybeUninit::<FindData>::uninit();
+    // SAFETY: `wide` is NUL-terminated and outlives the call; `data` is
+    // writable storage of the exact struct the API fills.
+    let handle = unsafe { FindFirstFileW(wide.as_ptr(), data.as_mut_ptr()) };
+    if handle == INVALID_HANDLE_VALUE || handle.is_null() {
+        return None;
+    }
+    // SAFETY: a valid search handle returned above, closed exactly once.
+    unsafe { FindClose(handle) };
+    // SAFETY: FindFirstFileW succeeded, so it initialized `data`.
+    let data = unsafe { data.assume_init() };
+    let len = data
+        .file_name
+        .iter()
+        .position(|&c| c == 0)
+        .unwrap_or(data.file_name.len());
+    Some(OsString::from_wide(&data.file_name[..len]))
+}
+
+#[cfg(target_os = "macos")]
+fn listed_name(path: &Path) -> Option<OsString> {
+    use std::os::unix::ffi::{OsStrExt, OsStringExt};
+
+    /// `getattrlist` reply for `ATTR_CMN_NAME`: total length, then the
+    /// reference whose offset is relative to the reference itself, then
+    /// room for the name (at most `NAME_MAX` UTF-8 bytes plus NUL).
+    #[repr(C)]
+    struct NameReply {
+        _length: u32,
+        name: libc::attrreference_t,
+        _bytes: [u8; 1024],
+    }
+
+    let c_path = std::ffi::CString::new(path.as_os_str().as_bytes()).ok()?;
+    let mut request = libc::attrlist {
+        bitmapcount: libc::ATTR_BIT_MAP_COUNT,
+        reserved: 0,
+        commonattr: libc::ATTR_CMN_NAME,
+        volattr: 0,
+        dirattr: 0,
+        fileattr: 0,
+        forkattr: 0,
+    };
+    let mut reply = NameReply {
+        _length: 0,
+        name: libc::attrreference_t {
+            attr_dataoffset: 0,
+            attr_length: 0,
+        },
+        _bytes: [0; 1024],
+    };
+    // SAFETY: `c_path` is NUL-terminated; `request` and `reply` are live,
+    // correctly sized buffers for the duration of the call.
+    let rc = unsafe {
+        libc::getattrlist(
+            c_path.as_ptr(),
+            (&mut request as *mut libc::attrlist).cast(),
+            (&mut reply as *mut NameReply).cast(),
+            std::mem::size_of::<NameReply>(),
+            libc::FSOPT_NOFOLLOW,
+        )
+    };
+    if rc != 0 {
+        return None;
+    }
+    // SAFETY: `NameReply` is plain integers without padding; viewing it as
+    // bytes for its whole size is sound.
+    let raw = unsafe {
+        std::slice::from_raw_parts(
+            (&reply as *const NameReply).cast::<u8>(),
+            std::mem::size_of::<NameReply>(),
+        )
+    };
+    let start = std::mem::offset_of!(NameReply, name)
+        .checked_add(usize::try_from(reply.name.attr_dataoffset).ok()?)?;
+    let len = usize::try_from(reply.name.attr_length).ok()?;
+    let name = raw.get(start..start.checked_add(len)?)?;
+    let name = name.strip_suffix(&[0]).unwrap_or(name);
+    Some(OsString::from_vec(name.to_vec()))
+}
+
+/// Linux and other Unix names are case-sensitive: the typed name is the
+/// entry's spelling whenever the path opened.
+#[cfg(not(any(windows, target_os = "macos")))]
+fn listed_name(_path: &Path) -> Option<OsString> {
+    None
+}
+
+// ---------------------------------------------------------------------------
 // internals
 // ---------------------------------------------------------------------------
 
@@ -796,16 +990,14 @@ fn open_identity(path: &Path) -> io::Result<same_file::Handle> {
     }
 }
 
-/// Execute one step of the write sequence, mapping lock violations to
-/// `E-LOCKED` and everything else to `Fault::Io`.
-fn write_step(path: &Path, step: impl FnOnce() -> io::Result<()>) -> Result<(), Fault> {
-    step().map_err(|e| {
-        if is_write_stage_busy(&e) {
-            Fault::reason("E-LOCKED")
-        } else {
-            Fault::io("write", path.to_path_buf(), e)
-        }
-    })
+/// Map a failed write, after which the file shows its previous content, to
+/// `E-LOCKED` for write-stage lock contention and `Fault::Io` otherwise.
+fn write_fault(path: &Path, e: io::Error) -> Fault {
+    if is_write_stage_busy(&e) {
+        Fault::reason("E-LOCKED")
+    } else {
+        Fault::io("write", path.to_path_buf(), e)
+    }
 }
 
 /// Consume a handle, returning proof of exclusive locking only on success.
@@ -1002,6 +1194,7 @@ fn ensure_parents(path: &Path, created: &mut Vec<CreatedDir>) -> Result<(), Faul
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::Write;
 
     fn scratch(tag: &str) -> PathBuf {
         let dir = std::env::temp_dir().join("coexist-fsx-tests").join(format!(
@@ -1594,7 +1787,7 @@ mod tests {
         // write. A mandatory lock may reject the second handle before its
         // read-only access does; neither failure may discard the prefix.
         let mut readonly = File::open(&target).unwrap();
-        let fault = write_step(&target, || readonly.write_all(b"unwritten")).unwrap_err();
+        let fault = write_fault(&target, readonly.write_all(b"unwritten").unwrap_err());
         drop(readonly);
         let err = fail_with_rollback(fault, Some(file), &target, true, created_dirs);
         assert!(matches!(
@@ -1636,6 +1829,78 @@ mod tests {
         assert!(!dir.join("a/b").exists());
         assert!(!dir.join("a").exists());
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A write that runs into the process file-size limit (a real `EFBIG`
+    /// from the kernel, not a mock) must leave an existing file with its
+    /// previous bytes, including when the plan also changes a byte inside
+    /// them, and must leave no trace of a creation. The historical order
+    /// (rewrite from offset 0) left the new prefix and a cut-off tail.
+    #[cfg(unix)]
+    #[test]
+    fn file_size_limit_failure_keeps_previous_bytes_and_removes_creation() {
+        const CHILD_DIR: &str = "COEXIST_FSX_FSIZE_CHILD_DIR";
+        const LIMIT: u64 = 4096;
+        if let Some(dir) = std::env::var_os(CHILD_DIR) {
+            let dir = PathBuf::from(dir);
+            // SAFETY: plain libc calls on this single-test child process;
+            // ignoring SIGXFSZ turns the limit into an `EFBIG` result.
+            unsafe {
+                libc::signal(libc::SIGXFSZ, libc::SIG_IGN);
+                let mut limit: libc::rlimit = std::mem::zeroed();
+                assert_eq!(libc::getrlimit(libc::RLIMIT_FSIZE, &mut limit), 0);
+                limit.rlim_cur = LIMIT as libc::rlim_t;
+                assert_eq!(libc::setrlimit(libc::RLIMIT_FSIZE, &limit), 0);
+            }
+            let is_limit = |fault: &Fault| {
+                matches!(fault, Fault::Io { action: "write", source, .. }
+                    if source.kind() == io::ErrorKind::FileTooLarge)
+            };
+            let target = dir.join("x.agent-besties.md");
+            let original = std::fs::read(&target).unwrap();
+            for change_inside in [false, true] {
+                let fault = mutate::<()>(&target, policy(0, false, false), |bytes, _| {
+                    let mut new = bytes.to_vec();
+                    if change_inside {
+                        new[12] = b'!';
+                    }
+                    new.resize(bytes.len() + 5000, b'b');
+                    Ok((Mutation::Write(new), ()))
+                })
+                .unwrap_err();
+                assert!(is_limit(&fault), "{fault:?}");
+                assert_eq!(std::fs::read(&target).unwrap(), original);
+            }
+            let created = dir.join("a/b/new.agent-besties.md");
+            let fault = mutate::<()>(&created, policy(0, true, true), |_, _| {
+                Ok((Mutation::Write(vec![b'c'; 5000]), ()))
+            })
+            .unwrap_err();
+            assert!(is_limit(&fault), "{fault:?}");
+            assert!(!dir.join("a").exists());
+            std::fs::write(dir.join("checked"), b"").unwrap();
+            return;
+        }
+
+        let dir = scratch("fsize-limit");
+        let target = dir.join("x.agent-besties.md");
+        let original = b"# x.post\n\n## #1 alice (2026-09-17T09:12:00Z)\n\n```md\nhi\n```\n";
+        std::fs::write(&target, original).unwrap();
+        let status = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "fsx::tests::file_size_limit_failure_keeps_previous_bytes_and_removes_creation",
+                "--nocapture",
+            ])
+            .env(CHILD_DIR, &dir)
+            .status()
+            .unwrap();
+        let checked = dir.join("checked").is_file();
+        let content = std::fs::read(&target).unwrap();
+        std::fs::remove_dir_all(&dir).unwrap();
+        assert!(status.success(), "child write-failure checks failed");
+        assert!(checked, "child did not exercise the writes");
+        assert_eq!(content, original);
     }
 
     #[test]

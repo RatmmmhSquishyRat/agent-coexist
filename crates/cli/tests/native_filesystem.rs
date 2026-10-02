@@ -24,6 +24,11 @@
 //!   the `post` create form once released;
 //! * §10.1.1 walk skip — `list` never enters a real directory symlink
 //!   (Unix) / a real junction created with `mklink /J` (Windows).
+//! * §8.3.5 wait recovery lifecycle — the same path-class fault keeps the
+//!   start-time corrected-path advice (no retry) before a wait's ready
+//!   line, and after that line restores the intended path with the
+//!   new-baseline re-read and the original wait as the retry (Unix adds
+//!   the watched path itself being occupied by a directory);
 //! * §8.1.4–5 / §8.3.5 / §10.9.4 display columns — a malformed ignore
 //!   pattern with an internal double space (`bad  [z-a]`) fails `list`
 //!   exit 1 in reason form and warns after a committed `state` declare:
@@ -1617,7 +1622,8 @@ fn invalid_profile_section_body_repair_is_manual() {
 }
 
 /// clap's invalid-value path must use the same one-line boundary as
-/// custom usage errors, retaining the operand, option and help hint.
+/// custom usage errors: no raw control character reaches stderr, while
+/// the operand's text, the option and the help hint stay visible.
 #[test]
 fn parser_error_with_newline_is_one_stderr_line() {
     let dir = tempfile::tempdir().unwrap();
@@ -1639,10 +1645,16 @@ fn parser_error_with_newline_is_one_stderr_line() {
     assert!(out.stdout.is_empty(), "{}", describe(&out));
     let stderr = std::str::from_utf8(&out.stderr).unwrap();
     assert_eq!(stderr.lines().count(), 1, "{stderr:?}");
-    assert!(!stderr.contains('\r'), "{stderr:?}");
+    assert!(
+        !stderr.trim_end_matches('\n').chars().any(char::is_control),
+        "{stderr:?}"
+    );
     assert!(stderr.starts_with("error: "), "{stderr:?}");
     assert_eq!(stderr.matches("error:").count(), 1, "{stderr:?}");
-    assert!(stderr.contains("bad value"), "{stderr:?}");
+    assert!(
+        stderr.contains("bad") && stderr.contains("value"),
+        "{stderr:?}"
+    );
     assert!(stderr.contains("--edit"), "{stderr:?}");
     assert!(stderr.contains("--help"), "{stderr:?}");
     assert!(!cwd.join("standup.agent-besties.md").exists());
@@ -1674,45 +1686,126 @@ fn explicit_help_and_version_keep_stdout() {
 // R10 recovery: copyable headings, dirty-state argv retry, invalid status
 // ---------------------------------------------------------------------------
 
-/// Copy E-HEAD's file-content example, filling only its reader-owned nick.
-/// The real parser must recover the comment and its existing fenced body.
+/// Copy E-HEAD's file-content example. Parts the malformed header still
+/// shows (number, nick, time) are kept as printed; only a `<time>` or
+/// `<nick>` placeholder is filled with the comment's original value, as the
+/// fix instructs. The real parser must recover the comment and its body
+/// under its own author, creation time and edit time: a number separated
+/// from `#` is not the author, an edit time does not become the creation
+/// time, and a genuine all-digit nick or a nick spelled `edited` stays the
+/// author.
 #[test]
 fn emitted_ehead_header_is_copyable_file_content() {
     let dir = tempfile::tempdir().unwrap();
     let cwd = dir.path();
     let file = cwd.join("broken.agent-besties.md");
-    let before = concat!(
-        "# broken.post\n\n",
-        "## #1 alice (not-a-time)\n\n",
-        "```text\nretained comment\n```\n",
-    );
-    fs::write(&file, before).unwrap();
+    const CREATED: &str = "2026-09-17T09:00:00Z";
+    const EDITED: &str = "2026-09-17T09:20:00Z";
+    // (malformed header, original creation time the reader supplies for a
+    // `<time>` placeholder, header the copy must produce, author, time of
+    // the latest activity)
+    let cases = [
+        // time unreadable: reader supplies the original from elsewhere
+        (
+            "## #1 alice (not-a-time)".to_string(),
+            Some(CREATED),
+            format!("## #1 alice ({CREATED})"),
+            "alice",
+            CREATED,
+        ),
+        // parentheses missing: the printed header is complete as is
+        (
+            format!("## #1 alice {CREATED}"),
+            None,
+            format!("## #1 alice ({CREATED})"),
+            "alice",
+            CREATED,
+        ),
+        // a space slipped in after `#`: 1 is the number, alice the author
+        (
+            format!("## # 1 alice ({CREATED})"),
+            None,
+            format!("## #1 alice ({CREATED})"),
+            "alice",
+            CREATED,
+        ),
+        // creation time lost, edit time kept: the edit time stays the edit
+        (
+            format!("## #1 alice (edited {EDITED})"),
+            Some(CREATED),
+            format!("## #1 alice ({CREATED}, edited {EDITED})"),
+            "alice",
+            EDITED,
+        ),
+        // an all-digit nick between the number and the time is the author
+        (
+            format!("## #1 7 {CREATED}"),
+            None,
+            format!("## #1 7 ({CREATED})"),
+            "7",
+            CREATED,
+        ),
+        // a nick spelled `edited` before the parenthesized time is the
+        // author, not the edit marker
+        (
+            format!("## #01 edited ({CREATED})"),
+            None,
+            format!("## #1 edited ({CREATED})"),
+            "edited",
+            CREATED,
+        ),
+    ];
+    for (broken, original_time, repaired, author, latest) in cases {
+        let before = format!("# broken.post\n\n{broken}\n\n```text\nretained comment\n```\n");
+        fs::write(&file, &before).unwrap();
 
-    let out = run(cwd, &["check", "broken"]);
-    assert_eq!(out.status.code(), Some(1), "{}", describe(&out));
-    let stdout = assert_first_line(&out, "error", "check");
-    let header_fix = fix_payloads(&stdout)
-        .into_iter()
-        .find(|fix| fix.contains("## #"))
-        .unwrap_or_else(|| panic!("missing E-HEAD heading suggestion:\n{stdout}"));
-    let heading = copyable_heading(header_fix).replace("<nick>", "alice");
-    fs::write(&file, before.replace("## #1 alice (not-a-time)", &heading)).unwrap();
+        let out = run(cwd, &["check", "broken"]);
+        assert_eq!(out.status.code(), Some(1), "{}", describe(&out));
+        let stdout = assert_first_line(&out, "error", "check");
+        let header_fix = fix_payloads(&stdout)
+            .into_iter()
+            .find(|fix| fix.contains("## #"))
+            .unwrap_or_else(|| panic!("missing E-HEAD heading suggestion:\n{stdout}"));
+        let mut heading = copyable_heading(header_fix).to_string();
+        if let Some(time) = original_time {
+            assert!(
+                heading.contains("<time>"),
+                "an unreadable creation time must be a placeholder:\n{stdout}"
+            );
+            heading = heading.replace("<time>", time);
+        }
+        assert!(
+            !heading.contains('<'),
+            "known nick must not be a placeholder:\n{stdout}"
+        );
+        assert_eq!(
+            heading, repaired,
+            "copied header must keep the comment's number, author and times:\n{stdout}"
+        );
+        fs::write(&file, before.replace(&broken, &heading)).unwrap();
 
-    let checked = run(cwd, &["check", "broken"]);
-    assert!(checked.status.success(), "{}", describe(&checked));
-    let stdout = assert_first_line(&checked, "ok", "check");
-    assert!(
-        stdout
-            .lines()
-            .any(|line| columns(line) == ["comments", "1"]),
-        "copied header must parse as one comment:\n{stdout}"
-    );
-    assert!(
-        stdout
-            .lines()
-            .any(|line| columns(line) == ["topic", "#1", "alice", "retained comment"]),
-        "recovered comment must expose its author and preserved body:\n{stdout}"
-    );
+        let checked = run(cwd, &["check", "broken"]);
+        assert!(checked.status.success(), "{}", describe(&checked));
+        let stdout = assert_first_line(&checked, "ok", "check");
+        assert!(
+            stdout
+                .lines()
+                .any(|line| columns(line) == ["comments", "1"]),
+            "copied header must parse as one comment:\n{stdout}"
+        );
+        assert!(
+            stdout
+                .lines()
+                .any(|line| columns(line) == ["topic", "#1", author, "retained comment"]),
+            "recovered comment must expose its author and preserved body:\n{stdout}"
+        );
+        assert!(
+            stdout
+                .lines()
+                .any(|line| columns(line).starts_with(&["latest", "#1", author, latest])),
+            "the repaired header must carry the comment's own activity time:\n{stdout}"
+        );
+    }
 }
 
 /// Copy the Unicode heading from W-SECTION-NAME as file content rather
@@ -2875,9 +2968,10 @@ fn emitted_conflict_removal_keeps_other_live_statuses() {
     );
 }
 
-/// Both wait entry points retain warnings from a removed baseline but must
-/// not offer a renewal that recreates it or mutates a newly selected cased
-/// sibling. Filesystem changes happen only after the real ready line.
+/// Both wait entry points report a removed baseline as the removal itself:
+/// no warning or fix from the deleted snapshot, so no renewal that recreates
+/// it or mutates a newly selected cased sibling. Filesystem changes happen
+/// only after the real ready line.
 #[test]
 fn removed_wait_state_recovery_does_not_recreate_or_retarget() {
     for (command, args, object, removed_path) in [
@@ -2997,7 +3091,7 @@ fn removed_wait_state_recovery_does_not_recreate_or_retarget() {
                 stderr: fs::read(&stderr_path).expect("read wait stderr"),
             };
             assert_eq!(out.status.code(), Some(0), "{}", describe(&out));
-            let stdout = assert_first_line(&out, "warn", command);
+            let stdout = assert_first_line(&out, "ok", command);
             assert_eq!(columns(first_line(&stdout)).get(2), Some(&object));
             for expected in [
                 &["bytes", "changed"] as &[&str],
@@ -3013,10 +3107,11 @@ fn removed_wait_state_recovery_does_not_recreate_or_retarget() {
                 );
             }
             assert!(
-                stdout
-                    .lines()
-                    .any(|line| columns(line).starts_with(&["warn", "L4"])),
-                "removed baseline's declaration warning must remain:\n{stdout}"
+                !stdout.lines().any(|line| matches!(
+                    columns(line).first().copied(),
+                    Some("warn" | "error" | "why" | "fix")
+                )),
+                "a removed file's report must not carry the deleted snapshot's diagnostics:\n{stdout}"
             );
 
             let recipes = state_mutation_fixes(&stdout);
@@ -3050,6 +3145,232 @@ fn removed_wait_state_recovery_does_not_recreate_or_retarget() {
             );
         }
     }
+}
+
+/// A path-class fault gets opposite recoveries depending on when it
+/// strikes, so the lifecycle boundary must stay observable: before the
+/// ready line the parent was never a directory and the wait keeps the
+/// corrected-path advice with no retry; after the ready line the same
+/// command, whose parent was proven to exist and whose baseline was
+/// admitted, is told to restore the intended path and still take the
+/// new baseline before retrying the original wait. Filesystem changes
+/// happen only after the real ready line.
+#[test]
+fn wait_path_class_recovery_follows_the_ready_line() {
+    // Pre-ready: the parent is a file from the start, so the wait can
+    // never admit a baseline and the fault is a start-time mistake.
+    let start = tempfile::tempdir().unwrap();
+    let start_cwd = start.path();
+    fs::write(start_cwd.join("room"), b"not a directory\n").unwrap();
+    let before = run(start_cwd, &["wait-post", "room/standup"]);
+    assert_eq!(before.status.code(), Some(1), "{}", describe(&before));
+    let stdout = String::from_utf8_lossy(&before.stdout).into_owned();
+    let fixes = fix_payloads(&stdout);
+    assert_eq!(
+        fixes.len(),
+        1,
+        "a start-time path mistake has exactly one fix row:\n{stdout}"
+    );
+    assert_eq!(
+        fixes[0], "fix the path, then run the corrected command",
+        "no retry and no restore is offered before the ready line:\n{stdout}"
+    );
+
+    // Post-ready: the admitted wait loses the same directory.
+    let dir = tempfile::tempdir().unwrap();
+    let cwd = dir.path();
+    fs::create_dir(cwd.join("room")).unwrap();
+    let stdout_path = cwd.join("wait.out");
+    let stderr_path = cwd.join("wait.err");
+    let mut child = detached_cli(cwd);
+    child
+        .args(["wait-post", "room/standup"])
+        .stdin(Stdio::null())
+        .stdout(fs::File::create(&stdout_path).expect("wait stdout file"))
+        .stderr(fs::File::create(&stderr_path).expect("wait stderr file"));
+    let mut child = child.spawn().expect("spawn wait-post");
+
+    let ready_deadline = Instant::now() + Duration::from_secs(15);
+    loop {
+        let stderr = fs::read_to_string(&stderr_path).unwrap_or_default();
+        if stderr
+            .lines()
+            .any(|line| columns(line) == ["waiting", "wait-post", "room/standup"])
+        {
+            break;
+        }
+        if let Some(status) = child.try_wait().expect("poll wait-post before ready") {
+            let stdout = fs::read_to_string(&stdout_path).unwrap_or_default();
+            let _ = child.kill();
+            panic!(
+                "wait-post exited before ready: {status:?}\n--- stdout ---\n{stdout}\n--- stderr ---\n{stderr}"
+            );
+        }
+        if Instant::now() > ready_deadline {
+            let _ = child.kill();
+            let _ = child.wait();
+            panic!(
+                "wait-post never printed ready\n--- stderr ---\n{}",
+                fs::read_to_string(&stderr_path).unwrap_or_default()
+            );
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+
+    if let Err(error) = fs::remove_dir(cwd.join("room")) {
+        let _ = child.kill();
+        let _ = child.wait();
+        panic!("cannot remove the watched parent directory: {error}");
+    }
+
+    let exit_deadline = Instant::now() + Duration::from_secs(15);
+    let status = loop {
+        if let Some(status) = child.try_wait().expect("poll wait-post after removal") {
+            break status;
+        }
+        if Instant::now() > exit_deadline {
+            let _ = child.kill();
+            let _ = child.wait();
+            panic!(
+                "wait-post did not finish after losing its parent\n--- stdout ---\n{}\n--- stderr ---\n{}",
+                fs::read_to_string(&stdout_path).unwrap_or_default(),
+                fs::read_to_string(&stderr_path).unwrap_or_default()
+            );
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    };
+    let out = Output {
+        status,
+        stdout: fs::read(&stdout_path).expect("read wait-post stdout"),
+        stderr: fs::read(&stderr_path).expect("read wait-post stderr"),
+    };
+    assert_eq!(out.status.code(), Some(1), "{}", describe(&out));
+    let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
+    assert_first_line(&out, "error", "wait-post");
+    let fixes = fix_payloads(&stdout);
+    assert_eq!(
+        fixes.len(),
+        1,
+        "the post-ready fault has exactly one fix row:\n{stdout}"
+    );
+    let fix = fixes[0];
+    assert!(
+        fix.contains("new baseline"),
+        "the retried wait must take and state its new baseline:\n{fix}"
+    );
+    assert!(
+        fix.contains("recreate it"),
+        "the intended directory must be restored, not the path corrected:\n{fix}"
+    );
+    assert!(
+        fix.contains("then retry:") && fix.contains("wait-post room/standup"),
+        "the original wait must still be offered as the retry (the argv names \
+         the real program path here, not the agent-coexist token):\n{fix}"
+    );
+    assert_ne!(
+        fix, "fix the path, then run the corrected command",
+        "a path the wait already proved valid is not sent back for correction:\n{fix}"
+    );
+}
+
+/// Post-ready, the watched path itself can be occupied by a directory:
+/// on Unix the storage read rejects it as `Unsupported` ("path does not
+/// name a regular file"), which is the same structural class as the
+/// parent loss above, so the fix restores the path instead of
+/// correcting it. Windows reports a replaced file as an access-denied
+/// error instead, which keeps the generic non-path repair there.
+#[cfg(unix)]
+#[test]
+fn wait_replaced_by_directory_recovery_restores_not_corrects() {
+    let dir = tempfile::tempdir().unwrap();
+    let cwd = dir.path();
+    fs::create_dir(cwd.join("room")).unwrap();
+    let stdout_path = cwd.join("wait.out");
+    let stderr_path = cwd.join("wait.err");
+    let mut child = detached_cli(cwd);
+    child
+        .args(["wait", "room/standup"])
+        .stdin(Stdio::null())
+        .stdout(fs::File::create(&stdout_path).expect("wait stdout file"))
+        .stderr(fs::File::create(&stderr_path).expect("wait stderr file"));
+    let mut child = child.spawn().expect("spawn wait");
+
+    let ready_deadline = Instant::now() + Duration::from_secs(15);
+    loop {
+        let stderr = fs::read_to_string(&stderr_path).unwrap_or_default();
+        if stderr
+            .lines()
+            .any(|line| columns(line) == ["waiting", "wait", "room/standup"])
+        {
+            break;
+        }
+        if let Some(status) = child.try_wait().expect("poll wait before ready") {
+            let stdout = fs::read_to_string(&stdout_path).unwrap_or_default();
+            let _ = child.kill();
+            panic!(
+                "wait exited before ready: {status:?}\n--- stdout ---\n{stdout}\n--- stderr ---\n{stderr}"
+            );
+        }
+        if Instant::now() > ready_deadline {
+            let _ = child.kill();
+            let _ = child.wait();
+            panic!(
+                "wait never printed ready\n--- stderr ---\n{}",
+                fs::read_to_string(&stderr_path).unwrap_or_default()
+            );
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+
+    if let Err(error) = fs::create_dir(cwd.join("room").join("standup.agent-besties.md")) {
+        let _ = child.kill();
+        let _ = child.wait();
+        panic!("cannot occupy the watched path with a directory: {error}");
+    }
+
+    let exit_deadline = Instant::now() + Duration::from_secs(15);
+    let status = loop {
+        if let Some(status) = child.try_wait().expect("poll wait after replacement") {
+            break status;
+        }
+        if Instant::now() > exit_deadline {
+            let _ = child.kill();
+            let _ = child.wait();
+            panic!(
+                "wait did not finish after its path became a directory\n--- stdout ---\n{}\n--- stderr ---\n{}",
+                fs::read_to_string(&stdout_path).unwrap_or_default(),
+                fs::read_to_string(&stderr_path).unwrap_or_default()
+            );
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    };
+    let out = Output {
+        status,
+        stdout: fs::read(&stdout_path).expect("read wait stdout"),
+        stderr: fs::read(&stderr_path).expect("read wait stderr"),
+    };
+    assert_eq!(out.status.code(), Some(1), "{}", describe(&out));
+    let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
+    let fixes = fix_payloads(&stdout);
+    assert_eq!(
+        fixes.len(),
+        1,
+        "the replaced-path fault has exactly one fix row:\n{stdout}"
+    );
+    let fix = fixes[0];
+    assert!(
+        fix.contains("no longer names a regular file"),
+        "the occupied path must be named as occupied, not as a wrong path:\n{fix}"
+    );
+    assert!(
+        fix.contains("then retry:") && fix.contains("wait room/standup"),
+        "the original wait must still be offered as the retry (the argv names \
+         the real program path here, not the agent-coexist token):\n{fix}"
+    );
+    assert_ne!(
+        fix, "fix the path, then run the corrected command",
+        "a path the wait already proved valid is not sent back for correction:\n{fix}"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -3307,6 +3628,49 @@ fn malformed_ignore_list_reason_stays_one_column_and_source_survives() {
         "folded reason must keep the file, line and parse cause:\n{stdout}"
     );
     assert_eq!(fs::read(&ignore).unwrap(), ignore_bytes);
+
+    // Q18: the fix points at the line to correct and retries the original
+    // command. Following it (correcting that line) makes the retry succeed.
+    let fixes = fix_payloads(&stdout);
+    assert_eq!(fixes.len(), 1, "{stdout}");
+    let (advice, retry) = fixes[0].rsplit_once(": ").expect("fix ends in a command");
+    assert!(
+        advice.contains("line 1 of room two/.ignore") && !advice.contains("permission"),
+        "a syntax error must point at the line, not at permissions:\n{stdout}"
+    );
+    // argv[0] here is the test binary's own path; only the operands matter.
+    assert!(retry.ends_with(" list 'room  two'"), "{stdout}");
+    fs::write(&ignore, b"bad  [a-z]\n").unwrap();
+    let retried = run(cwd, &["list", "room  two"]);
+    assert_eq!(retried.status.code(), Some(0), "{}", describe(&retried));
+}
+
+/// Control for Q18: a source that is not a regular file is not a syntax
+/// problem. The fix must not send the reader to a line, and removing the
+/// source as advised lets the retried command succeed.
+#[test]
+fn ignore_source_that_is_a_directory_gets_file_advice_not_line_advice() {
+    let dir = tempfile::tempdir().unwrap();
+    let cwd = dir.path();
+    let room = cwd.join("room");
+    fs::create_dir_all(room.join(".ignore")).unwrap();
+
+    let out = run(cwd, &["list", "room"]);
+    assert_eq!(out.status.code(), Some(1), "{}", describe(&out));
+    let stdout = assert_first_line(&out, "error", "list");
+    let fixes = fix_payloads(&stdout);
+    assert_eq!(fixes.len(), 1, "{stdout}");
+    let (advice, retry) = fixes[0].rsplit_once(": ").expect("fix ends in a command");
+    assert!(
+        advice.contains("room/.ignore")
+            && advice.contains("regular file")
+            && !advice.contains("line"),
+        "a directory source needs file advice:\n{stdout}"
+    );
+    assert!(retry.ends_with(" list room"), "{stdout}");
+    fs::remove_dir(room.join(".ignore")).unwrap();
+    let retried = run(cwd, &["list", "room"]);
+    assert_eq!(retried.status.code(), Some(0), "{}", describe(&retried));
 }
 
 /// The same malformed ignore hit by the post-write conflict scan of a real

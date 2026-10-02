@@ -49,21 +49,21 @@ pub fn run(ctx: &mut Ctx, p: &PostParams) -> Result<Report, Fault> {
 fn step(
     ctx: &mut Ctx,
     p: &PostParams,
-    bytes: Vec<u8>,
+    bytes: &[u8],
     created: bool,
 ) -> Result<(Mutation, Step), Fault> {
     if created {
         return create_step(p, &time::format(ctx.now));
     }
-    let doc = match checked_doc(&bytes, &p.path, ctx.now, doc::Kind::Post) {
+    let doc = match checked_doc(bytes, &p.path, ctx.now, doc::Kind::Post) {
         Ok(doc) => doc,
         Err(Early::Step(step)) => return Ok((Mutation::Unchanged, step)),
         Err(Early::Fault(fault)) => return Err(fault),
     };
     let now = time::format(ctx.now);
     match p.edit {
-        None => append_step(p, &doc, &bytes, &now),
-        Some(n) => edit_step(p, &doc, &bytes, n, &now),
+        None => append_step(p, &doc, bytes, &now),
+        Some(n) => edit_step(p, &doc, bytes, n, &now),
     }
 }
 
@@ -86,7 +86,7 @@ fn create_step(p: &PostParams, now: &str) -> Result<(Mutation, Step), Fault> {
             format!("L{}", line_of(content.as_bytes(), prefix.len())),
         ],
     );
-    add_reference_rows(&mut done, &p.body, [1]);
+    add_reference_rows(&mut done, &p.body, (&p.nick, 1), [1]);
     Ok((Mutation::Write(content.into_bytes()), Step::Done(done)))
 }
 
@@ -134,6 +134,7 @@ fn append_step(
             add_reference_rows(
                 &mut done,
                 &p.body,
+                (&p.nick, seq),
                 doc.post.comments.iter().map(|c| c.seq).chain([seq]),
             );
             Ok((Mutation::Write(new_bytes), Step::Done(done)))
@@ -205,7 +206,7 @@ fn edit_step(
                 after_line_and_blank(&doc.source, section.head.start, &fence_block(&p.body));
             splices.push(Splice {
                 range: pos..pos,
-                replacement: inserted.into_bytes(),
+                replacement: separated(&doc.source, pos, inserted).into_bytes(),
             });
         }
     }
@@ -221,7 +222,12 @@ fn edit_step(
                     "edited".to_string(),
                 ],
             );
-            add_reference_rows(&mut done, &p.body, doc.post.comments.iter().map(|c| c.seq));
+            add_reference_rows(
+                &mut done,
+                &p.body,
+                (&p.nick, comment.seq),
+                doc.post.comments.iter().map(|c| c.seq),
+            );
             Ok((Mutation::Write(new_bytes), Step::Done(done)))
         }
         Applied::Refused(step) => Ok((Mutation::Unchanged, step)),
@@ -231,8 +237,15 @@ fn edit_step(
 /// `mentions` / `reply-to` rows derived from the freshly written body
 /// (§3.4.2, §3.5.4, §8.1.14). `existing` is the seqs present after the
 /// write and is consumed only when the body contains replies; a missing
-/// target still gets written but downgrades to `warn`.
-fn add_reference_rows(done: &mut Done, body: &str, existing: impl IntoIterator<Item = u64>) {
+/// target still gets written but downgrades to `warn`, recording `own`
+/// (the author and number of the comment this write announces) so the
+/// report can name the author's own repair as a `fix` row.
+fn add_reference_rows(
+    done: &mut Done,
+    body: &str,
+    own: (&str, u64),
+    existing: impl IntoIterator<Item = u64>,
+) {
     let (mentions, replies) = crate::types::post::references(body);
     if !mentions.is_empty() {
         done.kv("mentions", vec![mentions.join(", ")]);
@@ -247,6 +260,7 @@ fn add_reference_rows(done: &mut Done, body: &str, existing: impl IntoIterator<I
         } else {
             done.kv("reply-to", vec![format!("#{m}"), "(not found)".to_string()]);
             done.warn = true;
+            done.reply_fix = Some((own.0.to_string(), own.1));
         }
     }
 }
@@ -256,10 +270,16 @@ fn add_reference_rows(done: &mut Done, body: &str, existing: impl IntoIterator<I
 // ---------------------------------------------------------------------------
 
 /// Rows plus a warn flag computed inside the `fsx::mutate` closure for a
-/// completed step (successful write or no-op outcome).
+/// completed step (successful write or no-op outcome); a post write that
+/// replied to a missing number also records its own repair.
 pub(super) struct Done {
     pub rows: Vec<Row>,
     pub warn: bool,
+    /// A reply in the written body named a number no comment in this
+    /// post carries: the author's own repair (nick and number of the
+    /// comment this report announced), rendered as a `fix` row by
+    /// [`finish`].
+    pub reply_fix: Option<(String, u64)>,
 }
 
 impl Done {
@@ -267,6 +287,7 @@ impl Done {
         Done {
             rows: Vec::new(),
             warn: false,
+            reply_fix: None,
         }
     }
 
@@ -310,13 +331,15 @@ pub(super) struct FlockStash {
     holders: Vec<shared::FlockHolder>,
     issues: Vec<(PathBuf, shared::ScanIssue)>,
     unreadable_dirs: Vec<PathBuf>,
-    canonicalize_failed: Vec<PathBuf>,
+    canonicalize_failed: Vec<shared::CanonicalizeFail>,
 }
 
 /// Parse existing bytes; byte-level faults (`E-UTF8` / `E-TOO-LARGE`) and
-/// blocking diagnostics become check-shaped refusals.
+/// blocking diagnostics become check-shaped refusals. The stem is the
+/// listed spelling ([`fsx::listed_path`]), so a refusal's `W-NAME` row
+/// matches `check`.
 fn parse_existing(bytes: &[u8], path: &Path, now: Time) -> Result<doc::Document, Early> {
-    match doc::parse(bytes.to_vec(), path, now) {
+    match doc::parse(bytes.to_vec(), &fsx::listed_path(path), now) {
         Ok(doc) => {
             if !doc.blocking().is_empty() {
                 return Err(Early::Step(Step::Refused {
@@ -361,16 +384,45 @@ pub(super) fn guarded_apply(
         .iter()
         .map(|s| s.replacement.len() as i64 - s.range.len() as i64)
         .sum();
-    if bytes.len() as i64 + delta > consts::MAX_MANAGED_FILE_BYTES as i64 {
+    let result = bytes.len() as i64 + delta;
+    if result > consts::MAX_MANAGED_FILE_BYTES as i64 {
+        // The file itself is within the limit; only this result is not.
         return Ok(Applied::Refused(Step::Refused {
             kind,
-            diags: vec![Diagnostic::new("E-TOO-LARGE", 1).with(
-                "limit",
-                (consts::MAX_MANAGED_FILE_BYTES / (1024 * 1024)).to_string(),
-            )],
+            diags: vec![Diagnostic::new("E-TOO-LARGE", 1)
+                .with(
+                    "limit",
+                    (consts::MAX_MANAGED_FILE_BYTES / (1024 * 1024)).to_string(),
+                )
+                .with("size", bytes.len().to_string())
+                .with("result", result.to_string())],
         }));
     }
     Ok(Applied::Bytes(text::apply(bytes, splices)?))
+}
+
+/// The fix row after a write whose functional-lock check was incomplete:
+/// the write already happened, so the recovery is to open exactly what the
+/// check could not read (the state file behind each skipped/partial row,
+/// each unlisted directory, or this directory when identity fell back to
+/// lexical paths) and agree with any holder named there, never to rerun
+/// the write.
+fn lock_scan_fix(follows: &[shared::Follow]) -> String {
+    shared::scan_fix(
+        follows,
+        diag::FIX_LOCK_SCAN_INCOMPLETE,
+        diag::FIX_LOCK_SCAN_INCOMPLETE_MANUAL,
+    )
+}
+
+/// Read-only pointer at `check` on this file after remaining errors or a
+/// brief `--refresh` skip. Check owns the diagnostic text; this never
+/// rewrites and never substitutes for the lock-scan fix.
+pub(super) fn file_check_fix(path: &Path) -> String {
+    match diag::path_operand(path.as_os_str()) {
+        Some(op) => diag::FIX_FILE_CHECK.replace("{path_arg}", &op),
+        None => diag::FIX_FILE_CHECK_MANUAL.to_string(),
+    }
 }
 
 /// Run the functional-lock verdict (§10.8) inside the closure of a
@@ -418,7 +470,11 @@ pub(super) fn flock_blocked() -> Result<(Mutation, Step), Fault> {
 /// `canonicalize` rows are appended and the report is promoted to `warn`
 /// (best-effort semantics — no recognizable holder may write, the unread
 /// portion is never hidden). `remaining` rows stay the final group after
-/// those scan rows (§2.7.4).
+/// those scan rows (§2.7.4). Remaining errors get one read-only `check`
+/// pointer ([`file_check_fix`]) after any reply-target `fix` and before
+/// lock-scan rows; it never replaces the lock-scan fix. A post write that
+/// replied to a number no comment carries keeps its `fix` row after the
+/// `reply-to` rows.
 pub(super) fn finish(
     ctx: &mut Ctx,
     command: &'static str,
@@ -442,8 +498,23 @@ pub(super) fn finish(
                 if done.warn {
                     report.warn();
                 }
+                if let Some((nick, seq)) = done.reply_fix {
+                    // The reply-to rows above end in `(not found)`; the
+                    // fix names the writer's own repair while the comment
+                    // is still the newest thing on their mind.
+                    let dctx = context::diag_context_for_file(ctx, command, path);
+                    report.kv(
+                        "fix",
+                        vec![diag::reply_target_missing_fix(&dctx, &nick, seq)],
+                    );
+                }
+                if !remaining.is_empty() {
+                    report.kv("fix", vec![file_check_fix(path)]);
+                }
                 if let Some(stash) = &stash {
-                    if append_scan_rows(&mut report, stash) {
+                    let follows = append_scan_rows(&mut report, stash, path);
+                    if !follows.is_empty() {
+                        report.kv("fix", vec![lock_scan_fix(&follows)]);
                         report.warn();
                     }
                 }
@@ -505,63 +576,37 @@ fn flocked_report(
             ],
         );
     }
-    append_scan_rows(&mut report, &stash);
+    append_scan_rows(&mut report, &stash, path);
     report
 }
 
 /// Append the stashed scan-incompleteness rows (§10.5.6):
 /// `skipped` / `partial` for every state file the verdict could not
 /// incorporate and `skipped <dir> unreadable` for directories that could
-/// not be listed, then `canonicalize <dir> failed` rows. Skipped/partial
-/// rows keep native source identity (and de-duplication) and are then
-/// ordered by displayed cwd-relative directory path (§10.5.4). Returns
-/// whether anything was appended, so a successful report can promote
-/// itself to `warn`.
-fn append_scan_rows(report: &mut Report, stash: &FlockStash) -> bool {
-    let mut any = false;
-    let mut tail: Vec<(&Path, &'static str, Vec<String>)> = Vec::new();
-    for (dir, issue) in &stash.issues {
-        match issue {
-            shared::ScanIssue::Busy => {
-                tail.push((dir.as_path(), "skipped", vec!["busy".to_string()]));
-            }
-            shared::ScanIssue::Blocking(id) => {
-                tail.push((dir.as_path(), "skipped", vec![(*id).to_string()]));
-            }
-            shared::ScanIssue::Partial { id, line } => {
-                tail.push((
-                    dir.as_path(),
-                    "partial",
-                    vec![(*id).to_string(), format!("L{line}")],
-                ));
-            }
-        }
+/// not be listed ([`shared::scan_rows`]), then `canonicalize <dir> failed`
+/// rows with the bounded OS reason. Returns what a reader must open to
+/// see what was not read (empty when nothing was appended), so a
+/// successful report can promote itself to `warn` and name those files.
+fn append_scan_rows(report: &mut Report, stash: &FlockStash, path: &Path) -> Vec<shared::Follow> {
+    let mut follows = Vec::new();
+    for row in shared::scan_rows(&stash.issues, &stash.unreadable_dirs) {
+        report.kv(row.key, row.values);
+        follows.push(row.follow);
     }
-    for dir in &stash.unreadable_dirs {
-        tail.push((dir.as_path(), "skipped", vec!["unreadable".to_string()]));
-    }
-    tail.sort();
-    tail.dedup();
-    // Display paths may collide; rendering changes ordering, never identity.
-    let mut tail: Vec<_> = tail
-        .into_iter()
-        .map(|(dir, key, detail)| (context::object_of_dir(dir), key, detail))
-        .collect();
-    tail.sort();
-    for (dir, key, detail) in tail {
-        let mut values = vec![dir];
-        values.extend(detail);
-        report.kv(key, values);
-        any = true;
-    }
-    for dir in &stash.canonicalize_failed {
+    for fail in &stash.canonicalize_failed {
         report.kv(
             "canonicalize",
-            vec![context::object_of_dir(dir), "failed".to_string()],
+            shared::canonicalize_values(&fail.dir, &fail.reason),
         );
-        any = true;
     }
-    any
+    if !stash.canonicalize_failed.is_empty() {
+        // Identity fell back to lexical paths: the whole chain is re-checked
+        // from the written file's directory.
+        follows.push(shared::Follow::Here(
+            context::parent_dir(path).to_path_buf(),
+        ));
+    }
+    follows
 }
 
 /// `created  <dir>/` rows (fsx reports them outer→inner), then
@@ -591,35 +636,62 @@ pub(super) fn refuse_report(
         report.kv("type", vec![kind.to_string()]);
     }
     diags.sort_by(|a, b| (a.line, diag::order(a.id)).cmp(&(b.line, diag::order(b.id))));
+    let refused = diag::write_refusal(&diags);
     for d in diags {
         report.diagnostic(d);
+    }
+    if let Some(text) = refused {
+        report.kv("refused", vec![text]);
     }
     report.status = Status::Error;
     report.exit = 1;
     report
 }
 
-fn file_missing_params(path: &Path) -> Vec<(&'static str, OsString)> {
-    vec![
-        ("file", context::display_file(path).into()),
-        (
-            "dir_arg",
-            context::parent_dir(path).as_os_str().to_os_string(),
-        ),
-    ]
+/// `E-FILE-MISSING` params for any PATH command (write forms here, read
+/// commands in `query`). Called only after the file was found missing, so
+/// the one extra `metadata` never touches a successful run. When the
+/// PATH without its managed suffix names an existing directory (`.`,
+/// `docs`, `docs/`), the reader most likely passed a directory where one
+/// collaboration file is required: `given_dir` selects the catalog variant
+/// that says so, and `dir_arg` lists that directory instead of its parent.
+/// Suffix resolution is unchanged; non-UTF-8 paths keep the base text.
+/// When the file's own directory is missing too, `dir_arg` is the nearest
+/// existing lexical ancestor (`missing_dir` selects that variant), so the
+/// listing recipe never names a directory that does not exist.
+pub(super) fn file_missing_params(path: &Path) -> Vec<(&'static str, OsString)> {
+    let given_dir = path
+        .to_str()
+        .and_then(|p| p.strip_suffix(consts::SUFFIX))
+        .filter(|p| !p.is_empty())
+        .map(Path::new)
+        .filter(|p| p.is_dir());
+    if let Some(dir) = given_dir {
+        return vec![
+            ("file", context::display_file(path).into()),
+            ("given_dir", context::object_of_dir(dir).into()),
+            ("dir_arg", dir.as_os_str().to_os_string()),
+        ];
+    }
+    let (dir_arg, missing_dir) = context::nearest_existing_ancestor(path);
+    if missing_dir {
+        vec![
+            ("file", context::display_file(path).into()),
+            ("missing_dir", "1".into()),
+            ("dir_arg", dir_arg.as_os_str().to_os_string()),
+        ]
+    } else {
+        vec![
+            ("file", context::display_file(path).into()),
+            ("dir_arg", dir_arg.as_os_str().to_os_string()),
+        ]
+    }
 }
 
 fn type_fault(actual: doc::Kind, expected: doc::Kind, path: &Path) -> Fault {
-    let cmd_for_actual = match actual {
-        doc::Kind::Post => "post",
-        doc::Kind::Brief => "brief",
-        doc::Kind::Profile => "profile",
-        doc::Kind::State => "state",
-    };
     Fault::reason("E-TYPE")
         .with("actual", actual.as_str())
         .with("expected", expected.as_str())
-        .with("cmd_for_actual", cmd_for_actual)
         .with("dir_arg", context::parent_dir(path).as_os_str())
 }
 
@@ -692,6 +764,17 @@ pub(super) fn after_line_and_blank(src: &str, line_start: usize, block: &str) ->
         }
     }
     (end, format!("\n{block}"))
+}
+
+/// `block` (ending with a terminator) as inserted at `pos`, plus one blank
+/// line when the line already at `pos` has content. An inserted fence or
+/// property line then never touches the heading, fence or text after it,
+/// matching the layout of files the CLI creates. Existing bytes are kept.
+pub(super) fn separated(src: &str, pos: usize, mut block: String) -> String {
+    if pos < src.len() && !is_blank(strip_term(&src[pos..line_end(src, pos)])) {
+        block.push('\n');
+    }
+    block
 }
 
 /// Fenced body block ending with exactly one terminator — for insertions
@@ -898,7 +981,19 @@ mod tests {
         };
         let report = finish(&mut ctx, "brief", &path, Some(stash), Ok(wr)).unwrap();
         assert_eq!(report.status, Status::Warn);
-        assert_eq!(field_keys(&report), ["description", "skipped", "remaining"]);
+        // the write already happened: the fix opens the state file the lock
+        // check could not read, never reruns the write
+        assert_eq!(
+            field_keys(&report),
+            ["description", "fix", "skipped", "fix", "remaining"]
+        );
+        let fixes = field_lists(&report.rows, "fix");
+        assert_eq!(fixes.len(), 2);
+        assert!(
+            fixes[1][0].ends_with(": agent-coexist check remaining-order/state"),
+            "{}",
+            fixes[1][0]
+        );
     }
 
     #[test]
@@ -980,7 +1075,7 @@ mod tests {
         let bytes = std::fs::read(&target).unwrap();
         assert_eq!(
             bytes.as_slice(),
-            b"# foo.post\n\n- subscribers: alice\n> hello\rworld\n"
+            b"# foo.post\n\n- subscribers: alice\n\n> hello\rworld\n"
         );
 
         let target = dir.join("noted.agent-besties.md");
@@ -1127,7 +1222,7 @@ mod tests {
     #[test]
     fn add_reference_rows_keep_first_reply_order_and_missing_targets() {
         let mut done = Done::empty();
-        add_reference_rows(&mut done, "@carol @#5 @#1 @#5 @#9", [1, 5]);
+        add_reference_rows(&mut done, "@carol @#5 @#1 @#5 @#9", ("bob", 2), [1, 5]);
         assert_eq!(
             field_lists(&done.rows, "mentions"),
             vec![vec!["carol".to_string()]]

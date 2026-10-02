@@ -16,7 +16,7 @@ use crate::text::Splice;
 
 use super::post::{
     after_line_and_blank, checked_doc, finish, guarded_apply, line_end, preamble_anchor,
-    require_valid_stem, Applied, Done, Early, Step,
+    require_valid_stem, separated, Applied, Done, Early, Step,
 };
 use super::SubscribeParams;
 
@@ -35,7 +35,7 @@ pub fn run(ctx: &mut Ctx, p: &SubscribeParams) -> Result<Report, Fault> {
 fn step(
     ctx: &mut Ctx,
     p: &SubscribeParams,
-    bytes: Vec<u8>,
+    bytes: &[u8],
     created: bool,
 ) -> Result<(Mutation, Step), Fault> {
     if created {
@@ -48,7 +48,7 @@ fn step(
         done.kv("subscribers", vec![p.nick.clone()]);
         return Ok((Mutation::Write(content.into_bytes()), Step::Done(done)));
     }
-    let doc = match checked_doc(&bytes, &p.path, ctx.now, doc::Kind::Post) {
+    let doc = match checked_doc(bytes, &p.path, ctx.now, doc::Kind::Post) {
         Ok(doc) => doc,
         Err(Early::Step(step)) => return Ok((Mutation::Unchanged, step)),
         Err(Early::Fault(fault)) => return Err(fault),
@@ -56,9 +56,9 @@ fn step(
     let subs = &doc.post.subscribers;
     let mut done = Done::empty();
     if p.cancel {
-        cancel_step(p, &doc, &bytes, subs, ctx.now, &mut done)
+        cancel_step(p, &doc, bytes, subs, ctx.now, &mut done)
     } else {
-        add_step(p, &doc, &bytes, subs, &mut done)
+        add_step(p, &doc, bytes, subs, &mut done)
     }
 }
 
@@ -176,7 +176,7 @@ fn add_step(
             let (pos, inserted) = after_line_and_blank(&doc.source, anchor, &block);
             vec![Splice {
                 range: pos..pos,
-                replacement: inserted.into_bytes(),
+                replacement: separated(&doc.source, pos, inserted).into_bytes(),
             }]
         }
     };

@@ -14,13 +14,16 @@
 
 use std::cmp::Reverse;
 use std::collections::HashMap;
+use std::ffi::OsStr;
 use std::fs;
 use std::path::{Component, Path, PathBuf};
 
 use crate::consts;
+use crate::diag;
 use crate::doc;
 use crate::error::{Diagnostic, Fault};
 use crate::fsx;
+use crate::names;
 use crate::Time;
 
 use super::context::{self, Ctx};
@@ -59,6 +62,249 @@ pub enum ScanIssue {
     /// Parseable entries kept; omitted section or declaration text is
     /// reported → `partial <dir> <ID> L<n>`.
     Partial { id: &'static str, line: usize },
+}
+
+/// What a reader opens to see what an incomplete scan could not read.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Follow {
+    /// The state file of this directory was skipped or partial:
+    /// `check <dir>/state`.
+    StateOf(PathBuf),
+    /// This managed file was skipped or partial: `check <path>`.
+    File(PathBuf),
+    /// This directory could not be read or entered: `check-state <dir>` once
+    /// it is readable and enterable.
+    Unreadable(PathBuf),
+    /// The state file of a directory the walk could not read either (its
+    /// name was listed, the file could not be opened): `check <dir>/state`
+    /// once the directory is readable.
+    StateInUnreadable(PathBuf),
+    /// Directory identity fell back to lexical paths (`canonicalize` rows):
+    /// `check-state <dir>` on the command's own directory, after the path
+    /// exists and every ancestor has search permission.
+    Here(PathBuf),
+    /// A `list` leaf of unknown type (`?` or `busy`): `check <path>`, which
+    /// reads it again with the single-file lock wait and says why.
+    Leaf(PathBuf),
+    /// A directory `list` could not read or enter: `list <dir>` once it is
+    /// readable and enterable.
+    Listing(PathBuf),
+}
+
+/// One displayed `skipped` / `partial` row (§10.5.6).
+#[derive(Debug, Clone)]
+pub struct ScanRow {
+    pub key: &'static str,
+    /// Display path first, then the cause columns.
+    pub values: Vec<String>,
+    pub follow: Follow,
+}
+
+/// Row key and cause columns of one state-file issue. Every renderer uses
+/// this, so one issue always has the same columns: `busy`, `<ID>`, or
+/// `<ID>` and `L<n>` as separate values for a partial file.
+pub fn issue_row(issue: &ScanIssue) -> (&'static str, Vec<String>) {
+    match issue {
+        ScanIssue::Busy => ("skipped", vec!["busy".to_string()]),
+        ScanIssue::Blocking(id) => ("skipped", vec![(*id).to_string()]),
+        ScanIssue::Partial { id, line } => ("partial", vec![(*id).to_string(), format!("L{line}")]),
+    }
+}
+
+/// The `skipped` / `partial` rows of a scope's state-file issues and
+/// unreadable directories. Rows keep native source identity (and
+/// de-duplication) and are then ordered by displayed cwd-relative
+/// directory path (§10.5.4).
+pub fn scan_rows(issues: &[(PathBuf, ScanIssue)], unreadable_dirs: &[PathBuf]) -> Vec<ScanRow> {
+    // (dir, key, cause, state file issue, directory unreadable)
+    let mut tail: Vec<(&Path, &'static str, Vec<String>, bool, bool)> =
+        Vec::with_capacity(issues.len() + unreadable_dirs.len());
+    for (dir, issue) in issues {
+        let (key, cause) = issue_row(issue);
+        tail.push((dir.as_path(), key, cause, true, false));
+    }
+    for dir in unreadable_dirs {
+        tail.push((
+            dir.as_path(),
+            "skipped",
+            vec!["unreadable".to_string()],
+            false,
+            true,
+        ));
+    }
+    tail.sort();
+    // A state file that could not be opened (`skipped <dir> unreadable`) in a
+    // directory the walk could not read either is one row; its next step
+    // names the file and says the directory must be made readable first.
+    tail.dedup_by(|later, earlier| {
+        let same = later.0 == earlier.0 && later.1 == earlier.1 && later.2 == earlier.2;
+        if same {
+            earlier.3 |= later.3;
+            earlier.4 |= later.4;
+        }
+        same
+    });
+    // Display paths may collide; rendering changes ordering, never identity.
+    let mut rows: Vec<(String, ScanRow)> = tail
+        .into_iter()
+        .map(|(dir, key, cause, state, unreadable)| {
+            let display = context::object_of_dir(dir);
+            let mut values = Vec::with_capacity(1 + cause.len());
+            values.push(display.clone());
+            values.extend(cause);
+            let dir = dir.to_path_buf();
+            let follow = match (state, unreadable) {
+                (true, true) => Follow::StateInUnreadable(dir),
+                (false, _) => Follow::Unreadable(dir),
+                (true, false) => Follow::StateOf(dir),
+            };
+            (
+                display,
+                ScanRow {
+                    key,
+                    values,
+                    follow,
+                },
+            )
+        })
+        .collect();
+    rows.sort_by(|a, b| (&a.0, a.1.key, &a.1.values[1..]).cmp(&(&b.0, b.1.key, &b.1.values[1..])));
+    rows.into_iter().map(|(_, row)| row).collect()
+}
+
+/// Fill a scan follow-up fix (`{unreadable}`, `{commands}`): one command per
+/// distinct thing the scan could not read, joined by `; `. When any path
+/// cannot be written as a copyable operand, the `manual` template lists the
+/// commands as descriptions instead. `{unreadable}` is empty, or
+/// [`diag::SCAN_UNREADABLE_FIRST`] and/or [`diag::SCAN_CANONICALIZE_FIRST`].
+pub fn scan_fix<'a>(
+    follows: impl IntoIterator<Item = &'a Follow>,
+    template: &str,
+    manual: &str,
+) -> String {
+    let mut commands: Vec<String> = Vec::new();
+    let mut copyable = true;
+    let (mut state_of, mut file, mut unreadable, mut here) = (false, false, false, false);
+    let (mut leaf, mut listing) = (false, false);
+    // `{unreadable}`: some directory must be made readable first, and/or a
+    // canonicalize fallback must restore existence and ancestor search.
+    let mut readable_first = false;
+    for follow in follows {
+        let command = match follow {
+            Follow::StateOf(dir) => {
+                state_of = true;
+                shown_operand(dir, Some("state")).map(|op| format!("agent-coexist check {op}"))
+            }
+            Follow::StateInUnreadable(dir) => {
+                state_of = true;
+                readable_first = true;
+                shown_operand(dir, Some("state")).map(|op| format!("agent-coexist check {op}"))
+            }
+            Follow::File(path) => {
+                file = true;
+                managed_operand(path).map(|op| format!("agent-coexist check {op}"))
+            }
+            Follow::Unreadable(dir) => {
+                unreadable = true;
+                readable_first = true;
+                shown_operand(dir, None).map(|op| format!("agent-coexist check-state {op}"))
+            }
+            Follow::Here(dir) => {
+                here = true;
+                diag::path_operand(dir.as_os_str())
+                    .map(|op| format!("agent-coexist check-state {op}"))
+            }
+            Follow::Leaf(path) => {
+                leaf = true;
+                managed_operand(path).map(|op| format!("agent-coexist check {op}"))
+            }
+            Follow::Listing(dir) => {
+                listing = true;
+                readable_first = true;
+                shown_operand(dir, None).map(|op| format!("agent-coexist list {op}"))
+            }
+        };
+        match command {
+            Some(command) => {
+                if !commands.contains(&command) {
+                    commands.push(command);
+                }
+            }
+            None => copyable = false,
+        }
+    }
+    let mut extra = String::new();
+    if readable_first {
+        extra.push_str(diag::SCAN_UNREADABLE_FIRST);
+    }
+    if here {
+        extra.push_str(diag::SCAN_CANONICALIZE_FIRST);
+    }
+    // `{commands}` last: a path must never be read as a placeholder.
+    if copyable {
+        template
+            .replace("{unreadable}", &extra)
+            .replace("{commands}", &commands.join("; "))
+    } else {
+        let mut parts: Vec<&str> = Vec::with_capacity(4);
+        if file {
+            parts.push(diag::MANUAL_CHECK_SCAN_FILES);
+        } else if state_of {
+            parts.push(diag::MANUAL_CHECK_STATE_FILES);
+        }
+        if leaf {
+            parts.push(diag::MANUAL_CHECK_LIST_LEAVES);
+        }
+        if unreadable {
+            parts.push(diag::MANUAL_CHECK_STATE_UNREADABLE);
+        }
+        if listing {
+            parts.push(diag::MANUAL_LIST_UNREADABLE);
+        }
+        if here {
+            parts.push(diag::MANUAL_CHECK_STATE_HERE);
+        }
+        manual
+            .replace("{unreadable}", &extra)
+            .replace("{commands}", &parts.join(", and "))
+    }
+}
+
+/// Columns of one `canonicalize` row: display path, `failed`, then the
+/// bounded OS reason when it is not empty.
+pub fn canonicalize_values(dir: &Path, reason: &str) -> Vec<String> {
+    let mut values = vec![context::object_of_dir(dir), "failed".to_string()];
+    if !reason.is_empty() {
+        values.push(reason.to_string());
+    }
+    values
+}
+
+/// Copyable operand for a scanned path as the reader sees it (cwd-relative
+/// display, `/`-joined), optionally with one more component. `None` when
+/// the display would not be the same path (non-UTF-8) or cannot be quoted.
+fn shown_operand(path: &Path, tail: Option<&str>) -> Option<String> {
+    let path = lexical_dir(path);
+    path.to_str()?;
+    let shown = fsx::walk::display_path(&path);
+    let shown = match tail {
+        Some(tail) if shown == "." => tail.to_string(),
+        Some(tail) => format!("{shown}/{tail}"),
+        None => shown,
+    };
+    diag::path_operand(OsStr::new(&shown))
+}
+
+/// `check` operand of a managed file: its display path without the exact
+/// managed suffix. A differently-cased suffix cannot be addressed by a
+/// PATH operand (§2.4.3), so it has no copyable command.
+fn managed_operand(path: &Path) -> Option<String> {
+    path.to_str()?;
+    let shown = fsx::walk::display_path(path);
+    let stem = shown
+        .strip_suffix(consts::SUFFIX)
+        .filter(|stem| !stem.is_empty())?;
+    diag::path_operand(OsStr::new(stem))
 }
 
 /// Diagnostics that keep a state file out of a scan entirely (§10.6.4):
@@ -108,13 +354,23 @@ impl StateFileInfo {
     }
 }
 
+/// One directory whose canonical identity could not be resolved (§10.5.2).
+#[derive(Debug, Clone)]
+pub struct CanonicalizeFail {
+    /// Native lexical source spelling used as the warning key.
+    pub dir: PathBuf,
+    /// Bounded OS reason (`names::display_text` of `io::Error::to_string()`).
+    pub reason: String,
+}
+
 /// The §10.5.1 scope of a directory: itself, its ancestors and its subtree.
 #[derive(Debug, Clone)]
 pub struct StateScope {
     /// Canonicalized target directory (lexical fallback).
     pub root: PathBuf,
-    /// Native lexical dirs whose canonicalization failed (§10.5.2 warn rows).
-    pub canonicalize_failed: Vec<PathBuf>,
+    /// Directories whose canonicalization failed (§10.5.2 warn rows), each
+    /// with its bounded OS reason.
+    pub canonicalize_failed: Vec<CanonicalizeFail>,
     /// The target directory's own state file, when present and readable.
     pub self_file: Option<StateFileInfo>,
     /// Ancestor state files, near → far.
@@ -127,6 +383,8 @@ pub struct StateScope {
     pub unreadable_dirs: Vec<PathBuf>,
     /// Unmatched includes from the subtree walk; hints are not records.
     pub zero_includes: Vec<String>,
+    /// The subtree walk loaded at least one ignore source.
+    pub ignore_in_play: bool,
 }
 
 /// One valid `locked` entry as reported by a conflict scan.
@@ -295,8 +553,8 @@ pub(crate) fn is_reserved_state_file(file: &Path) -> Result<bool, Fault> {
 ///
 /// Ordinary unreadable directories stay in
 /// [`StateScope::unreadable_dirs`]. A fatal ignore/config source error
-/// keeps its typed [`Fault::Io`] (original path and cause) instead of
-/// being rewritten as an unreadable root.
+/// keeps its typed [`Fault::Source`] (source path, cause and repair kind)
+/// instead of being rewritten as an unreadable root.
 pub fn collect(ctx: &mut Ctx, dir: &Path, walk: &fsx::walk::Options) -> Result<StateScope, Fault> {
     let mut files: Vec<StateFileInfo> = Vec::new();
     let mut unreadable: Vec<PathBuf> = Vec::new();
@@ -337,7 +595,14 @@ pub fn collect(ctx: &mut Ctx, dir: &Path, walk: &fsx::walk::Options) -> Result<S
 
     let mut scope = assemble(dir, files, unreadable);
     scope.zero_includes = walked.zero_includes;
+    scope.ignore_in_play = ignore_in_play(&walked.ignore_sources);
     Ok(scope)
+}
+
+/// Whether a walk loaded any ignore source: `WalkResult::ignore_sources`
+/// is `none` or `--no-ignore` otherwise.
+pub fn ignore_in_play(sources: &[String]) -> bool {
+    sources.iter().any(|s| s != "none" && s != "--no-ignore")
 }
 
 /// Assemble a scope from already-read state files (single pass): classify
@@ -366,10 +631,14 @@ pub fn assemble(
             .or_insert_with(|| lexical_dir(path))
             .clone()
     };
-    let mut failed: Vec<PathBuf> = root_failed
-        .map(|path| source_dir(&path, lexical_identity(&root)))
-        .into_iter()
-        .collect();
+    let mut failed: Vec<CanonicalizeFail> = Vec::new();
+    if let Some((path, reason)) = root_failed {
+        push_failed(
+            &mut failed,
+            source_dir(&path, lexical_identity(&root)),
+            reason,
+        );
+    }
     let mut issues: Vec<(PathBuf, ScanIssue)> = Vec::new();
 
     let mut self_file: Option<StateFileInfo> = None;
@@ -378,7 +647,10 @@ pub fn assemble(
 
     for mut info in files {
         let lex = info.dir.clone();
-        let canon = fs::canonicalize(&lex).ok();
+        let (canon, canon_err) = match fs::canonicalize(&lex) {
+            Ok(p) => (Some(p), None),
+            Err(e) => (None, Some(names::display_text(&e.to_string()))),
+        };
         if info.issue.is_some() || canon.is_none() {
             let source = source_dir(
                 &parent_dir(&info.file),
@@ -387,8 +659,8 @@ pub fn assemble(
             if let Some(issue) = &info.issue {
                 issues.push((source.clone(), issue.clone()));
             }
-            if canon.is_none() {
-                push_uniq(&mut failed, source);
+            if let Some(reason) = canon_err {
+                push_failed(&mut failed, source, reason);
             }
         }
         let mut rel = Rel::Other;
@@ -442,6 +714,7 @@ pub fn assemble(
         issues,
         unreadable_dirs: unreadable,
         zero_includes: Vec::new(),
+        ignore_in_play: false,
     }
 }
 
@@ -709,11 +982,16 @@ fn rel_between(dir: &Path, root: &Path) -> Rel {
 }
 
 /// Canonicalized identity of `dir` (§10.5.2); on failure retain the native
-/// lexical source for the warning, independently of its eventual display.
-fn normalize_dir(dir: &Path) -> (PathBuf, bool, Option<PathBuf>) {
+/// lexical source for the warning, independently of its eventual display,
+/// together with a bounded OS reason.
+fn normalize_dir(dir: &Path) -> (PathBuf, bool, Option<(PathBuf, String)>) {
     match fs::canonicalize(dir) {
         Ok(p) => (p, true, None),
-        Err(_) => (dir.to_path_buf(), false, Some(lexical_dir(dir))),
+        Err(e) => (
+            dir.to_path_buf(),
+            false,
+            Some((lexical_dir(dir), names::display_text(&e.to_string()))),
+        ),
     }
 }
 
@@ -798,6 +1076,12 @@ pub(super) fn lexical_dir(p: &Path) -> PathBuf {
 fn push_uniq(v: &mut Vec<PathBuf>, s: PathBuf) {
     if !v.contains(&s) {
         v.push(s);
+    }
+}
+
+fn push_failed(failed: &mut Vec<CanonicalizeFail>, dir: PathBuf, reason: String) {
+    if !failed.iter().any(|f| f.dir == dir) {
+        failed.push(CanonicalizeFail { dir, reason });
     }
 }
 
@@ -1330,17 +1614,19 @@ mod tests {
                 "fatal ignore source must not succeed as an unreadable root: {:?}",
                 scope.unreadable_dirs
             ),
-            Err(Fault::Io {
-                action,
+            Err(Fault::Source {
                 path,
-                source,
+                problem,
+                cause,
             }) => {
-                assert_eq!(action, "scan");
                 assert_eq!(path, dir.join(".ignore"));
-                assert_eq!(source.kind(), std::io::ErrorKind::InvalidData);
-                assert!(!source.to_string().is_empty());
+                assert_eq!(
+                    problem,
+                    crate::error::SourceProblem::Content { line: Some(1) }
+                );
+                assert!(cause.starts_with("line 1: "), "{cause}");
             }
-            Err(other) => panic!("expected scan Io, got {other:?}"),
+            Err(other) => panic!("expected source fault, got {other:?}"),
         }
         let _ = std::fs::remove_dir_all(&dir);
     }

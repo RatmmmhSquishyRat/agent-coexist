@@ -178,7 +178,13 @@ pub(crate) fn scan(ctx: &mut ScanCtx, preamble: Range<usize>, sections: &[Sectio
         }
         let hash_valid = hash.as_ref().is_some_and(|h| is_sha256_hex(&h.value));
         if !hash_valid {
-            ctx.push(Diagnostic::new("E-ENTRY-HASH", head_line).with("title", sec.title.clone()));
+            let mut diagnostic =
+                Diagnostic::new("E-ENTRY-HASH", head_line).with("title", sec.title.clone());
+            // --refresh skips a path-less entry, so its repair is --target.
+            if path.is_none() {
+                diagnostic = diagnostic.with("no_path", "1");
+            }
+            ctx.push(diagnostic);
         }
         if let Some(r) = &regex {
             if let Err(err) = regex::Regex::new(&r.value) {
@@ -186,7 +192,7 @@ pub(crate) fn scan(ctx: &mut ScanCtx, preamble: Range<usize>, sections: &[Sectio
                 // "<file>", is an executable target rather than a marker.
                 let mut diagnostic = Diagnostic::new("E-ENTRY-REGEX", r.line)
                     .with("title", sec.title.clone())
-                    .with("err", names::display_text(&err.to_string()));
+                    .with("err", names::regex_reason(&err));
                 if let Some(path) = &path {
                     diagnostic = diagnostic.with("target_arg", path.value.clone());
                 }

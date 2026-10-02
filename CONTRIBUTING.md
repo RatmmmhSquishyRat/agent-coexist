@@ -110,11 +110,11 @@ Each item links to the reference section that defines its terms:
   a same-file lock-conflict fix keeps `--status=locked`; an explicit
   `--remove` without `--status` still spans statuses. An unselected or
   misnamed state-content file (see the
-  [reserved file](docs/usage.md#declaring)), including a wait `removed`
-  baseline ([The wait report](docs/usage.md#the-wait-report)), gets
-  hand-edit advice and never a directory-level `state` command against a
-  sibling reserved file; rename advice never overwrites an existing state
-  file.
+  [reserved file](docs/usage.md#declaring)) gets hand-edit advice and
+  never a directory-level `state` command against a sibling reserved
+  file; rename advice never overwrites an existing state file. A wait
+  `removed` report prints no diagnostics from the deleted file
+  ([The wait report](docs/usage.md#the-wait-report)).
 - **Heading repairs** ([Headings the CLI cannot address](docs/file-format.md#headings-the-cli-cannot-address)).
   Suggested profile section names and post header sequence numbers are
   unique across existing headings and every other repair in the same
@@ -134,7 +134,8 @@ Each item links to the reference section that defines its terms:
   sanitized.
 - **Conflict output** ([Scope, inheritance, and conflicts](docs/usage.md#scope-inheritance-and-conflicts)).
   `W-STATE-CONFLICT` pair diagnostics appear only on explicit `check` and
-  on qualifying wait hits, and a complete check lists every pair. Wait
+  on qualifying wait hits other than a deletion hit, and a complete check
+  lists every pair. Wait
   refuses a baseline with a duplicate `(status, nick)` pair
   ([Lifecycle](docs/usage.md#lifecycle)).
 
@@ -170,14 +171,17 @@ crates.io, patched in-tree.
   pin.
 - The local delta is limited to what scans need:
   - Ignore and git-config sources are opened as regular files, and load
-    errors reach the scanner.
+    errors reach the scanner. When a file's rules parse but cannot be
+    compiled together (a size or nesting limit), the error names that file.
   - Glob matching uses native path bytes. Unix prefix stripping requires
     a component boundary; upstream raw `./` remainder spelling is kept.
   - Git layouts: worktree, separate-gitdir, gitfile, and `commondir`
     layouts are followed. Relative gitfile paths resolve from the
     gitfile's directory and relative `commondir` paths from the gitdir;
     ordinary `.git` directories honor `commondir` the same way; a missing
-    optional `commondir` keeps that gitdir's exclude rules. Gitfile and
+    optional `commondir` keeps that gitdir's exclude rules; a gitdir that
+    is missing or not a directory is reported against that gitdir on every
+    platform (Unix `ENOTDIR` included). Gitfile and
     `commondir` descriptors are read in full, with only trailing CR/LF
     trimmed. An explicit global config replaces the default global files.
   - `core.excludesFile`: only a recognized leading `~` home component

@@ -23,6 +23,17 @@ what the tool does guarantee, what it does not, and how to report a problem.
   (and remove it again, with any empty directories it created, if the
   write is refused) or delete a state file reduced to its heading, reader
   comments, and blank lines.
+- **A failed write says what it left.** Writes happen in place, growth
+  first, so running out of space while a file grows leaves its previous
+  bytes untouched. If a write fails in the running process, the CLI tries
+  to put the previous content back. When that fails too, the report says
+  the file may hold a mix of old and new bytes; when only the final sync
+  fails, it says the change is in the file but may not be stored on disk
+  yet. Neither case offers a retry
+  ([When a write fails partway](docs/usage.md#when-a-write-fails-partway)).
+  This is not atomic and not crash-safe: a process that is killed, or a
+  machine that loses power, in the middle of a write can leave the file
+  mixed, and the restore itself is not synced.
 - **CLI processes do not interleave.** Short-lived shared and exclusive OS
   file locks keep concurrent `agent-coexist` processes from interleaving
   reads and writes of the same file.

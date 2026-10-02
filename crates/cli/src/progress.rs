@@ -3,7 +3,8 @@
 //! Only active when stderr is a terminal. Nothing is emitted before
 //! `PROGRESS_AFTER_MS` counted from the first counter callback; afterwards
 //! one line is rewritten every `PROGRESS_EVERY_MS`:
-//! `\rscanning <n> dirs, <m> files...` — no newline. [`Progress::finish`]
+//! `\rscanning dirs: <n>, files: <m>...` — no newline. The `label: count`
+//! form reads correctly for every count, including 1. [`Progress::finish`]
 //! erases the line with blanks and a carriage return.
 //!
 //! The counters (`directories entered`, `managed files accounted for`,
@@ -75,7 +76,7 @@ pub fn make(active: bool) -> (Option<ProgressFn>, Progress) {
         if !due {
             return;
         }
-        let line = format!("scanning {dirs} dirs, {files} files...");
+        let line = format!("scanning dirs: {dirs}, files: {files}...");
         // Best-effort on stderr: a failure here must not fail the command.
         let _ = write!(std::io::stderr(), "\r{line}");
         state.drawn = Some(now);

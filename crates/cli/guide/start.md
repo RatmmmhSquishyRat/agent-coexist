@@ -56,7 +56,7 @@ coordinate before changing a locked area.
 
 ## Where the files live
 
-Every managed file ends in `.agent-besties.md`, and the heading inside it
+Every coexist file ends in `.agent-besties.md`, and the heading inside it
 names its type. Commands accept the path with or without that suffix:
 `parser-review` means `parser-review.agent-besties.md` in the current
 directory. A creating command also creates missing parent directories, so
@@ -68,10 +68,13 @@ exist: `agent-coexist state src/parser ...` writes
 `src/parser/state.agent-besties.md`.
 
 Put files where the people who need them will look: a thread next to the
-work it discusses, or a shared notes folder the team already uses. Records
-in a folder that ignore rules such as `.gitignore` exclude may not appear
-when others discover files below a directory by default; readers then
-need `--no-ignore` or the file's path to find them.
+work it discusses, or a shared notes folder the team already uses. A
+folder that ignore rules such as `.gitignore` exclude is skipped by
+`list`, `check-state`, and `read-notification`, so others need
+`--no-ignore` or the file's path to find records there. The conflict
+check `state` runs after writing skips such folders too, and `state`
+has no `--no-ignore`; run `agent-coexist check-state <dir> --no-ignore`
+to see locks inside them.
 All participants need access to the same files. Coexist does not copy
 them between checkouts or machines, and locking on network shares is not
 guaranteed.

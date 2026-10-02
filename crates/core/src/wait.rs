@@ -30,12 +30,14 @@
 //! Report row conventions (consumed by the single CLI renderer):
 //!
 //! - `bytes` / `semantic` / `created` / `removed` are ordinary key/value rows.
-//! - Ordinary warn-level diagnostics of the current admitted snapshot (the
-//!   before snapshot stands in when the file was just removed) are emitted as
+//! - Ordinary warn-level diagnostics of the after snapshot are emitted as
 //!   diagnostic rows with their real anchors and promote the first line to
 //!   `warn` (still exit 0). They never invalidate a snapshot. Same-file
 //!   `W-STATE-CONFLICT` rows are derived from that snapshot only after a
-//!   qualifying hit, using the clock that admitted it.
+//!   qualifying hit, using the clock that admitted it. A removal has no
+//!   after snapshot, so its report carries no diagnostics: the before
+//!   snapshot's warnings described a file that no longer exists and would
+//!   read as current problems with actionable fixes.
 //! - Entity changes are `Fields` rows with indent 2 and key width 6:
 //!   `add` / `remove` carry the entity identity, `update` additionally names
 //!   the changed field.
@@ -345,20 +347,12 @@ fn validate(document: &Document, filter: &Filter, path: &Path) -> Result<(), Fau
     };
     if let Some(expected) = expected {
         if kind != expected {
-            let mut fault = Fault::reason("E-TYPE")
+            // The fix asks for a path of the expected type in this file's
+            // directory, or (expected state) to rename the reserved file.
+            return Err(Fault::reason("E-TYPE")
                 .with("actual", kind)
-                .with("expected", expected);
-            if kind == "state" {
-                fault = fault.with("dir_arg", context::parent_dir(path).as_os_str());
-            } else {
-                let cmd = match kind {
-                    "post" => "post",
-                    "brief" => "brief",
-                    _ => "profile",
-                };
-                fault = fault.with("cmd_for_actual", cmd);
-            }
-            return Err(fault);
+                .with("expected", expected)
+                .with("dir_arg", context::parent_dir(path).as_os_str()));
         }
     }
     check_duplicate_state_identities(document, path)
@@ -366,14 +360,15 @@ fn validate(document: &Document, filter: &Filter, path: &Path) -> Result<(), Fau
 
 /// Parse and validate one present sample. Diagnostic refusals become the
 /// check-shaped error report from this snapshot (no extra read to recover
-/// kind). `E-TYPE` and I/O stay `Fault`.
+/// kind). `E-TYPE` and I/O stay `Fault`. The stem is the listed spelling
+/// at admission ([`fsx::listed_path`]); report rows keep `path` as typed.
 fn admit_present(
     bytes: Vec<u8>,
     path: &Path,
     filter: &Filter,
     now: Time,
 ) -> Result<Result<Document, Report>, Fault> {
-    let document = match doc::parse(bytes, path, now) {
+    let document = match doc::parse(bytes, &fsx::listed_path(path), now) {
         Ok(document) => document,
         Err(Fault::Diagnostics(diagnostics)) => {
             return Ok(Err(blocking_present_report(
@@ -1092,18 +1087,18 @@ fn build_report(
     if removed {
         report.kv("removed", vec![context::display_file(path)]);
     }
-    // Ordinary warn-level diagnostics of the current admitted snapshot (the
-    // before snapshot stands in when the file was just removed), with their
-    // real anchors. Error-level diagnostics of an admitted snapshot do not
-    // exist by construction (blocking ones failed validation; the remaining
-    // non-blocking E-* belong to `check`, not to a change report).
-    let warnings = match after.as_ref() {
-        Some(model) => snapshot_warnings(model, now),
-        None => before
-            .as_ref()
-            .map(|model| snapshot_warnings(model, now))
-            .unwrap_or_default(),
-    };
+    // Ordinary warn-level diagnostics of the after snapshot, with their
+    // real anchors. A removed file has none: warnings of the deleted before
+    // snapshot (a conflict, an expired entry) no longer describe any file,
+    // and their fixes would ask for repairs nobody can make. The removal
+    // itself is the reported event. Error-level diagnostics of an admitted
+    // snapshot do not exist by construction (blocking ones failed
+    // validation; the remaining non-blocking E-* belong to `check`, not to
+    // a change report).
+    let warnings = after
+        .as_ref()
+        .map(|model| snapshot_warnings(model, now))
+        .unwrap_or_default();
     let mut has_warnings = false;
     for diagnostic in warnings
         .into_iter()

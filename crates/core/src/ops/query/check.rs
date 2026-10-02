@@ -636,4 +636,90 @@ mod tests {
             vec![vec!["alice, bob, carol".to_string()]]
         );
     }
+
+    /// `check` through the real filesystem: the W-NAME stem is the
+    /// directory entry's spelling, the `file` row the operand as typed.
+    #[cfg(any(windows, target_os = "macos"))]
+    mod listed_spelling {
+        use super::*;
+        use crate::ops::CheckParams;
+
+        const NOW: &str = "2026-09-17T10:00:00Z";
+
+        fn check_at(path: std::path::PathBuf) -> Report {
+            let mut ctx = context::test_ctx(crate::time::parse(NOW).unwrap());
+            check(&mut ctx, &CheckParams { path }).expect("check runs")
+        }
+
+        fn wname_stems(report: &Report) -> Vec<String> {
+            report
+                .rows
+                .iter()
+                .filter_map(|row| match row {
+                    Row::Diagnostic(d) if d.id == "W-NAME" => d
+                        .params
+                        .iter()
+                        .find(|(k, _)| *k == "stem")
+                        .map(|(_, v)| v.to_string_lossy().into_owned()),
+                    _ => None,
+                })
+                .collect()
+        }
+
+        #[test]
+        fn case_variant_operand_uses_the_on_disk_name() {
+            let root = tempfile::tempdir().unwrap();
+            std::fs::create_dir(root.path().join("room")).unwrap();
+            std::fs::write(
+                root.path().join("room").join("standup.agent-besties.md"),
+                "# standup.post\n",
+            )
+            .unwrap();
+            let typed = root.path().join("ROOM").join("STANDUP.agent-besties.md");
+            let report = check_at(typed);
+            assert_eq!(wname_stems(&report), Vec::<String>::new());
+            assert_eq!(report.status, Status::Ok);
+            let file = field_values(&report, "file");
+            assert!(file[0][0].ends_with("STANDUP.agent-besties.md"), "{file:?}");
+
+            // A real mismatch still warns, naming the on-disk stem so the
+            // offered H1 is the one that silences the canonical spelling.
+            std::fs::write(
+                root.path().join("room").join("standup.agent-besties.md"),
+                "# retro.post\n",
+            )
+            .unwrap();
+            let typed = root.path().join("ROOM").join("STANDUP.agent-besties.md");
+            assert_eq!(wname_stems(&check_at(typed)), vec!["standup".to_string()]);
+        }
+
+        #[test]
+        fn on_disk_case_mismatch_warns_even_when_the_operand_matches_the_h1() {
+            let root = tempfile::tempdir().unwrap();
+            std::fs::write(
+                root.path().join("Standup.agent-besties.md"),
+                "# standup.post\n",
+            )
+            .unwrap();
+            let typed = root.path().join("standup.agent-besties.md");
+            assert_eq!(wname_stems(&check_at(typed)), vec!["Standup".to_string()]);
+        }
+
+        #[test]
+        fn symlink_alias_keeps_its_own_name() {
+            let root = tempfile::tempdir().unwrap();
+            let target = root.path().join("standup.agent-besties.md");
+            std::fs::write(&target, "# standup.post\n").unwrap();
+            let alias = root.path().join("alias.agent-besties.md");
+            #[cfg(unix)]
+            std::os::unix::fs::symlink(&target, &alias).unwrap();
+            #[cfg(windows)]
+            if std::os::windows::fs::symlink_file(&target, &alias).is_err() {
+                // Creating symlinks needs Developer Mode or elevation.
+                return;
+            }
+            let typed = root.path().join("ALIAS.agent-besties.md");
+            assert_eq!(wname_stems(&check_at(typed)), vec!["alias".to_string()]);
+        }
+    }
 }

@@ -80,7 +80,7 @@ pub(crate) fn scan(ctx: &mut ScanCtx, sections: &[Section]) -> Vec<ProfileSectio
             }
             ctx.push(diagnostic);
         }
-        if sec.body.is_none() {
+        if sec.body.is_none() && !ctx.holds_unclosed_fence(sec) {
             ctx.push(
                 Diagnostic::new("W-BODY", head_line)
                     .with(

@@ -4,7 +4,9 @@
 //! Flow:
 //!
 //! 1. clap parses the grammar; errors pass through the one-line usage
-//!    emitter, while explicit help/version retain clap's stdout and exit 0.
+//!    emitter (after [`args::grammar_error_message`] corrects the advice
+//!    clap cannot give for a hyphen-leading value or non-Unicode value),
+//!    while explicit help/version retain clap's stdout and exit 0.
 //! 2. `guide` is an information command: emit the embedded Markdown page and
 //!    return before argv recovery, progress, Ctx, environment validation, or
 //!    business resolution. Write/flush failure is exit 1 with no status line.
@@ -24,9 +26,13 @@
 //! help and version use clap's output; guide writes borrowed Markdown.
 //! Usage failures print exactly one stderr line and exit 2 with stdout
 //! untouched. Every other business failure is a rendered report: OS-level
-//! I/O faults take the §8.3.5 reason/fix form; `Reason`/`Diagnostics`
-//! faults that escape a command are rendered (never discarded).
+//! I/O faults take the §8.3.5 reason/fix form, ignore/config source faults
+//! the same form with a repair matched to the cause, and a write that left
+//! its file changed or unconfirmed a form that never repeats the command;
+//! `Reason`/`Diagnostics` faults that escape a command are rendered (never
+//! discarded).
 
+use std::cell::Cell;
 use std::ffi::OsString;
 use std::io::{ErrorKind, Write};
 use std::path::Path;
@@ -41,7 +47,7 @@ mod progress;
 mod render;
 
 use coexist_core::diag;
-use coexist_core::error::{Diagnostic, Fault};
+use coexist_core::error::{Diagnostic, Fault, SourceProblem, WriteLeft};
 use coexist_core::ops::{self, context, Ctx};
 use coexist_core::report::{Report, Row, Status};
 use coexist_core::wait;
@@ -50,8 +56,8 @@ fn main() -> ExitCode {
     let cli = match args::Cli::try_parse() {
         Ok(cli) => cli,
         Err(error) if error.use_stderr() => {
-            let message = error.to_string();
-            return usage_stderr(message.strip_prefix("error: ").unwrap_or(&message));
+            let words: Vec<OsString> = std::env::args_os().collect();
+            return usage_stderr(&args::grammar_error_message(error, &words));
         }
         Err(error) => error.exit(),
     };
@@ -87,6 +93,18 @@ fn main() -> ExitCode {
                     let report = io_report(command, &object, action, &path, &source, &ctx);
                     emit(&report, &dctx)
                 }
+                Err(Fault::WriteUncertain { path, cause, left }) => emit(
+                    &write_uncertain_report(command, &object, &path, &cause, &left),
+                    &dctx,
+                ),
+                Err(Fault::Source {
+                    path,
+                    problem,
+                    cause,
+                }) => emit(
+                    &source_report(command, &object, &path, problem, &cause, &ctx),
+                    &dctx,
+                ),
                 // Base commands never install a cancellation source, so this
                 // is an internal inconsistency; report it as an error rather
                 // than pretending a result exists.
@@ -115,7 +133,16 @@ fn main() -> ExitCode {
                 // fatal.
                 let _ = ctrlc::set_handler(move || cancel.cancel());
             }
+            // Stack flag set by the ready callback itself (`wait::run`
+            // calls it exactly once, after the baseline is admitted), so
+            // a fault report below can tell a start-time path mistake
+            // from a structural path loss the wait had already watched
+            // past. The closure only borrows it; no Arc, no allocation.
+            let ready_fired = Cell::new(false);
             let ready = || {
+                // Recorded before the best-effort hint: the wait is
+                // ready even when stderr cannot be written.
+                ready_fired.set(true);
                 // One readiness hint on stderr, best-effort: a failing
                 // stderr must not cancel an otherwise valid wait result.
                 // Empty object uses the same `/` column as stdout reports.
@@ -142,9 +169,74 @@ fn main() -> ExitCode {
                     path: io_path,
                     source,
                 }) => {
-                    let report = io_report(command, &object, action, &io_path, &source, &ctx);
+                    // A retry offered after a wait's ready line is a new
+                    // wait: its baseline already contains any change made
+                    // while the file could not be read (E-LOCKED/E-INUSE
+                    // say the same through their templates), so the
+                    // re-read comes before the repair and retry. A
+                    // path-class fault before the ready line is a
+                    // start-time mistake and keeps the corrected-path
+                    // advice with no retry. After the ready line the same
+                    // three kinds mean the path's surroundings changed
+                    // while it was watched — the parent existed and the
+                    // baseline was read when the wait started — so the
+                    // fix restores the intended path and still takes the
+                    // new baseline before the same retry. Spelling-class
+                    // faults (InvalidFilename, Windows raw 123/206)
+                    // cannot follow a successful open, so wherever they
+                    // appear they keep the start-time advice.
+                    let restore = if ready_fired.get() {
+                        match source.kind() {
+                            ErrorKind::NotFound => Some(diag::FIX_WAIT_RESTORE_DIR_GONE),
+                            ErrorKind::NotADirectory => Some(diag::FIX_WAIT_RESTORE_DIR_REPLACED),
+                            ErrorKind::IsADirectory => Some(diag::FIX_WAIT_RESTORE_NOT_REGULAR),
+                            // On Unix, `Unsupported` here is only the
+                            // storage read's own regular-file rejection
+                            // (the watched path became a directory, FIFO
+                            // or device); Windows also maps
+                            // ERROR_NOT_SUPPORTED to it, so there it
+                            // keeps the generic non-path repair.
+                            ErrorKind::Unsupported if cfg!(unix) => {
+                                Some(diag::FIX_WAIT_RESTORE_NOT_REGULAR)
+                            }
+                            _ => None,
+                        }
+                    } else {
+                        None
+                    };
+                    let reread = if command == "wait-state" {
+                        diag::REREAD_STATE
+                    } else {
+                        diag::REREAD_FILE
+                    };
+                    let lead = diag::FIX_WAIT_IO_LEAD.replace("{reread}", reread);
+                    let recovery = WaitRecovery {
+                        lead: &lead,
+                        path_restore: restore,
+                    };
+                    let report = io_report_with_retry_lead(
+                        command,
+                        &object,
+                        action,
+                        &io_path,
+                        &source,
+                        &ctx,
+                        Some(&recovery),
+                    );
                     emit(&report, &dctx)
                 }
+                Err(Fault::WriteUncertain { path, cause, left }) => emit(
+                    &write_uncertain_report(command, &object, &path, &cause, &left),
+                    &dctx,
+                ),
+                Err(Fault::Source {
+                    path: source_path,
+                    problem,
+                    cause,
+                }) => emit(
+                    &source_report(command, &object, &source_path, problem, &cause, &ctx),
+                    &dctx,
+                ),
                 Err(Fault::Reason { id, params }) => {
                     let report = reason_from_fault(&dctx, command, &object, id, params);
                     emit(&report, &dctx)
@@ -209,12 +301,32 @@ fn usage_stderr(msg: &str) -> ExitCode {
     ExitCode::from(2)
 }
 
+/// The wait dispatch's recovery context for a fault report: the
+/// new-baseline re-read lead every wait retry carries (see
+/// [`diag::FIX_WAIT_IO_LEAD`], `{reread}` already substituted), plus the
+/// optional restore template for a structural path fault that struck after
+/// the wait's ready line — path-class, or the Unix regular-file rejection
+/// (a [`diag::FIX_WAIT_RESTORE_*`] constant,
+/// `{display}` still unsubstituted). The lead is required so a restore
+/// without its new-baseline lead cannot be expressed; base commands pass
+/// no context at all.
+struct WaitRecovery<'a> {
+    lead: &'a str,
+    path_restore: Option<&'static str>,
+}
+
 /// The §8.3.5 report for an OS-level I/O fault: `reason` =
 /// `cannot <action> <display file>: <os error>`, `fix` chosen by error
-/// nature — path-class errors (NotFound / IsADirectory / NotADirectory /
-/// InvalidFilename, or Windows raw 123 / 206) get `fix the path...`, all
-/// others (disk full, permission, transient) get the retry form with the
-/// POSIX-quoted argv. Exit 1.
+/// nature. Path-class errors (NotFound / IsADirectory / NotADirectory /
+/// InvalidFilename, or Windows raw 123 / 206) get `fix the path...`.
+/// When that failing original path still contains a control character, the
+/// fix names it with [`coexist_core::names::echo_raw`] so the character
+/// folded out of `reason` stays visible; the folded reason path is
+/// unchanged, the path is not rejected here, and Unix names that allow
+/// the character keep the same OS class.
+/// Every other error gets a repair for its kind (see [`io_repair`]),
+/// followed by the retry with the POSIX-quoted argv, or a by-hand retry
+/// when the command line cannot be written as one copyable command. Exit 1.
 fn io_report(
     command: &'static str,
     object: &str,
@@ -223,19 +335,41 @@ fn io_report(
     source: &std::io::Error,
     ctx: &Ctx,
 ) -> Report {
+    io_report_with_retry_lead(command, object, action, path, source, ctx, None)
+}
+
+/// [`io_report`] with the wait dispatch's optional [`WaitRecovery`]
+/// context: its lead sentence goes in front of the repair and retry, and
+/// its optional restore template takes the fix wholesale whenever present
+/// — a structural loss of a path the command had already proven valid,
+/// replacing both the corrected-path advice and the generic I/O repair.
+/// Base commands pass no context and get the plain [`io_report`] behavior.
+fn io_report_with_retry_lead(
+    command: &'static str,
+    object: &str,
+    action: &'static str,
+    path: &Path,
+    source: &std::io::Error,
+    ctx: &Ctx,
+    wait_recovery: Option<&WaitRecovery<'_>>,
+) -> Report {
     let mut report = Report::new(command, object);
     let display = context::display_file(path);
     // The reason sentence is one display column (§8.1.4–5): a raw cause
     // can embed two-space runs, so the composed human text is folded like
     // any other (§10.9.4) — never truncated, never re-quoted. The borrowed
     // `source` below still decides kind/raw-OS class, and the fix/argv
-    // branch keeps native operands verbatim.
+    // branch keeps native operands verbatim. A control character in the
+    // original path is named only in the path-class fix, never by changing
+    // this folded reason.
     report.kv(
         "reason",
         vec![coexist_core::names::display_text(&format!(
             "cannot {action} {display}: {source}"
         ))],
     );
+    let retry_lead = wait_recovery.map(|recovery| recovery.lead);
+    let path_restore = wait_recovery.and_then(|recovery| recovery.path_restore);
     let path_class = matches!(
         source.kind(),
         ErrorKind::NotFound
@@ -243,13 +377,162 @@ fn io_report(
             | ErrorKind::NotADirectory
             | ErrorKind::InvalidFilename
     ) || matches!(source.raw_os_error(), Some(123) | Some(206));
-    let fix = if path_class {
-        "fix the path, then run the corrected command".to_string()
-    } else if let Some(argv) = &ctx.argv {
-        format!("check the file's permissions and free space, then retry: {argv}")
-    } else {
-        diag::FIX_NATIVE_OPERAND.to_string()
+    // Repair and retry for every fault whose fix still offers the original
+    // command. A restore template is decided by the wait dispatch for a
+    // post-ready structural fault and takes this branch whenever it is
+    // present — including the Unix regular-file rejection, which is
+    // `Unsupported` and therefore not in `path_class` below, yet is the
+    // same structural loss of a path the wait had proven valid. The
+    // POSIX-quoted argv retry, the manual by-hand form for an
+    // unrepresentable command line and the optional lead are shared.
+    let repair_and_retry = |repair: String| {
+        let retry = match &ctx.argv {
+            Some(argv) => format!("{repair}, then retry: {argv}"),
+            None => {
+                let manual = diag::FIX_NATIVE_OPERAND;
+                let why = manual.split_once("; ").map_or(manual, |(_, why)| why);
+                format!("{repair}, then retry the original command by hand; {why}")
+            }
+        };
+        match retry_lead {
+            Some(lead) => format!("{lead}; {retry}"),
+            None => retry,
+        }
     };
+    let fix = match path_restore {
+        Some(template) => repair_and_retry(template.replace("{display}", &display)),
+        None if path_class => {
+            let unfolded = coexist_core::fsx::walk::display_path(path);
+            if unfolded.chars().any(char::is_control) {
+                format!(
+                    "the path contains a line break or other control character (original: '{}'); fix the path, then run the corrected command",
+                    coexist_core::names::echo_raw(&unfolded),
+                )
+            } else {
+                "fix the path, then run the corrected command".to_string()
+            }
+        }
+        None => repair_and_retry(io_repair(&display, source)),
+    };
+    report.kv("fix", vec![fix]);
+    report.status = Status::Error;
+    report.exit = 1;
+    report
+}
+
+/// The repair step for a non-path I/O error on `display`. The kinds name
+/// what can still be done about them; none of them claims a single cause.
+/// A denied access (Unix EACCES/EPERM, Windows error 5) can come from the
+/// file's or a containing directory's permissions; on Windows error 5 also
+/// means that another program is deleting or replacing the file (a delete
+/// pending until its handle closes), so that remedy is named there too. A
+/// Windows sharing violation at open is E-INUSE before it reaches this
+/// report. Any other error keeps the OS text in `reason` as the thing to
+/// resolve rather than guessing permissions or disk space.
+fn io_repair(display: &str, source: &std::io::Error) -> String {
+    match source.kind() {
+        ErrorKind::PermissionDenied if cfg!(windows) => format!(
+            "check the permissions of {display} and of the directories on its path, or wait until another program stops using, deleting or replacing it"
+        ),
+        ErrorKind::PermissionDenied => {
+            format!("check the permissions of {display} and of the directories on its path")
+        }
+        ErrorKind::StorageFull | ErrorKind::QuotaExceeded => {
+            format!("free disk space or quota where {display} is stored")
+        }
+        // EFBIG: the process file-size limit (RLIMIT_FSIZE) or the file
+        // system's maximum file size, not free space.
+        ErrorKind::FileTooLarge if cfg!(unix) => format!(
+            "raise this shell's file-size limit (ulimit -f), or move {display} to a file system that allows larger files"
+        ),
+        ErrorKind::FileTooLarge => {
+            format!("move {display} to a file system that allows larger files")
+        }
+        ErrorKind::ReadOnlyFilesystem => {
+            format!("make the file system that holds {display} writable")
+        }
+        _ => "resolve the error shown in 'reason'".to_string(),
+    }
+}
+
+/// The report for a write that stopped after changing its file, when the
+/// file is not known to show its previous content (`Fault::WriteUncertain`).
+/// Unlike [`io_report`] it never offers the command again: the change, or
+/// part of it, may already be in the file, and repeating a post would add
+/// it twice. It names the repair for the error that blocks recovery and
+/// then `check` on the file. Exit 1.
+fn write_uncertain_report(
+    command: &'static str,
+    object: &str,
+    path: &Path,
+    cause: &std::io::Error,
+    left: &WriteLeft,
+) -> Report {
+    let mut report = Report::new(command, object);
+    let display = context::display_file(path);
+    let check = match diag::path_operand(path.as_os_str()) {
+        Some(operand) => format!(": agent-coexist check {operand}"),
+        None => {
+            let manual = diag::FIX_NATIVE_OPERAND;
+            let why = manual.split_once("; ").map_or(manual, |(_, why)| why);
+            format!(" (run check on it by hand; {why})")
+        }
+    };
+    let (reason, fix) = match left {
+        WriteLeft::Unconfirmed => (
+            diag::MESSAGE_WRITE_UNCONFIRMED
+                .replace("{file}", &display)
+                .replace("{cause}", &cause.to_string()),
+            diag::FIX_WRITE_UNCONFIRMED
+                .replace("{repair}", &io_repair(&display, cause))
+                .replace("{check}", &check),
+        ),
+        WriteLeft::Mixed {
+            from,
+            len,
+            rollback,
+        } => (
+            diag::MESSAGE_WRITE_MIXED
+                .replace("{file}", &display)
+                .replace("{cause}", &cause.to_string())
+                .replace("{rollback}", &rollback.to_string()),
+            diag::FIX_WRITE_MIXED
+                .replace("{from}", &from.to_string())
+                .replace("{len}", &len.to_string())
+                .replace("{repair}", &io_repair(&display, rollback))
+                .replace("{check}", &check),
+        ),
+    };
+    // One display column, like the I/O reason (§8.1.4–5, §10.9.4).
+    report.kv("reason", vec![coexist_core::names::display_text(&reason)]);
+    report.kv("fix", vec![fix]);
+    report.status = Status::Error;
+    report.exit = 1;
+    report
+}
+
+/// The §8.3.5 report for an ignore or git config source that stopped a
+/// directory scan: `reason` = `cannot scan <display source>: <cause>`, and a
+/// `fix` that names the repair for this cause (a content error points at
+/// the line to correct) followed by the original command. Exit 1.
+fn source_report(
+    command: &'static str,
+    object: &str,
+    path: &Path,
+    problem: SourceProblem,
+    cause: &str,
+    ctx: &Ctx,
+) -> Report {
+    let mut report = Report::new(command, object);
+    let display = context::display_file(path);
+    // One display column (§8.1.4–5, §10.9.4), like the I/O reason above.
+    report.kv(
+        "reason",
+        vec![coexist_core::names::display_text(&format!(
+            "cannot scan {display}: {cause}"
+        ))],
+    );
+    let fix = problem.fix(&display, "retry", ctx.argv.as_deref());
     report.kv("fix", vec![fix]);
     report.status = Status::Error;
     report.exit = 1;
@@ -327,6 +610,12 @@ mod tests {
                 _ => None,
             })
             .expect("fix row");
-        assert_eq!(fix, &[diag::FIX_NATIVE_OPERAND]);
+        // No partial command may be printed; the repair for the error kind
+        // stays, and the retry is by hand with the manual explanation.
+        let manual = diag::FIX_NATIVE_OPERAND.split_once("; ").unwrap().1;
+        assert_eq!(fix.len(), 1);
+        assert!(!fix[0].contains("agent-coexist"), "{fix:?}");
+        assert!(fix[0].contains("by hand"), "{fix:?}");
+        assert!(fix[0].ends_with(manual), "{fix:?}");
     }
 }

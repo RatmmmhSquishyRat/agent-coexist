@@ -18,8 +18,8 @@ use crate::text::{self, Splice};
 
 use super::post::{
     after_line_and_blank, checked_doc, fence_block, finish, flock_blocked, guarded_apply,
-    removed_lines_label, require_valid_stem, section_delete_splice, stash_flock, unchanged_done,
-    Applied, Done, Early, FlockStash, Step,
+    removed_lines_label, require_valid_stem, section_delete_splice, separated, stash_flock,
+    unchanged_done, Applied, Done, Early, FlockStash, Step,
 };
 use super::{ProfileAction, ProfileParams};
 
@@ -41,7 +41,7 @@ fn step(
     ctx: &mut Ctx,
     p: &ProfileParams,
     stash: &mut Option<FlockStash>,
-    bytes: Vec<u8>,
+    bytes: &[u8],
     created: bool,
 ) -> Result<(Mutation, Step), Fault> {
     match &p.action {
@@ -57,7 +57,7 @@ fn bare_step(
     ctx: &mut Ctx,
     p: &ProfileParams,
     stash: &mut Option<FlockStash>,
-    bytes: Vec<u8>,
+    bytes: &[u8],
     created: bool,
 ) -> Result<(Mutation, Step), Fault> {
     if created {
@@ -71,7 +71,7 @@ fn bare_step(
             Step::Done(Done::empty()),
         ));
     }
-    match checked_doc(&bytes, &p.path, ctx.now, doc::Kind::Profile) {
+    match checked_doc(bytes, &p.path, ctx.now, doc::Kind::Profile) {
         Ok(_) => Ok((Mutation::Unchanged, Step::Done(unchanged_done(&p.path)))),
         Err(Early::Step(step)) => Ok((Mutation::Unchanged, step)),
         Err(Early::Fault(fault)) => Err(fault),
@@ -85,7 +85,7 @@ fn set_step(
     ctx: &mut Ctx,
     p: &ProfileParams,
     stash: &mut Option<FlockStash>,
-    bytes: Vec<u8>,
+    bytes: &[u8],
     created: bool,
     content: &str,
 ) -> Result<(Mutation, Step), Fault> {
@@ -105,7 +105,7 @@ fn set_step(
         text.push_str(&fence_block(content));
         return Ok((Mutation::Write(text.into_bytes()), Step::Done(done)));
     }
-    let doc = match checked_doc(&bytes, &p.path, ctx.now, doc::Kind::Profile) {
+    let doc = match checked_doc(bytes, &p.path, ctx.now, doc::Kind::Profile) {
         Ok(doc) => doc,
         Err(Early::Step(step)) => return Ok((Mutation::Unchanged, step)),
         Err(Early::Fault(fault)) => return Err(fault),
@@ -130,7 +130,7 @@ fn set_step(
                     );
                     vec![Splice {
                         range: pos..pos,
-                        replacement: inserted.into_bytes(),
+                        replacement: separated(&doc.source, pos, inserted).into_bytes(),
                     }]
                 }
             }
@@ -148,7 +148,7 @@ fn set_step(
     if stash_flock(stash, ctx, &p.path, p.as_nick.as_deref()) {
         return flock_blocked();
     }
-    match guarded_apply(&bytes, splices, kind)? {
+    match guarded_apply(bytes, splices, kind)? {
         Applied::Bytes(new_bytes) => Ok((Mutation::Write(new_bytes), Step::Done(done))),
         Applied::Refused(step) => Ok((Mutation::Unchanged, step)),
     }
@@ -160,13 +160,13 @@ fn remove_step(
     ctx: &mut Ctx,
     p: &ProfileParams,
     stash: &mut Option<FlockStash>,
-    bytes: Vec<u8>,
+    bytes: &[u8],
 ) -> Result<(Mutation, Step), Fault> {
     let name = p
         .section
         .as_deref()
         .expect("--section is paired with -m or --remove");
-    let doc = match checked_doc(&bytes, &p.path, ctx.now, doc::Kind::Profile) {
+    let doc = match checked_doc(bytes, &p.path, ctx.now, doc::Kind::Profile) {
         Ok(doc) => doc,
         Err(Early::Step(step)) => return Ok((Mutation::Unchanged, step)),
         Err(Early::Fault(fault)) => return Err(fault),
@@ -188,7 +188,7 @@ fn remove_step(
     done.kv("section", vec![name.to_string(), "removed".to_string()]);
     done.kv("removed-lines", vec![label]);
     match guarded_apply(
-        &bytes,
+        bytes,
         vec![splice],
         doc.kind.as_ref().map(doc::Kind::as_str),
     )? {

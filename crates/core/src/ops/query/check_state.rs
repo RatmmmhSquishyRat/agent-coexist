@@ -3,8 +3,8 @@
 //!
 //! `shared::collect` builds the §10.5.1 scope (DIR + ancestors +
 //! subtree, single implementation for every consumer). A fatal
-//! ignore/config source error propagates as [`Fault::Io`] with the
-//! original path and cause, matching `list` and `read-notification`.
+//! ignore/config source error propagates as [`Fault::Source`] with the
+//! source path and cause, matching `list` and `read-notification`.
 //! Ordinary unreadable directories stay `skipped` warnings. Output:
 //! `inherited` rows for ancestors' valid entries (near → far), DIR's
 //! own entries at indent 2, subdirectory groups (canonical order,
@@ -15,17 +15,18 @@ use std::collections::HashSet;
 use std::path::Path;
 
 use crate::consts;
+use crate::diag;
 use crate::error::Fault;
 use crate::fsx;
 use crate::names;
 use crate::ops::context::{self, Ctx};
-use crate::ops::shared::{self, ScanIssue, StateEntryRec};
+use crate::ops::shared::{self, Follow, StateEntryRec};
 use crate::ops::CheckStateParams;
 use crate::report::Report;
 use crate::time;
 use crate::Time;
 
-use super::{dir_error, include_hints};
+use super::{canonicalize_notes, dir_error, include_hints, INCLUDE_HINT_EMPTY_STATE};
 
 pub fn check_state(ctx: &mut Ctx, p: &CheckStateParams) -> Result<Report, Fault> {
     fsx::walk::validate(&p.walk)?;
@@ -108,52 +109,46 @@ pub fn check_state(ctx: &mut Ctx, p: &CheckStateParams) -> Result<Report, Fault>
 
     // §10.5.6 / §10.1.5: files and directories that could not
     // contribute, path-ascending (§10.5.4).
-    let mut aux: Vec<(&Path, &'static str, Vec<String>)> = Vec::new();
-    for (dir, issue) in &scope.issues {
-        match issue {
-            ScanIssue::Busy => {
-                aux.push((dir.as_path(), "skipped", vec!["busy".to_string()]));
-            }
-            ScanIssue::Blocking(id) => {
-                aux.push((dir.as_path(), "skipped", vec![id.to_string()]));
-            }
-            ScanIssue::Partial { id, line } => {
-                aux.push((dir.as_path(), "partial", vec![format!("{id} L{line}")]));
-            }
-        }
-    }
-    for dir in &scope.unreadable_dirs {
-        aux.push((dir.as_path(), "skipped", vec!["unreadable".to_string()]));
-    }
-    aux.sort();
-    aux.dedup();
-    // Deduplication is complete before lossy display formatting.
-    let mut aux: Vec<_> = aux
-        .into_iter()
-        .map(|(dir, key, causes)| (context::object_of_dir(dir), key, causes))
-        .collect();
-    aux.sort();
-    for (dir_display, key, causes) in aux {
-        let mut values = vec![dir_display];
-        values.extend(causes);
-        report.record(key, values, 2, consts::KEY_WIDTH);
+    let rows = shared::scan_rows(&scope.issues, &scope.unreadable_dirs);
+    for row in &rows {
+        report.record(row.key, row.values.clone(), 2, consts::KEY_WIDTH);
         count += 1;
         warn = true;
     }
-
-    // §10.5.2: canonicalize failures fell back to lexical paths — the
-    // verdict may be incomplete, so warn (not counted in `total`).
-    for dir in &scope.canonicalize_failed {
-        report.record(
-            "canonicalize",
-            vec![context::object_of_dir(dir), "failed".to_string()],
-            2,
-            consts::KEY_WIDTH,
+    // A skipped or partial state file may hold declarations, including
+    // locks, that this overview does not show: name each file to open (one
+    // in an unreadable directory says to make the directory readable
+    // first). Unreadable directories with no known state file inside
+    // already say what blocks them.
+    let unread: Vec<&Follow> = rows
+        .iter()
+        .map(|row| &row.follow)
+        .filter(|follow| !matches!(follow, Follow::Unreadable(_)))
+        .collect();
+    if !unread.is_empty() {
+        report.kv(
+            "fix",
+            vec![shared::scan_fix(
+                unread,
+                diag::FIX_CHECK_STATE_UNREAD,
+                diag::FIX_CHECK_STATE_UNREAD_MANUAL,
+            )],
         );
-        warn = true;
     }
 
-    warn |= include_hints(&mut report, &scope.zero_includes);
+    // §10.5.2: canonicalize failures fell back to lexical paths — the
+    // verdict may be incomplete, so warn (not counted in `total`). The
+    // following fix names existence and ancestor search permission before
+    // retrying this command.
+    warn |= canonicalize_notes(&mut report, &scope.canonicalize_failed, consts::KEY_WIDTH);
+
+    warn |= include_hints(
+        &mut report,
+        &scope.zero_includes,
+        &p.walk,
+        scope.ignore_in_play,
+        INCLUDE_HINT_EMPTY_STATE,
+    );
     report.total(count);
     if warn {
         report.warn();
@@ -445,7 +440,13 @@ mod tests {
         assert_eq!(values(&report, "total")[0][0], "0");
         p.walk.no_ignore = true;
         let without_ignore = check_state(&mut ctx, &p).unwrap();
-        assert!(values(&without_ignore, "include").is_empty());
+        assert_eq!(without_ignore.status, Status::Warn);
+        let hint = &values(&without_ignore, "include")[0];
+        assert_eq!(hint[0], "*.agent-besties.md");
+        assert!(
+            !hint[1].contains("--no-ignore"),
+            "--no-ignore is already given: {hint:?}"
+        );
         assert_eq!(values(&without_ignore, "total")[0][0], "0");
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -519,17 +520,14 @@ mod tests {
         )
         .expect_err("fatal ignore source must fail the overview");
         match err {
-            Fault::Io {
-                action,
-                path,
-                source,
-            } => {
-                assert_eq!(action, "scan");
+            Fault::Source { path, problem, .. } => {
                 assert_eq!(path, dir.join(".ignore"));
-                assert_eq!(source.kind(), std::io::ErrorKind::InvalidData);
-                assert!(!source.to_string().is_empty());
+                assert_eq!(
+                    problem,
+                    crate::error::SourceProblem::Content { line: Some(1) }
+                );
             }
-            other => panic!("expected scan Io, got {other:?}"),
+            other => panic!("expected source fault, got {other:?}"),
         }
         let _ = std::fs::remove_dir_all(&dir);
     }

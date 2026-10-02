@@ -56,14 +56,14 @@ pub(crate) const CATALOG: &[Template] = &[
         command_fix: false,
         message: r#""{line}" looks like a comment header but is malformed"#,
         why: r###"comment headers must be "## #<n> <nick> (<time>)"; a malformed one makes numbering and @#n references ambiguous"###,
-        fix: r###"fix the header to "## #{next} <nick> ({now})", or drop the leading "#" to make it a plain heading"###,
+        fix: r###"rewrite the header as "{header}""###,
     },
     Template {
         id: "E-SEQ-DUP",
         command_fix: false,
         message: r#"comment number #{n} appears twice"#,
         why: r#"@#{n} and --edit {n} cannot tell the two apart"#,
-        fix: r#"renumber the later one to #{next} and update any @#{n} that meant it"#,
+        fix: r#"renumber the later one to #{next} if no reply in this post already names @#{next}, otherwise to another number that no header in this post carries, that no other repair in this report gives a header, and that no reply already names, and update any @#{n} that meant it to that number"#,
     },
     Template {
         id: "E-ENTRY-DUP",
@@ -77,28 +77,28 @@ pub(crate) const CATALOG: &[Template] = &[
         command_fix: true,
         message: r#"entry "{title}" has no "- path:" line"#,
         why: r#"without a path there is nothing to hash or read; the entry cannot be verified"#,
-        fix: r#"agent-coexist brief {path_arg} --target <file> --entry={title}"#,
+        fix: r#"choose a file you know is the right target, review that file and the note, update the note if it no longer describes it, then give the entry its path; this command also records the target's current hash: agent-coexist brief {path_arg} --target <file> --entry={title}"#,
     },
     Template {
         id: "E-ENTRY-HASH",
         command_fix: true,
         message: r#"entry "{title}" has no valid "- hash:" line"#,
         why: r#"the hash is how check tells fresh from shifted; without it drift is invisible"#,
-        fix: r#"agent-coexist brief {path_arg} --entry={title} --refresh"#,
+        fix: r#"review the target and the note, update the note if it no longer describes the target, then refresh the entry's hash; this command records the target's current hash: agent-coexist brief {path_arg} --entry={title} --refresh"#,
     },
     Template {
         id: "E-ENTRY-REGEX",
         command_fix: true,
         message: r#"entry "{title}" regex does not compile: {err}"#,
         why: r#"read-brief and check use the regex to find the lines the note is about"#,
-        fix: r#"agent-coexist brief {path_arg} --target={target_arg} --entry={title} --regex '<pattern>'"#,
+        fix: r#"choose a file you know is the right target, review that file and the note, update the note if it no longer describes it, then give the entry its path and a regex that compiles and matches it; this command also records the target's current hash: agent-coexist brief {path_arg} --target=<file> --entry={title} --regex '<pattern>'"#,
     },
     Template {
         id: "E-ENTRY-TARGET",
         command_fix: true,
         message: r#"entry "{title}" target {target} cannot be read: {err}"#,
         why: r#"the target exists but its bytes are not readable, so neither hash nor regex can be checked"#,
-        fix: r#"fix its permissions, or point the entry elsewhere: agent-coexist brief {path_arg} --target <file> --entry={title}"#,
+        fix: r#"the path must name a readable file; fix its permissions and run check again without changing the entry, or choose a file you know is the right target, review that file and the note, update the note if it no longer describes it, then point the entry at it; this command also records the target's current hash: agent-coexist brief {path_arg} --target <file> --entry={title}"#,
     },
     Template {
         id: "E-SECTION-DUP",
@@ -117,9 +117,9 @@ pub(crate) const CATALOG: &[Template] = &[
     Template {
         id: "E-TYPE",
         command_fix: true,
-        message: r#"file is a {actual}, not a {expected}"#,
+        message: r#"file type is {actual}, not {expected}"#,
         why: r#"each command works on one file type; the H1 decides which"#,
-        fix: r#"use agent-coexist {cmd_for_actual} for this file, or choose another path"#,
+        fix: r#"this command needs a file of type {expected}; rerun it with such a path; files of that type under this directory: agent-coexist list {dir_arg} --type={expected}"#,
     },
     Template {
         id: "E-LOCKED",
@@ -140,35 +140,35 @@ pub(crate) const CATALOG: &[Template] = &[
         command_fix: true,
         message: r#"{dir} is locked by {holder} until {until}"#,
         why: r#"{holder} asked that nothing under {dir} be changed; profile and brief writes fast-fail on such locks"#,
-        fix: r#"wait for the lock to expire or ask its holder to release it; if the lock is yours, pass --as={holder}"#,
+        fix: r#"if the lock is yours, add --as={holder} before any -- separator; otherwise wait for it to expire or ask its holder to release it, then retry: {argv}"#,
     },
     Template {
         id: "E-FILE-MISSING",
         command_fix: true,
         message: r#"{file} does not exist"#,
         why: r#"read commands and forms that only act on existing content (--edit, --cancel, --remove, --refresh, note-only -m) never create files, so a typo shows up here instead of as an empty result"#,
-        fix: r#"check the path: agent-coexist list {dir_arg}"#,
+        fix: r#"correct the path and rerun (this command never creates the file); collaboration files under that directory: agent-coexist list {dir_arg}"#,
     },
     Template {
         id: "E-DIR-MISSING",
         command_fix: true,
         message: r#"directory {dir} does not exist"#,
         why: r#"an empty result for a missing directory would look like "nothing happened""#,
-        fix: r#"check the path: agent-coexist list {parent_arg}"#,
+        fix: r#"correct the directory and rerun; collaboration files under its parent: agent-coexist list {parent_arg}"#,
     },
     Template {
         id: "E-NOT-DIR",
         command_fix: true,
         message: r#"{path} is not a directory"#,
         why: r#"state and the scanning commands describe directories, not files"#,
-        fix: r#"re-run against the directory: agent-coexist {cmd} {parent_arg} <same flags>"#,
+        fix: r#"rerun on its directory with your other options: agent-coexist {cmd} {parent_arg} <same flags>"#,
     },
     Template {
         id: "E-TARGET-MISSING",
         command_fix: false,
-        message: r#"target {target} does not exist"#,
+        message: r#"target {target} does not exist; looked for {resolved}"#,
         why: r#"a brief entry must point at something that can be hashed now"#,
-        fix: r#"create the target first, or fix the path"#,
+        fix: r#"the target path is relative to the brief's directory; correct it and rerun, or create the target, then retry: {argv}"#,
     },
     Template {
         id: "E-ENTRY-NOTFOUND",
@@ -189,7 +189,7 @@ pub(crate) const CATALOG: &[Template] = &[
         command_fix: true,
         message: r#"{nick} has no entry in {dir}"#,
         why: r#"no declaration matched the requested nick and status selection, so nothing was changed"#,
-        fix: r#"inspect declarations before correcting the requested removal; keep its intended status selection: agent-coexist check-state {dir_arg}"#,
+        fix: r#"check which nicks hold entries here, then rerun with the right nick or directory: agent-coexist check-state {dir_arg}"#,
     },
     Template {
         id: "E-EDIT-AUTHOR",
@@ -203,14 +203,14 @@ pub(crate) const CATALOG: &[Template] = &[
         command_fix: true,
         message: r#"comment #{n} does not exist"#,
         why: r#"--edit rewrites an existing comment; the highest number in this post is #{max}"#,
-        fix: r#"add a new comment instead: agent-coexist post {path_arg} --as={nick} -m '<text>'"#,
+        fix: r#"find the number of the comment to edit, then rerun --edit with it: agent-coexist lookfor-comment {path_arg} --by={nick}"#,
     },
     Template {
         id: "E-ENTRY-TITLE-TAKEN",
-        command_fix: true,
+        command_fix: false,
         message: r#"entry "{title}" already points at {existing}, not {target}"#,
         why: r#"the default title is the target's file name; two different files with the same name would silently overwrite each other"#,
-        fix: r#"give the entry its own title: agent-coexist brief {path_arg} --target={target_arg} --entry '<title>'"#,
+        fix: r#"give the entry its own title: rerun the original command by hand with --entry '<title>' added before any -- separator, keeping all its other options; no copyable command can be printed because a path or argument contains a line break or characters this text cannot reproduce exactly"#,
     },
     Template {
         id: "E-SEQ-EXHAUSTED",
@@ -238,7 +238,7 @@ pub(crate) const CATALOG: &[Template] = &[
         command_fix: false,
         message: r#"file name "{stem}" does not match the H1 name "{name}""#,
         why: r#"list shows the file name, the file says another name; readers will be confused"#,
-        fix: r##"rename the file to {name}.agent-besties.md or set line 1 to "# {stem}.{type}""##,
+        fix: r##"rename the file to {name}.agent-besties.md if no file has that name yet (never overwrite an existing file), or set line 1 to "# {stem}.{type}""##,
     },
     Template {
         id: "W-NAME-STATE",
@@ -252,7 +252,7 @@ pub(crate) const CATALOG: &[Template] = &[
         command_fix: false,
         message: r#"text outside any fence at L{n} is not part of the record"#,
         why: r#"the CLI only reads fenced bodies, attribute lines and headings; this text is kept but never shown"#,
-        fix: r#"move it into the nearest fenced block, or delete it"#,
+        fix: r#"this file does not record who wrote this text, even when it sits under another agent's heading; whoever wrote it moves it where it belongs (a fenced body, or in a state file an entry line under a status) or deletes it, and only a comment's author changes that comment; anyone else asks who wrote it before moving or deleting it"#,
     },
     Template {
         id: "W-BODY",
@@ -266,13 +266,13 @@ pub(crate) const CATALOG: &[Template] = &[
         command_fix: false,
         message: r#"subscribers line repeated or contains duplicates"#,
         why: r#"only the first line counts and duplicates are ignored; the extra text is noise for readers"#,
-        fix: r#"keep a single "- subscribers:" line with each nick once"#,
+        fix: r#"keep only the first "- subscribers:" line, with each nick once; delete any later "- subscribers:" line instead of merging it in: a nick named only there is not subscribed now, and merging would subscribe it; each agent named only there decides for itself whether to subscribe"#,
     },
     Template {
         id: "W-SEQ-GAP",
         command_fix: false,
         message: r#"comment numbers jump from #{a} to #{b}"#,
-        why: r#"@#{m} can no longer be resolved; a comment was probably deleted by hand"#,
+        why: r#"no comment in this post has number #{m}, so @#{m} cannot be resolved; that comment may have been deleted or renumbered by hand, or a new comment was written with the highest number plus one after numbers were already out of order"#,
         fix: r#"leave the numbering as is; other files may already reference #{b}"#,
     },
     Template {
@@ -294,7 +294,7 @@ pub(crate) const CATALOG: &[Template] = &[
         command_fix: true,
         message: r#"entry "{title}" uses an absolute path"#,
         why: r#"the brief only verifies on this machine; on any other checkout the target will be stale"#,
-        fix: r#"agent-coexist brief {path_arg} --target <relative path> --entry={title}"#,
+        fix: r#"choose a file you know is the right target, review that file and the note, update the note if it no longer describes it, then point the entry at a path relative to the brief's directory; this command also records the target's current hash: agent-coexist brief {path_arg} --target <relative path> --entry={title}"#,
     },
     Template {
         id: "W-ENTRY-KEY",
@@ -308,14 +308,14 @@ pub(crate) const CATALOG: &[Template] = &[
         command_fix: true,
         message: r#"entry "{title}" is shifted: {target} changed since its hash was taken"#,
         why: r#"the note may describe code that no longer looks like this"#,
-        fix: r#"review the target, then: agent-coexist brief {path_arg} --entry={title} --refresh"#,
+        fix: r#"review the target and the note, update the note if it no longer describes the target, then refresh the entry's hash; this command records the target's current hash: agent-coexist brief {path_arg} --entry={title} --refresh"#,
     },
     Template {
         id: "W-ENTRY-STALE",
         command_fix: true,
         message: r#"entry "{title}" is stale: {reason}"#,
         why: r#"the note points at something that is gone or no longer matches its regex"#,
-        fix: r#"agent-coexist brief {path_arg} --target <file> --entry={title} --regex '<pattern>'"#,
+        fix: r#"review the target and the note, update the note if it no longer describes the target, then give the entry a regex that matches it; this command also records the target's current hash: agent-coexist brief {path_arg} --target={target_arg} --entry={title} --regex '<pattern>'"#,
     },
     Template {
         id: "W-PROFILE-EMPTY",
@@ -328,14 +328,14 @@ pub(crate) const CATALOG: &[Template] = &[
         id: "W-SECTION-NAME",
         command_fix: false,
         message: r#"section "{name}" at L{n} is not a valid section name"#,
-        why: r#"--section cannot address it; allowed: letters, digits, _ and -, no spaces"#,
+        why: r#"--section cannot address it; allowed: starts with a letter, digit or _, then letters, digits, _ and -, at most 64 characters"#,
         fix: r###"rename the heading, e.g. "## {suggested}""###,
     },
     Template {
         id: "W-STATUS-NAME",
         command_fix: false,
         message: r#"status "{name}" at L{n} is not a valid status name"#,
-        why: r#"entries under it are shown but never treated as locked or observing; allowed: lowercase letters, digits and -"#,
+        why: r#"entries under it are shown but never treated as locked or observing; allowed: starts with a lowercase letter, then lowercase letters, digits and -, at most 32 characters"#,
         fix: r###"rename the heading by hand to a valid, distinct status name, e.g. "## {lowercased}" only if that name is unused, then run check again"###,
     },
     Template {
@@ -343,49 +343,49 @@ pub(crate) const CATALOG: &[Template] = &[
         command_fix: false,
         message: r#""{fragment}" under {status} is not "<nick> <start>..<until>""#,
         why: r#"the fragment is kept but ignored by conflict checks and cleanup"#,
-        fix: r#"rewrite it as "<nick> <start>..<until>" or delete it"#,
+        fix: r#"this file does not record who wrote this fragment, even when it shares a line with another agent's entries; whoever wrote it rewrites it as "<nick> <start>..<until>" or deletes it; anyone else asks who wrote it before changing it"#,
     },
     Template {
         id: "W-STATE-DUP",
         command_fix: true,
         message: r#"{nick} appears twice under {status}"#,
-        why: r#"the latest end time wins; the next state write merges them into one unless the line also has unparseable fragments (W-STATE-ENTRY)"#,
-        fix: r#"agent-coexist state {dir_arg} --as={nick} --status={status}"#,
+        why: r#"the latest end time wins; the next state write that rewrites the {status} section (a declaration or removal under it, or expiry cleanup of an entry in it) merges them into one unless either entry sits on a line that also has unparseable fragments (W-STATE-ENTRY)"#,
+        fix: r#"optional; to merge them now, that agent declares again, which replaces both with one entry from now (add --for to choose its length), but only when both entries are on clean lines; when either entry sits on a line that also has unparseable fragments (W-STATE-ENTRY), that line is kept as is and the duplicate stays: inspect the file, delete {nick}'s entries from every such line by hand, keeping each line's other content, then look at the remaining entries and declare again to merge any duplicate that is left or to start one entry from now: agent-coexist state {dir_arg} --as={nick} --status={status}"#,
     },
     Template {
         id: "W-STATE-RANGE",
         command_fix: true,
         message: r#"{nick} under {status} ends before it starts"#,
         why: r#"treated as expired: it never counts as a lock; the next state write removes it unless the line also has unparseable fragments (W-STATE-ENTRY)"#,
-        fix: r#"agent-coexist state {dir_arg} --as={nick} --status={status}"#,
+        fix: r#"if still needed, that agent declares it again: agent-coexist state {dir_arg} --as={nick} --status={status}"#,
     },
     Template {
         id: "W-STATE-CONFLICT",
         command_fix: true,
         message: r#"locked is held by both {a} and {b}"#,
         why: r#"two agents asked for exclusive changes in the same subtree; neither is blocked, so they must agree who continues"#,
-        fix: r#"agree who continues, then the other runs: agent-coexist state {dir_arg} --remove <nick> --status=locked"#,
+        fix: r#"agree who continues, then the other runs the removal; it is refused with E-STATE-DIRTY when that declaration's line also has unparseable fragments (W-STATE-ENTRY), and that error's fix names the by-hand deletion: agent-coexist state {dir_arg} --remove <nick> --status=locked"#,
     },
     Template {
         id: "W-STATE-EXPIRED",
         command_fix: true,
         message: r#"{nick} under {status} expired at {until}"#,
         why: r#"expired entries are ignored by conflict checks and removed on the next state write unless the line also has unparseable fragments (W-STATE-ENTRY)"#,
-        fix: r#"renew if still relevant: agent-coexist state {dir_arg} --as={nick} --status={status}"#,
+        fix: r#"if still needed, that agent renews it: agent-coexist state {dir_arg} --as={nick} --status={status}"#,
     },
     Template {
         id: "E-NAME",
         command_fix: false,
         message: r#"file name "{name}" is not a valid name"#,
         why: r##"the H1 is generated from the file name; use 1-100 letters, digits, "_", "-" or ".", starting with a letter, digit, "_" or "-""##,
-        fix: r#"rename the file to a valid name and re-run the same command with the new path; the CLI never renames, truncates or replaces the name you gave"#,
+        fix: r##"nothing was created; choose a name of 1-100 letters, digits, "_", "-" or ".", starting with a letter, digit, "_" or "-", and run the same command with that name"##,
     },
     Template {
         id: "E-STATE-DIRTY",
         command_fix: false,
         message: r#"{nick} is still declared on line {line} of the state file in {dir}, mixed with unparseable fragments"#,
         why: r#"removal would rewrite that whole line and could drop the fragments it cannot parse, so nothing is written"#,
-        fix: r#"make line {line} parseable by hand (or delete {nick}'s declaration from it), then re-run: {argv}"#,
+        fix: r#"either delete {nick}'s declaration from line {line} by hand, which is the removal itself (re-run then only if {nick} has more entries this command should remove), or have whoever wrote that line's unparseable fragments make them parseable, then re-run: {argv}"#,
     },
 ];
 
@@ -394,15 +394,99 @@ pub(crate) const CATALOG: &[Template] = &[
 pub(crate) const MESSAGE_ESTATE_NOTFOUND_STATUS: &str =
     r#"{nick} has no entry under status "{status}" in {dir}"#;
 
-/// §9 supplement 1: E-TYPE fix when actual type is state.
-pub(crate) const FIX_ETYPE_STATE: &str =
-    r#"this is a state file: agent-coexist state {dir_arg} --as <nick> --status <name>"#;
+/// E-FILE-MISSING when the PATH without its suffix names an existing
+/// directory: say so, and point at the files inside it (`dir_arg` is that
+/// directory). `{given_dir}` is display only; the fix never embeds it.
+pub(crate) const MESSAGE_EFILEMISSING_DIR: &str = r#"{file} does not exist; {given_dir} is a directory, and this command needs one collaboration file"#;
+
+/// See [`MESSAGE_EFILEMISSING_DIR`].
+pub(crate) const FIX_EFILEMISSING_DIR: &str = r#"rerun with the path of one collaboration file (the .agent-besties.md suffix may be omitted); collaboration files in that directory: agent-coexist list {dir_arg}"#;
+
+/// E-STATE-NOTFOUND fix when the removal named `--status`: keep that
+/// selection, because a bare `--remove` would drop every status.
+pub(crate) const FIX_ESTATE_NOTFOUND_STATUS: &str = r#"check which statuses hold this nick, then rerun with the right --status (without --status, --remove deletes every status of the nick): agent-coexist check-state {dir_arg}"#;
+
+/// E-TYPE fix when the command needs a state file: the reserved name is
+/// occupied by another type, so no state command can succeed until that
+/// file is renamed. Like every rename recipe, it never overwrites another
+/// file. After the rename, line 1 must use that same name and keep this
+/// file's type (`{actual}`), matching the E-H1 reserved-name recipe. The
+/// retry repeats the original declaration or wait.
+pub(crate) const FIX_ETYPE_RESERVED: &str = r##"state.agent-besties.md in this directory has type {actual}, so it cannot hold state; rename that file to <name>.agent-besties.md with a valid name that no file has yet (never overwrite an existing file), then set line 1 to "# <name>.post" (or .brief / .agent-profile) with that same name, then retry: {argv}"##;
+
+/// E-TYPE fix when the failed command is a write form that creates a
+/// missing file (`post` without `--edit`, `profile` without `--remove`,
+/// `brief` Bare / SetDescription / Target). Query, edit, remove, refresh,
+/// note-only, subscribe, cancel and wait forms keep the catalog row: they
+/// cannot finish the original task on a new unused path. The list stays
+/// read-only.
+pub(crate) const FIX_ETYPE_CREATE: &str = r#"this command needs a file of type {expected}; rerun it with such a path, or with a new path that no file uses yet to create one; files of that type under this directory: agent-coexist list {dir_arg} --type={expected}"#;
+
+/// E-NOT-DIR fix when the directory operand is exactly one word of the
+/// original command line: `{retry}` is that line with the operand
+/// replaced by its parent, so no other option is lost.
+pub(crate) const FIX_ENOTDIR_RETRY: &str = "rerun on its directory: {retry}";
+
+/// E-ENTRY-TITLE-TAKEN fix when the original command line is printable:
+/// `{retry}` is that line with `--entry '<title>'` added before any `--`
+/// separator, so `--as`, `-m`, `--regex` and every other option survive.
+pub(crate) const FIX_EENTRYTITLETAKEN_RETRY: &str = "give the entry its own title: {retry}";
+
+/// E-DIR-MISSING fix for commands that need the directory to exist before
+/// they can act (`state` and the waits). They never create directories, and
+/// `list` would not show a directory without collaboration files.
+pub(crate) const FIX_EDIRMISSING_CREATE: &str = r#"if the directory name is wrong, rerun with the correct one; if it is new, create it first (this command never creates directories), then retry: {argv}"#;
+
+/// E-DIR-MISSING when the lexical parent is missing too (`missing_dir`
+/// selects this variant for `list` / `read-notification` / `check-state`):
+/// `{parent_arg}` is the nearest existing ancestor, never a missing
+/// directory. `state` and the waits keep [`FIX_EDIRMISSING_CREATE`].
+pub(crate) const FIX_EDIRMISSING_ANCESTOR: &str = r#"correct the directory and rerun; its parent does not exist either; collaboration files under the nearest existing directory: agent-coexist list {parent_arg}"#;
+
+/// W-ENTRY-STALE fix when the target is gone: do not assume it was
+/// moved. The reader names a file they know is the right target, or
+/// removes or rewrites the entry if it no longer exists. A guessed
+/// replacement is not a recovery. The entry's regex, if any, is kept
+/// rather than replaced. Setting the target also records its current
+/// hash, so the review of target and note that the shifted/stale
+/// siblings require comes first, updating the note when it no longer
+/// describes the target, before the note is silently re-anchored.
+pub(crate) const FIX_WSTALE_TARGET_MISSING: &str = r#"choose a file you know is the right target, review that file and the note, update the note if it no longer describes it, then point the entry at it; if it no longer exists, remove or rewrite the entry; this command also records the target's current hash: agent-coexist brief {path_arg} --target <file> --entry={title}"#;
+
+/// E-ENTRY-REGEX fix when the entry has a path: the regex verdict
+/// precedes the hash comparison, so drift since the stored hash is
+/// invisible while the regex does not compile, and rerunning the
+/// command records the target's current hash. The review prefix is the
+/// one W-ENTRY-SHIFTED and W-ENTRY-STALE carry. The base catalog row
+/// is the path-less branch: setting a target also records a hash.
+pub(crate) const FIX_EENTRYREGEX_REVIEW: &str = r#"review the target and the note, update the note if it no longer describes the target, then give the entry a regex that compiles and matches it; this command also records the target's current hash: agent-coexist brief {path_arg} --target={target_arg} --entry={title} --regex '<pattern>'"#;
 
 /// A directory-level state recipe is safe only for the inspected file
 /// selected by the existing reserved-state lookup. Failed selection is
-/// not authority to mutate a possibly different file.
+/// not authority to mutate a possibly different file, so the fix gates
+/// every declaration change behind two steps instead: settle which file
+/// is this directory's state.agent-besties.md (a W-NAME-STATE row, when
+/// one is shown, carries the matching inspection advice), then re-check
+/// — and only the declaring agent ever changes, renews or removes its
+/// own entry by hand.
 pub(crate) const FIX_UNSELECTED_STATE: &str =
-    "edit this inspected file by hand and run check again; do not use directory-level state commands for this repair, because this file was not confirmed as their selected state.agent-besties.md target";
+    "no state command is printed because this file is not confirmed as this directory's state.agent-besties.md; first settle which file that should be (when a W-NAME-STATE row is shown, its fix describes how; never overwrite a separate existing state file), then run check on this file again before anyone changes a declaration by hand; only the agent that declared an entry changes, renews or removes its own entry";
+
+/// W-STATE-DUP why under the same unselected gate as
+/// [`FIX_UNSELECTED_STATE`]: the catalog row's merge happens on the next
+/// state write, and no state command writes this file, so the duplicate
+/// stays until someone edits the file by hand.
+pub(crate) const WHY_WSTATEDUP_UNSELECTED: &str = r#"the latest end time wins; no state write merges them, because state commands do not write this file until it is confirmed as this directory's state.agent-besties.md"#;
+
+/// W-STATE-RANGE why under the same unselected gate as
+/// [`FIX_UNSELECTED_STATE`]: the removal the catalog row promises cannot
+/// happen, because no state command writes this file.
+pub(crate) const WHY_WSTATERANGE_UNSELECTED: &str = r#"treated as expired: it never counts as a lock; no state write removes it, because state commands do not write this file until it is confirmed as this directory's state.agent-besties.md"#;
+
+/// W-STATE-EXPIRED why under the same unselected gate as
+/// [`FIX_UNSELECTED_STATE`]: same non-removal as
+/// [`WHY_WSTATERANGE_UNSELECTED`], for an entry that has ended.
+pub(crate) const WHY_WSTATEEXPIRED_UNSELECTED: &str = r#"expired entries are ignored by conflict checks; no state write removes them, because state commands do not write this file until it is confirmed as this directory's state.agent-besties.md"#;
 
 /// A concrete section repair must be unique across stored headings and
 /// all suggestions emitted for the same profile.
@@ -412,39 +496,362 @@ pub(crate) const FIX_SECTION_NAME_UNIQUE: &str =
 /// Replace the entire recipe when its native operands cannot be emitted
 /// losslessly in one POSIX UTF-8 fix record. Never substitute this as a path.
 pub const FIX_NATIVE_OPERAND: &str =
-    "repair the original file or retry the original command by hand; a native operand cannot be represented losslessly in a single-line POSIX UTF-8 recovery command";
+    "repair the original file or retry the original command by hand; no copyable command can be printed because a path or argument contains a line break or characters this text cannot reproduce exactly";
+
+/// A command recipe whose operands cannot all be printed ready to copy:
+/// the command keeps its subcommand, options and printable operands, and
+/// each unprintable value is a `<path of …>` marker the reader types in.
+/// `{advice}` is empty or the template's own advice followed by `: `.
+pub(crate) const FIX_MANUAL_COMMAND: &str = "{advice}run this command by hand, typing {markers} yourself, because no copyable command can be printed when a path or argument contains a line break or characters this text cannot reproduce exactly: {command}";
+
+/// Final row of a write refused by structural errors (§2.7.4, §8.3.2):
+/// the report repeats check's rows, so this row says that nothing was
+/// written and which rows block the write. `{blocking}` lists `ID at L<n>`.
+pub const MESSAGE_WRITE_REFUSED: &str = "nothing was written: writes are refused while the file has errors that make its structure ambiguous; fix {blocking} first, as the fix rows above say, then run this command again";
+
+/// [`MESSAGE_WRITE_REFUSED`] when the report also shows rows that do not
+/// block writes.
+pub const MESSAGE_WRITE_REFUSED_MIXED: &str = "nothing was written: writes are refused while the file has errors that make its structure ambiguous; fix {blocking} first, as the fix rows above say, then run this command again; the other rows above do not block this write";
 
 /// A control-bearing heading cannot be passed through the CLI's existing
 /// input grammar. Never substitute a sanitized sibling as its identity.
 pub(crate) const FIX_CONTROL_HEADING: &str =
     "edit the heading by hand to remove control characters and give it a valid, distinct title or name, then run check again";
 
+/// E-STATUS-DUP whose status holds control characters: the repair is still
+/// the merge of [`CATALOG`]'s row, done by hand after removing the controls,
+/// not [`FIX_CONTROL_HEADING`]'s distinct name, which would split one status
+/// into two. `{status}` is the display-sanitized title.
+pub(crate) const FIX_ESTATUSDUP_CONTROL: &str = r###"edit the two "## {status}" headings by hand: remove their control characters and merge the two sections into one, together with any section that already uses the cleaned name, then run check again"###;
+
 /// A stored status may be readable but not addressable by `--status`.
 /// Repair its heading first; never redirect an operation to a normalized sibling.
 pub(crate) const FIX_INVALID_STATUS: &str =
     "rename the status heading by hand to a valid, distinct status name, then run check again before renewing or changing its declarations";
 
+/// E-FLOCKED when the command already has `--as`: holders exclude that
+/// nick, so the lock is the caller's only if `--as` named the wrong nick;
+/// a second `--as` would be a usage error, so the fix says to replace it.
+pub(crate) const FIX_EFLOCKED_AS: &str = r#"if the lock is yours and the --as in this command names someone else, rerun it with --as={holder} in place of that --as; otherwise wait for it to expire or ask its holder to release it, then retry: {argv}"#;
+
+/// W-STATUS-NAME when the same raw status title heads more than one
+/// section (E-STATUS-DUP reports the later copies): the copies are one
+/// status, so the repair is the merge under one valid name, never one
+/// distinct name per copy, which would split it into two statuses.
+pub(crate) const FIX_WSTATUSNAME_REPEATED: &str = r###"this status heading appears more than once, so do not give its copies different names, which would split one status into two; merge its sections by hand into one under one valid status name, e.g. "## {lowercased}", together with any section that already uses that name, then run check again"###;
+
 /// 2026-09-25 repair: E-H1 fix when the file stem is not a valid NAME.
 /// The base fix suggests `# {stem}.<type>`, which would re-trigger E-H1
 /// the moment it is copied in, so this variant suggests any valid name
 /// instead. It carries no command argument, so it substitutes as plain
-/// text (§8.3.4 quoting stays on command-form fixes).
-pub(crate) const FIX_EH1_BAD_STEM: &str = r##"set line 1 to "# <name>.post" (or .brief / .agent-profile): use 1-100 letters, digits, "_", "-" or ".", starting with a letter, digit, "_" or "-"; use "# .state" for a state file; renaming the file as well keeps the H1 and the file name in agreement"##;
+/// text (§8.3.4 quoting stays on command-form fixes). The optional rename
+/// carries the same never-overwrite condition as every rename recipe.
+pub(crate) const FIX_EH1_BAD_STEM: &str = r##"set line 1 to "# <name>.post" (or .brief / .agent-profile): use 1-100 letters, digits, "_", "-" or ".", starting with a letter, digit, "_" or "-"; use "# .state" for a state file; renaming the file to <name>.agent-besties.md as well keeps the H1 and the file name in agreement, but only if no file has that name yet (never overwrite an existing file)"##;
+
+/// E-H1 fix when the file has the reserved state file name: the name says
+/// this is the directory's state file, so `# .state` comes first. A post,
+/// brief or profile H1 under this name would make every state command
+/// refuse the file (E-TYPE) and lock scans skip it, so another type is
+/// offered only together with moving the file off the reserved name.
+pub(crate) const FIX_EH1_STATE_NAME: &str = r##"set line 1 to "# .state" if this file holds state declarations, because its name is reserved for this directory's state file; if it holds a post, brief or profile instead, first rename it to <name>.agent-besties.md with a valid name that no file has yet (never overwrite an existing file), then set line 1 to "# <name>.post" (or .brief / .agent-profile) with that same name"##;
 
 /// 2026-09-25 repair: W-NAME fix when the file stem is not a valid NAME.
 /// The base template also offers `set line 1 to "# {stem}.{type}"`, which
 /// would be an invalid H1; this variant keeps only the other recovery:
 /// rename the file to the H1 name, which parsing already proved to be a
 /// valid NAME. Plain text, like the E-H1 variant.
-pub(crate) const FIX_WNAME_BAD_STEM: &str = r#"rename the file to {name}.agent-besties.md; the file stem is not a valid name, so no valid H1 can be built from it"#;
+pub(crate) const FIX_WNAME_BAD_STEM: &str = r#"rename the file to {name}.agent-besties.md if no file has that name yet (never overwrite an existing file); the file stem is not a valid name, so no valid H1 can be built from it"#;
 
-/// §9 supplement 3: E-HEAD fix when numbering is exhausted.
-pub(crate) const FIX_EHEAD_EXHAUSTED: &str =
-    r##"drop the leading "#" to make this a plain heading; numbering is exhausted"##;
+/// §9 supplement 3: E-HEAD fix when no number above the highest legal one
+/// (`{max}`) is left. The allocator never wraps or reuses numbers, so the
+/// fix does not print one: the reader picks an unused lower number by hand,
+/// which keeps the comment in place with its author, time and text.
+/// A fresh number must not capture an existing `@#n` reply. Restoring a
+/// known original number is a printed branch of this fix (and of
+/// [`FIX_EHEAD_UNNUMBERED`]): that number may already be named by a reply.
+/// `{header}` shows `<n>` for that number; `{fill}` is empty or
+/// [`FIX_EXHAUSTED_FILL`]. [`FIX_EXHAUSTED_TAIL`] follows.
+pub(crate) const FIX_EHEAD_EXHAUSTED: &str = r##"no comment number above #{max}, the highest in this post, is left for this header; to keep the comment where it is, with its author, time and text, rewrite the header by hand as "{header}", replacing <n> with an unused lower number: one that no header in this post carries, that you give no other header, and that no reply in this post already names (@#n){fill}; then change any reply that meant this comment to @# with that number; if you know this comment's original number and no header in this post carries it or is given it by another repair, use that number instead and no reply needs to change"##;
 
-/// §9 supplement 3: E-SEQ-DUP fix when numbering is exhausted.
-pub(crate) const FIX_ESEQDUP_EXHAUSTED: &str =
-    r#"move the duplicate comment to a new post and update references to it"#;
+/// `{fill}` of [`FIX_EHEAD_EXHAUSTED`] when the header still shows
+/// `<nick>` or `<time>`.
+pub(crate) const FIX_EXHAUSTED_FILL: &str =
+    ", and each <nick> or <time> with the comment's original author or the time it was first written";
+
+/// Appended to both exhausted repairs: a lower number is only an ordering
+/// warning, and it makes no room for appends, which E-SEQ-EXHAUSTED covers.
+pub(crate) const FIX_EXHAUSTED_TAIL: &str = "; a lower number can leave a W-SEQ-ORDER or W-SEQ-GAP warning, which does not block writes; this frees no number for new comments: once post stops with E-SEQ-EXHAUSTED, new comments go in a new post";
+
+/// E-HEAD fix when the suggested header still has reader-filled parts;
+/// the parts it already shows are the header's own and stay as printed.
+pub(crate) const FIX_EHEAD_FILL: &str = r###"rewrite the header as "{header}", replacing only each <nick> or <time> placeholder with the comment's original author or the time it was first written"###;
+
+/// Appended to the E-HEAD fix when the repair gives the comment another
+/// number than its header shows: replies by the old number would silently
+/// point at whatever comment keeps it. Choose `#{n}` before rewriting if
+/// no reply already names it; otherwise another number that no header
+/// carries, that no other repair in this report gives a header, and that
+/// no reply already names, and retarget replies to that number.
+pub(crate) const FIX_EHEAD_RENUMBERED: &str = r#"; its number changes from #{shown} to #{n} if no reply in this post already names @#{n}, otherwise to another number that no header in this post carries, that no other repair in this report gives a header, and that no reply already names; change any @#{shown} that meant this comment to that number"#;
+
+/// Appended to the E-HEAD fix when the header shows no usable number.
+/// `{n}` is the unused number the rewrite prints; the CLI does not
+/// guess a prior identity. Choose `#{n}` before rewriting if no reply
+/// already names it; otherwise another number that no header carries,
+/// that no other repair in this report gives a header, and that no
+/// reply already names, and retarget replies to that number. A reader
+/// who knows the original number may restore it when no header in this
+/// post carries it and no other repair is given it; that original number
+/// may already be named by a reply.
+pub(crate) const FIX_EHEAD_UNNUMBERED: &str = r#"; the header shows no usable number, so use #{n} if no reply in this post already names @#{n}, otherwise another number that no header in this post carries, that no other repair in this report gives a header, and that no reply already names, and change any reply that meant this comment to that number; if you know this comment's original number and no header in this post carries it or is given it by another repair, use that number instead and no reply needs to change"#;
+
+/// §9 supplement 3: E-SEQ-DUP fix when no number above `{max}` is left:
+/// the same by-hand lower-number repair as [`FIX_EHEAD_EXHAUSTED`], which
+/// changes only the number, then [`FIX_EXHAUSTED_TAIL`]. A fresh number
+/// must not capture an existing `@#n` reply.
+pub(crate) const FIX_ESEQDUP_EXHAUSTED: &str = r#"no comment number above #{max}, the highest in this post, is left to renumber this later #{n}; to keep it where it is, with its author, time and text, change only the number in its header by hand to an unused lower number: one that no header in this post carries, that you give no other header, and that no reply in this post already names (@#n); then update any @#{n} that meant it to that number"#;
+
+/// W-SEQ-GAP when a malformed comment header lies between the two
+/// numbers: that header may be the missing comment, not a deletion.
+pub(crate) const WHY_WSEQGAP_MALFORMED: &str = r#"no comment in this post has number #{m}, so @#{m} cannot be resolved; a malformed comment header before this one may be that comment"#;
+
+/// W-SEQ-GAP when every number between `a` and `b` is carried by a header
+/// elsewhere in the post: the comments are only out of order.
+pub(crate) const WHY_WSEQGAP_LATER: &str = r#"every number between #{a} and #{b} is used elsewhere in this post, so no comment is missing and @#n still resolves; only the order is unusual"#;
+
+/// W-SEQ-GAP at the first legal comment (`a` is the scanner's 0 seed, not
+/// a comment): the message names that first comment by its position in
+/// the file, because lower-numbered comments may still appear later.
+/// No #0 exists or can exist.
+pub(crate) const MESSAGE_WSEQGAP_FIRST: &str = r#"the first comment in this post is #{b}, not #1"#;
+
+/// [`WHY_WSEQGAP_LATER`] at the first legal comment.
+pub(crate) const WHY_WSEQGAP_FIRST_LATER: &str = r#"every number below #{b} is used elsewhere in this post, so no comment is missing and @#n still resolves; only the order is unusual"#;
+
+/// The catalog W-SEQ-GAP why at the first legal comment: deletion or a
+/// hand renumbering is one possibility, not the only one, because a post
+/// may also have started above #1. `{m}` is still the first number nothing
+/// carries.
+pub(crate) const WHY_WSEQGAP_FIRST: &str = r#"no comment in this post has number #{m}, so @#{m} cannot be resolved; that comment may have been deleted or renumbered by hand, or the first comment was written with a higher number"#;
+
+/// See [`WHY_WSEQGAP_MALFORMED`].
+pub(crate) const FIX_WSEQGAP_MALFORMED: &str = r#"repair the malformed header first; if the gap remains, leave the numbering as is, because other files may already reference #{b}"#;
+
+/// E-TOO-LARGE raised by a write whose result would exceed the limit;
+/// the file on disk is still within it.
+pub(crate) const MESSAGE_ETOOLARGE_WRITE: &str = r#"this write would make the file larger than {limit} MiB: it is {size} bytes now and would become {result} bytes"#;
+
+/// See [`MESSAGE_ETOOLARGE_WRITE`].
+pub(crate) const FIX_ETOOLARGE_WRITE: &str = r#"nothing was written; the file itself is still readable; shorten the new text, or put it in a new file (for a comment, a new post)"#;
+
+/// E-ENTRY-HASH on an entry without a path: `--refresh` skips such an
+/// entry, so only setting the target (which also writes the hash) helps.
+pub(crate) const FIX_EENTRYHASH_NO_PATH: &str = r#"this entry has no path, so --refresh cannot hash it; choose a file you know is the right target, review that file and the note, update the note if it no longer describes it, then set its target; this command also records the target's current hash: agent-coexist brief {path_arg} --target <file> --entry={title}"#;
+
+/// E-ENTRY-TARGET when the stored path names a directory: permissions are
+/// not the problem. The review names the chosen replacement file — a
+/// directory has no reviewable bytes.
+pub(crate) const FIX_EENTRYTARGET_DIR: &str = r#"the path names a directory, not a file; choose a file you know is the right target, review that file and the note, update the note if it no longer describes it, then point the entry at it; this command also records the target's current hash: agent-coexist brief {path_arg} --target <file> --entry={title}"#;
+
+/// W-BODY for a comment: only its author may rewrite it (E-EDIT-AUTHOR),
+/// so the recipe names who runs it. `{author}` / `{seq}` are the stored
+/// header values; the command follows after `: `.
+pub(crate) const FIX_WBODY_COMMENT: &str = r#"only {author}, the comment's author, can add its body; anyone else asks {author} to, or replies with @#{seq} instead; the command for {author}"#;
+
+/// W-BODY for a profile section whose heading `--section` cannot address.
+pub(crate) const FIX_WBODY_SECTION_NAME: &str = "rename the heading by hand to a valid, distinct section name and add a fenced body beneath it, then run check again";
+
+/// Fix row after a completed post write whose new body replies to a
+/// comment number no comment in this post carries (the `reply-to` row
+/// above says `(not found)`): the comment is already written and only
+/// its author may rewrite it (E-EDIT-AUTHOR), so the recipe edits the
+/// comment this report announced — keeping the reply and naming a
+/// number the post carries — instead of posting a new one. `--edit`
+/// replaces the whole body, so the `-m` marker stands for the comment's
+/// entire body with the reference corrected, not only the reply line.
+/// Composed by
+/// [`super::reply_target_missing_fix`]: `{path_arg}` is §8.3.4-quoted,
+/// `{nick}` / `{seq}` come from the write itself, and an unprintable
+/// operand takes the manual-command fallback.
+pub(crate) const FIX_WREPLYDANGLING_WRITE: &str = r#"if you meant another comment, edit this one so the reply names a number this post carries: agent-coexist post {path_arg} --as={nick} --edit={seq} -m '<the whole body, with the reference corrected>'"#;
+
+/// E-FILE-MISSING when the file's own directory is missing too: list the
+/// nearest existing ancestor (`dir_arg`) instead of a missing directory.
+pub(crate) const FIX_EFILEMISSING_ANCESTOR: &str = r#"correct the path and rerun (this command never creates the file); its directory does not exist either; collaboration files under the nearest existing directory: agent-coexist list {dir_arg}"#;
+
+/// W-STATE-DUP rendered by a wait refusal (`wait` or `wait-state` on a
+/// state file): the wait cannot start until the duplicate is gone, so
+/// resolving it is required, not optional. A declaration by the listed
+/// agent merges only clean-line entries; every occurrence on a dirty
+/// line is deleted from its line by hand first, keeping each line's
+/// other content, and a declaration follows only when duplicates remain
+/// or one entry from now is wanted (the refusal prints no W-STATE-ENTRY
+/// row, so the fix says to inspect the file). The printed command stays
+/// the declaration by the listed agent; the restart is a separate step
+/// with no command here.
+pub(crate) const FIX_WSTATEDUP_WAIT: &str = r#"the wait cannot start while a nick is listed twice under one status, so start it again only after the duplicate is gone; to merge, {nick} itself declares again, which replaces both entries with one entry from now (add --for to choose its length), but only when both entries are on clean lines; when either entry sits on a line that also has unparseable fragments (W-STATE-ENTRY), that line is kept as is and the duplicate stays: inspect the file, {nick} deletes its own entries from every such line by hand, keeping each line's other content, then looks at the remaining entries and declares again to merge any duplicate that is left or to start one entry from now; the command for {nick}: agent-coexist state {dir_arg} --as={nick} --status={status}"#;
+
+/// Wait E-LOCKED: a retried wait takes a new baseline. `{reread}` is the
+/// command-specific re-read ([`REREAD_FILE`] / [`REREAD_STATE`]).
+pub(crate) const FIX_WAIT_LOCKED: &str = r#"a retried wait starts from a new baseline and does not report changes made while the file was busy, so after its ready line, {reread}; retry shortly: {argv}"#;
+
+/// Wait E-INUSE: same re-read requirement as [`FIX_WAIT_LOCKED`].
+pub(crate) const FIX_WAIT_INUSE: &str = r#"a retried wait starts from a new baseline and does not report changes made while the file was busy, so after its ready line, {reread}; close the other program, then retry: {argv}"#;
+
+/// Wait I/O error (non-path-class) that ends a wait after its ready line:
+/// a retried wait takes a new baseline, like E-LOCKED/E-INUSE. `{reread}`
+/// is the command-specific re-read ([`REREAD_FILE`] / [`REREAD_STATE`]);
+/// the caller (the CLI wait dispatch) appends `; <io repair>, then retry:
+/// {argv}` or the manual by-hand form.
+pub const FIX_WAIT_IO_LEAD: &str = "a retried wait starts from a new baseline and does not report changes made while the file could not be read, so after its ready line, {reread}";
+
+/// `{reread}` for `wait` and `wait-post`.
+pub const REREAD_FILE: &str = "read the file again";
+
+/// `{reread}` for `wait-state`.
+pub const REREAD_STATE: &str = "run check-state on the directory again";
+
+/// Wait path-class fault that ends a wait after its ready line with
+/// NotFound. The storage read reports the same kind for a deleted or
+/// renamed-away directory, for a directory's place taken by a file (a
+/// Windows shape) and for a dangling link surviving at the watched path,
+/// so the advice states the one unconditional goal — restore the
+/// intended path — and each cause as its own condition; nothing is
+/// deleted blindly. `{display}` is the failing path's folded display;
+/// the CLI wait dispatch composes this in place of the generic I/O
+/// repair behind [`FIX_WAIT_IO_LEAD`] and the original wait retry.
+pub const FIX_WAIT_RESTORE_DIR_GONE: &str = "restore the intended path of {display}: if the directory on it is missing, recreate it, or move it back if it was renamed away; if a file now occupies the directory's place, move that file aside, keeping it; if {display} is a dangling link, restore the file it points at";
+
+/// Wait path-class fault that ends a wait after its ready line: a
+/// directory on the watched path was replaced by a regular file
+/// (NotADirectory). The replacement is moved aside and kept while the
+/// intended directory is re-created; nothing is deleted blindly.
+/// `{display}` is the failing path's folded display.
+pub const FIX_WAIT_RESTORE_DIR_REPLACED: &str = "a directory on the path of {display} is now a file; move that file aside, keeping it, and recreate the directory it replaced";
+
+/// Wait path-class fault that ends a wait after its ready line: the
+/// watched path itself no longer names a regular file (IsADirectory, or
+/// the storage read's regular-file rejection). Whatever now occupies the
+/// path is moved aside and kept, and nothing has to be created in its
+/// place: the watch accepts an absent file as its next baseline.
+/// `{display}` is the failing path's folded display.
+pub const FIX_WAIT_RESTORE_NOT_REGULAR: &str = "the path of {display} itself no longer names a regular file; move whatever now occupies it aside, keeping it; the watch also accepts the file absent, so nothing needs to be created in its place";
+
+/// Fix row after a completed profile/brief write whose functional-lock
+/// check could not read everything (skipped / partial / unreadable /
+/// canonicalize rows). `{unreadable}` is empty or
+/// [`SCAN_UNREADABLE_FIRST`]; `{commands}` are the read-only commands that
+/// open what the scan could not read. The rows are named by their key, so
+/// a brief's own `entry … skipped` rows are not taken for lock-check rows.
+pub const FIX_LOCK_SCAN_INCOMPLETE: &str = r#"any change reported above is already written, but the lock check could not read everything it needed (the rows above that start with skipped, partial or canonicalize), so a lock that applies here may have been missed; before writing again, look at what it could not read and agree with any holder named there{unreadable}: {commands}"#;
+
+/// Fix row on a completed write whose report lists `entry … skipped`
+/// and/or `remaining` errors. Check owns the full diagnostic text
+/// (§9 supplement 5); this is a read-only pointer at this file, never a
+/// rewrite and never a substitute for the lock-scan fix. Remaining rows
+/// stay the last group.
+pub const FIX_FILE_CHECK: &str = r#"skipped entries and remaining errors in this file need check on this file; follow the suggestions check prints: agent-coexist check {path_arg}"#;
+
+/// [`FIX_FILE_CHECK`] when this file's path cannot be written
+/// as a copyable operand.
+pub const FIX_FILE_CHECK_MANUAL: &str = r#"skipped entries and remaining errors in this file need check on this file; follow the suggestions check prints; run agent-coexist check on this file by hand; no copyable command can be printed because a path contains a line break or characters this text cannot reproduce exactly"#;
+
+/// [`FIX_LOCK_SCAN_INCOMPLETE`] when a path cannot be written as a
+/// copyable operand; `{commands}` are the `MANUAL_*` descriptions.
+pub const FIX_LOCK_SCAN_INCOMPLETE_MANUAL: &str = r#"any change reported above is already written, but the lock check could not read everything it needed (the rows above that start with skipped, partial or canonicalize), so a lock that applies here may have been missed; before writing again, look at what it could not read and agree with any holder named there{unreadable}; run by hand {commands}; no copyable command can be printed because a path contains a line break or characters this text cannot reproduce exactly"#;
+
+/// Fix row after a completed `state` declaration whose conflict scan could
+/// not read everything. Same placeholders as [`FIX_LOCK_SCAN_INCOMPLETE`].
+pub const FIX_STATE_SCAN_INCOMPLETE: &str = r#"the declaration above is written, but the conflict check could not read everything it needed (the rows above that start with skipped or partial), so a conflicting lock may have been missed; without declaring again, look at what it could not read and agree with any holder named there{unreadable}: {commands}"#;
+
+/// See [`FIX_STATE_SCAN_INCOMPLETE`] and [`FIX_LOCK_SCAN_INCOMPLETE_MANUAL`].
+pub const FIX_STATE_SCAN_INCOMPLETE_MANUAL: &str = r#"the declaration above is written, but the conflict check could not read everything it needed (the rows above that start with skipped or partial), so a conflicting lock may have been missed; without declaring again, look at what it could not read and agree with any holder named there{unreadable}; run by hand {commands}; no copyable command can be printed because a path contains a line break or characters this text cannot reproduce exactly"#;
+
+/// Fix row after a completed `state` declaration whose conflict scan stopped on an OS error (or any non-source scan fault) shown in the `scan` row. `{dir_arg}` is the §8.3.4-quoted DIR (plain str replace, done last).
+pub const FIX_STATE_SCAN_STOPPED: &str = r#"the declaration above is written, but the conflict check stopped at the error in the scan row above, so a conflicting lock may have been missed; without declaring again, resolve that error, then check for conflicts: agent-coexist check-state {dir_arg}"#;
+
+/// See [`FIX_STATE_SCAN_STOPPED`]: DIR cannot be written as a copyable operand.
+pub const FIX_STATE_SCAN_STOPPED_MANUAL: &str = r#"the declaration above is written, but the conflict check stopped at the error in the scan row above, so a conflicting lock may have been missed; without declaring again, resolve that error, then run agent-coexist check-state on this directory by hand; no copyable command can be printed because a path contains a line break or characters this text cannot reproduce exactly"#;
+
+/// `check-state` with skipped/partial rows: read each unread state file.
+pub const FIX_CHECK_STATE_UNREAD: &str = r#"some state files were not read in full (skipped or partial rows above), so declarations in them may be missing here; see what each one holds{unreadable}: {commands}"#;
+
+/// See [`FIX_CHECK_STATE_UNREAD`].
+pub const FIX_CHECK_STATE_UNREAD_MANUAL: &str = r#"some state files were not read in full (skipped or partial rows above), so declarations in them may be missing here; see what each one holds{unreadable} by hand with {commands}; no copyable command can be printed because a path contains a line break or characters this text cannot reproduce exactly"#;
+
+/// `read-notification` with skipped/partial rows: check each unread file.
+/// check shows a file's type and the problems left in it; a wrong-type
+/// file under the reserved state name can be clean, so the text says what
+/// its E-TYPE row means instead of promising that check explains it.
+pub const FIX_NOTIFY_UNREAD: &str = r#"some files were not read in full (skipped or partial rows above), so records in them may be missing here; check shows each file's type, when its first line gives one, and any problem left in it; an E-TYPE row, if any, means that directory's state file has another type, so no state declarations were read from it even when check reports no problem; before concluding nothing is new, check each one{unreadable}: {commands}"#;
+
+/// See [`FIX_NOTIFY_UNREAD`].
+pub const FIX_NOTIFY_UNREAD_MANUAL: &str = r#"some files were not read in full (skipped or partial rows above), so records in them may be missing here; check shows each file's type, when its first line gives one, and any problem left in it; an E-TYPE row, if any, means that directory's state file has another type, so no state declarations were read from it even when check reports no problem; before concluding nothing is new, check each one{unreadable}, by hand with {commands}; no copyable command can be printed because a path contains a line break or characters this text cannot reproduce exactly"#;
+
+/// `list` with `?`/`busy` leaves or unreadable directories: read each again.
+/// A directory is unreadable when it cannot be listed or, listed, cannot be
+/// entered (Unix read without search permission).
+pub const FIX_LIST_UNREAD: &str = r#"some leaves above have no known type (? or busy) or some directories could not be read or entered (skipped rows), so types or files may be missing here; read each one again to see what it holds or why it cannot be read{unreadable}: {commands}"#;
+
+/// See [`FIX_LIST_UNREAD`].
+pub const FIX_LIST_UNREAD_MANUAL: &str = r#"some leaves above have no known type (? or busy) or some directories could not be read or entered (skipped rows), so types or files may be missing here; read each one again to see what it holds or why it cannot be read{unreadable}, by hand with {commands}; no copyable command can be printed because a path contains a line break or characters this text cannot reproduce exactly"#;
+
+/// `{unreadable}` when some scanned directory could not be listed or
+/// entered: restoring only read permission leaves a directory without
+/// search permission just as unreadable, so both are named.
+pub const SCAN_UNREADABLE_FIRST: &str = r#" (first make each directory marked unreadable both readable and enterable: it needs read and search permission)"#;
+
+/// `{unreadable}` when identity fell back to lexical paths (`canonicalize`
+/// rows / `Follow::Here`). Restore existence and open/read plus
+/// traverse/search permission on the path and every ancestor, so Windows
+/// read/open and Unix ancestor search are both named; `{unreadable}` stays
+/// the composition slot.
+pub const SCAN_CANONICALIZE_FIRST: &str = r#" (first restore that each path marked canonicalize exists and that every directory on it, ancestors included, can be opened (read and traverse/search permission))"#;
+
+/// Standalone fix after `canonicalize` rows on check-state and
+/// read-notification. No placeholders, no command. Same permission clause
+/// as [`SCAN_CANONICALIZE_FIRST`].
+pub const FIX_CANONICALIZE: &str = r#"this command could not resolve the real path of each directory marked canonicalize; first restore that each of those paths exists and that every directory on it, ancestors included, can be opened (read and traverse/search permission), then run this command again"#;
+
+/// Manual `{commands}` descriptions for the scan follow-ups above.
+pub const MANUAL_CHECK_STATE_FILES: &str =
+    r#"agent-coexist check <dir>/state for each <dir> in a skipped or partial row"#;
+
+/// See [`MANUAL_CHECK_STATE_FILES`].
+pub const MANUAL_CHECK_SCAN_FILES: &str = r#"agent-coexist check <path> for each <path> in a skipped or partial row (<path>/state when the row names a directory)"#;
+
+/// See [`MANUAL_CHECK_STATE_FILES`].
+pub const MANUAL_CHECK_STATE_UNREADABLE: &str =
+    r#"agent-coexist check-state <dir> for each <dir> marked unreadable"#;
+
+/// See [`MANUAL_CHECK_STATE_FILES`].
+pub const MANUAL_CHECK_STATE_HERE: &str = r#"agent-coexist check-state on this file's directory"#;
+
+/// See [`MANUAL_CHECK_STATE_FILES`].
+pub const MANUAL_CHECK_LIST_LEAVES: &str = r#"agent-coexist check <path> for each ? or busy leaf, <path> being DIR, the directory rows above the leaf and its name, joined by /"#;
+
+/// See [`MANUAL_CHECK_STATE_FILES`].
+pub const MANUAL_LIST_UNREADABLE: &str =
+    r#"agent-coexist list <dir> for each <dir> marked unreadable"#;
+
+/// Reason for a write whose new content is complete in the file but whose
+/// final `sync_data` failed (`WriteLeft::Unconfirmed`). Nothing was undone.
+pub const MESSAGE_WRITE_UNCONFIRMED: &str =
+    r#"wrote {file}, but could not confirm that the change is stored on disk: {cause}"#;
+
+/// See [`MESSAGE_WRITE_UNCONFIRMED`]. The command is not repeated: a post
+/// or other change that is already in the file would be applied twice.
+/// `{check}` is `: agent-coexist check <file>` or a by-hand variant.
+pub const FIX_WRITE_UNCONFIRMED: &str = r#"the change is in the file, so do not run the same command again, which could apply it twice; {repair}, then check that the file still holds the change{check}"#;
+
+/// Reason for a failed write whose restore of the previous content failed
+/// too (`WriteLeft::Mixed`): both causes stay visible.
+pub const MESSAGE_WRITE_MIXED: &str =
+    r#"cannot write {file}: {cause}; putting its previous content back also failed: {rollback}"#;
+
+/// See [`MESSAGE_WRITE_MIXED`]. `{from}`/`{len}` are byte counts: bytes
+/// before `{from}` are unchanged, the previous content was `{len}` bytes.
+pub const FIX_WRITE_MIXED: &str = r#"the first {from} bytes of the file are unchanged, but after them it may hold part of this change mixed with its previous content ({len} bytes before this command), so do not run the same command again; {repair}, then check the file and correct it by hand{check}"#;
 
 /// Look up a §9 template by diagnostic id.
 pub(crate) fn find(id: &str) -> Option<&'static Template> {

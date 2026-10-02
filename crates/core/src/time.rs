@@ -12,8 +12,9 @@ use chrono::{
 };
 use std::env;
 
-use crate::consts::POST_WAIT_MS;
+use crate::consts::{DEFAULT_FOR_LOCKED, DEFAULT_FOR_OTHER, POST_WAIT_MS};
 use crate::error::Fault;
+use crate::names;
 
 /// UTC instant at second precision: TIME is UTC, `Z`, seconds only
 /// (§2.8.1), and sub-second precision never survives this module.
@@ -21,6 +22,19 @@ pub type Time = DateTime<Utc>;
 
 const NOW_ENV: &str = "AGENT_COEXIST_NOW";
 const LOCK_WAIT_ENV: &str = "AGENT_COEXIST_LOCK_WAIT_MS";
+
+/// The DURATION grammar in words (spec §1 DURATION), as a literal so the
+/// CLI's static help can `concat!` it: the top-level help and the `--for`
+/// and `--since` messages state the same rule.
+#[macro_export]
+macro_rules! duration_rule {
+    () => {
+        "Nd, Nh, Nm, Ns in that order, each at most once, total above zero"
+    };
+}
+
+/// [`duration_rule!`] as a value for runtime messages.
+pub const DURATION_RULE: &str = duration_rule!();
 
 /// Current time (§1 now): the system UTC clock truncated to whole
 /// seconds, or `AGENT_COEXIST_NOW` when set. The override must be a
@@ -34,16 +48,34 @@ pub fn now() -> Result<Time, Fault> {
                 Some(value) => value,
                 None => {
                     return Err(Fault::Usage(
-                        "AGENT_COEXIST_NOW is not valid Unicode".into(),
+                        "AGENT_COEXIST_NOW is not valid Unicode; set it to a UTC time such as 2026-09-17T09:12:00Z, or unset it to use the system clock".into(),
                     ))
                 }
             };
             match parse_strict_time(value) {
                 Some(time) => Ok(time),
-                None => Err(Fault::Usage(format!(
-                    "AGENT_COEXIST_NOW must be TIME (YYYY-MM-DDTHH:MM:SSZ), got '{}'",
-                    value
-                ))),
+                None => {
+                    // When only edge whitespace is wrong (a trailing CR from
+                    // a CRLF env file, `set X=... ` in cmd.exe), removing it
+                    // keeps the fixed clock; unsetting is then the fallback.
+                    // A space between date and time is the one other near
+                    // miss worth naming (`--since` names it too), so the
+                    // repair that keeps the fixed clock comes first.
+                    let fix = names::edge_space_fix(value, |v| parse_strict_time(v).is_some())
+                        .or_else(|| {
+                            (value.len() == 20 && value.as_bytes()[10] == b' ').then(|| {
+                                "separate the date and time with 'T', not a space".to_string()
+                            })
+                        });
+                    Err(Fault::Usage(format!(
+                        "AGENT_COEXIST_NOW must be a UTC time YYYY-MM-DDTHH:MM:SSZ such as 2026-09-17T09:12:00Z (got '{}'); {}",
+                        names::echo_raw(value),
+                        match fix {
+                            Some(fix) => format!("{fix}, or unset it to use the system clock"),
+                            None => "unset it to use the system clock".to_string(),
+                        }
+                    )))
+                }
             }
         }
     }
@@ -117,12 +149,40 @@ pub fn parse(s: &str) -> Result<Time, Fault> {
     Ok(utc)
 }
 
+/// The latest TIME: an end or start beyond it cannot be written.
+const LATEST_TIME: &str = "9999-12-31T23:59:59Z";
+
+/// Why a value is not a usable DURATION.
+enum DurationError {
+    /// The value breaks the grammar.
+    Invalid,
+    /// The value follows the grammar, but its total does not fit i64
+    /// seconds — far beyond the 0001..=9999 range from any `now`.
+    TooLarge,
+}
+
 /// DURATION (§1): `Nd`/`Nh`/`Nm`/`Ns` concatenated with units strictly
 /// descending d > h > m > s (which also enforces "each unit at most
 /// once"), at least one part, ASCII digits only — whitespace anywhere,
 /// empty input, signs or stray characters are errors. The total in
-/// seconds must be > 0 and fit i64.
+/// seconds must be > 0 and fit i64. The error text names `--for`, the
+/// only option whose failure reports it ([`since`] has its own message).
 pub fn duration(s: &str) -> Result<i64, Fault> {
+    parse_duration(s).map_err(|error| match error {
+        DurationError::Invalid => Fault::Usage(format!(
+            "--for must be a duration such as 1h30m: {DURATION_RULE} {}",
+            names::got_raw(s, |v| parse_duration(v).is_ok())
+        )),
+        DurationError::TooLarge => Fault::Usage(format!(
+            "--for '{}' is too long: the declaration would end after {LATEST_TIME}, the latest representable time; use a shorter --for",
+            names::echo_raw(s)
+        )),
+    })
+}
+
+/// The grammar is checked to the end before size is reported, so a value
+/// that is both oversized and malformed gets the grammar message.
+fn parse_duration(s: &str) -> Result<i64, DurationError> {
     const SECS_PER_UNIT: [u128; 4] = [86_400, 3_600, 60, 1];
     fn unit_rank(unit: u8) -> Option<usize> {
         match unit {
@@ -133,9 +193,8 @@ pub fn duration(s: &str) -> Result<i64, Fault> {
             _ => None,
         }
     }
-    let invalid = || Fault::Usage(format!("invalid duration: {}", s));
     let bytes = s.as_bytes();
-    let mut total: u128 = 0;
+    let mut total: Option<u128> = Some(0);
     let mut prev_rank: Option<usize> = None;
     let mut i = 0;
     while i < bytes.len() {
@@ -144,30 +203,34 @@ pub fn duration(s: &str) -> Result<i64, Fault> {
             i += 1;
         }
         if digits_start == i {
-            return Err(invalid()); // leading unit, stray char, whitespace
+            return Err(DurationError::Invalid); // leading unit, stray char, whitespace
         }
-        let number: u64 = std::str::from_utf8(&bytes[digits_start..i])
+        // ASCII digits only, so a failed parse means the run exceeds u64.
+        let number = std::str::from_utf8(&bytes[digits_start..i])
             .ok()
-            .and_then(|digits| digits.parse().ok())
-            .ok_or_else(invalid)?; // digit run that does not fit u64
+            .and_then(|digits| digits.parse::<u64>().ok());
         if i >= bytes.len() {
-            return Err(invalid()); // digits with no unit
+            return Err(DurationError::Invalid); // digits with no unit
         }
-        let rank = unit_rank(bytes[i]).ok_or_else(invalid)?;
+        let rank = unit_rank(bytes[i]).ok_or(DurationError::Invalid)?;
         if prev_rank.is_some_and(|prev| rank <= prev) {
-            return Err(invalid()); // not strictly descending (covers repeats)
+            return Err(DurationError::Invalid); // not strictly descending (covers repeats)
         }
         prev_rank = Some(rank);
-        let scaled = (number as u128)
-            .checked_mul(SECS_PER_UNIT[rank])
-            .ok_or_else(invalid)?;
-        total = total.checked_add(scaled).ok_or_else(invalid)?;
+        total = match (total, number) {
+            (Some(sum), Some(n)) => (n as u128)
+                .checked_mul(SECS_PER_UNIT[rank])
+                .and_then(|scaled| sum.checked_add(scaled)),
+            _ => None,
+        };
         i += 1;
     }
-    if total == 0 || total > i64::MAX as u128 {
-        return Err(invalid()); // empty input, all-zero (`0s`, `0h0m`), unrepresentable
+    match total {
+        // Empty input, all-zero (`0s`, `0h0m`).
+        Some(0) => Err(DurationError::Invalid),
+        Some(sum) if sum <= i64::MAX as u128 => Ok(sum as i64),
+        _ => Err(DurationError::TooLarge),
     }
-    Ok(total as i64)
 }
 
 /// TIME can only represent years 0001..=9999 (§1 DURATION row).
@@ -182,26 +245,57 @@ pub fn since(s: &str, now: Time) -> Result<Time, Fault> {
     if let Ok(absolute) = parse(s) {
         return Ok(absolute);
     }
-    if let Ok(secs) = duration(s) {
-        let delta = TimeDelta::try_seconds(secs)
-            .ok_or_else(|| Fault::Usage(format!("--since out of representable range: {}", s)))?;
-        return now
-            .checked_sub_signed(delta)
-            .filter(in_representable_year)
-            .ok_or_else(|| Fault::Usage(format!("--since out of representable range: {}", s)));
+    let out_of_range = || {
+        Fault::Usage(format!(
+            "--since '{}' reaches back before year 0001; use a shorter duration or an absolute time",
+            names::echo_raw(s)
+        ))
+    };
+    match parse_duration(s) {
+        Ok(secs) => {
+            let delta = TimeDelta::try_seconds(secs).ok_or_else(out_of_range)?;
+            return now
+                .checked_sub_signed(delta)
+                .filter(in_representable_year)
+                .ok_or_else(out_of_range);
+        }
+        Err(DurationError::TooLarge) => return Err(out_of_range()),
+        Err(DurationError::Invalid) => {}
     }
-    Err(Fault::Usage(format!("invalid --since value: {}", s)))
+    // A value that only edge whitespace makes invalid gets that repair
+    // (the trimmed value cannot recurse further: it has no edge left).
+    // Otherwise a date and time separated by a space is the one near miss
+    // worth naming: RFC 3339 requires `T` there (§2.8.2). The DURATION rule
+    // is spelled out because a duration-shaped value (`0s`, `30m1h`)
+    // otherwise gets no reason.
+    let fix = names::edge_space_fix(s, |v| since(v, now).is_ok()).or_else(|| {
+        (s.len() >= 19 && s.as_bytes()[10] == b' ')
+            .then(|| "separate the date and time with 'T', not a space".to_string())
+    });
+    Err(Fault::Usage(format!(
+        "--since must be an RFC 3339 time such as 2026-09-17T09:12:00Z, or a duration back from now such as 1h30m: {DURATION_RULE} (got '{}'){}",
+        names::echo_raw(s),
+        fix.map(|fix| format!("; {fix}")).unwrap_or_default()
+    )))
 }
 
 /// Lock/expiry horizon: `now + secs` via checked addition; outside
 /// representable years (or an unrepresentable delta) it is a usage error,
-/// never a panic, for any i64 input.
+/// never a panic, for any i64 input. Reached with an explicit `--for` and
+/// with the default window of a `state` declaration, so the message names
+/// both.
 pub fn until(now: Time, secs: i64) -> Result<Time, Fault> {
-    const OUT_OF_RANGE: &str = "--for/lock window out of representable range";
-    let delta = TimeDelta::try_seconds(secs).ok_or_else(|| Fault::Usage(OUT_OF_RANGE.into()))?;
+    let out_of_range = || {
+        Fault::Usage(format!(
+            "the declaration would end after {LATEST_TIME}, the latest representable time; use a shorter --for (without --for, 'locked' lasts {}h and other statuses {}h)",
+            DEFAULT_FOR_LOCKED / 3600,
+            DEFAULT_FOR_OTHER / 3600
+        ))
+    };
+    let delta = TimeDelta::try_seconds(secs).ok_or_else(out_of_range)?;
     now.checked_add_signed(delta)
         .filter(in_representable_year)
-        .ok_or_else(|| Fault::Usage(OUT_OF_RANGE.into()))
+        .ok_or_else(out_of_range)
 }
 
 /// Render TIME (§2.8.1): manual zero padding through the chrono
@@ -224,17 +318,43 @@ pub fn format(t: Time) -> String {
 /// Lock wait override (§10.2.9, §12): `AGENT_COEXIST_LOCK_WAIT_MS` as a
 /// non-empty run of ASCII decimal digits that parses as u64 — no sign,
 /// whitespace or separators. Absent falls back to `POST_WAIT_MS`; invalid
-/// Unicode is an error, never silently unset.
+/// Unicode is an error, never silently unset. A digit run beyond u64 is
+/// told apart from a malformed value.
 pub fn post_wait_ms() -> Result<u64, Fault> {
-    match env::var_os(LOCK_WAIT_ENV) {
-        None => Ok(POST_WAIT_MS),
-        Some(raw) => match raw.to_str().and_then(parse_lock_wait_ms) {
-            Some(ms) => Ok(ms),
-            None => Err(Fault::Usage(
-                "AGENT_COEXIST_LOCK_WAIT_MS must be a non-negative decimal integer".into(),
-            )),
-        },
+    let Some(raw) = env::var_os(LOCK_WAIT_ENV) else {
+        return Ok(POST_WAIT_MS);
+    };
+    let value = raw.to_str();
+    if let Some(ms) = value.and_then(parse_lock_wait_ms) {
+        return Ok(ms);
     }
+    // Invalid Unicode has its own message, parallel to AGENT_COEXIST_NOW:
+    // the raw value has no text to echo, and the lossy U+FFFD would show a
+    // character the user never typed.
+    if value.is_none() {
+        return Err(Fault::Usage(format!(
+            "AGENT_COEXIST_LOCK_WAIT_MS is not valid Unicode; set it to digits such as {POST_WAIT_MS}, or unset it to use the default {POST_WAIT_MS}"
+        )));
+    }
+    let lossy = raw.to_string_lossy();
+    let shown = names::echo_raw(&lossy);
+    let all_digits = value.is_some_and(|v| !v.is_empty() && v.bytes().all(|b| b.is_ascii_digit()));
+    Err(Fault::Usage(if all_digits {
+        format!(
+            "AGENT_COEXIST_LOCK_WAIT_MS '{shown}' is larger than {}, the largest accepted number of milliseconds; use a smaller value such as {POST_WAIT_MS}, or unset it to use the default {POST_WAIT_MS}",
+            u64::MAX
+        )
+    } else {
+        let fix = names::edge_space_fix(&lossy, |v| parse_lock_wait_ms(v).is_some());
+        format!(
+            "AGENT_COEXIST_LOCK_WAIT_MS must be a whole number of milliseconds from 0 to {} such as {POST_WAIT_MS}, digits only (got '{shown}'); {}",
+            u64::MAX,
+            match fix {
+                Some(fix) => format!("{fix}, or unset it to use the default {POST_WAIT_MS}"),
+                None => format!("unset it to use the default {POST_WAIT_MS}"),
+            }
+        )
+    }))
 }
 
 fn parse_lock_wait_ms(s: &str) -> Option<u64> {

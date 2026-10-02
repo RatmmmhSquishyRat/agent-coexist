@@ -61,11 +61,14 @@ pub fn apply(bytes: &[u8], splices: Vec<Splice>) -> Result<Vec<u8>, Fault> {
     let added: usize = sorted.iter().map(|s| s.replacement.len()).sum();
     let final_len = bytes.len() - removed + added;
     if final_len > consts::MAX_MANAGED_FILE_BYTES {
+        // The file itself is within the limit; only this result is not.
         return Err(Fault::Diagnostics(vec![Diagnostic::new("E-TOO-LARGE", 1)
             .with(
                 "limit",
                 (consts::MAX_MANAGED_FILE_BYTES / (1024 * 1024)).to_string(),
-            )]));
+            )
+            .with("size", bytes.len().to_string())
+            .with("result", final_len.to_string())]));
     }
 
     let mut out = Vec::with_capacity(final_len);

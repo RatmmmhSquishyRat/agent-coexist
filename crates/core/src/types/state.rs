@@ -185,18 +185,29 @@ pub(crate) fn scan(ctx: &mut ScanCtx, sections: &[Section]) -> Vec<StateSection>
     let mut out: Vec<StateSection> = Vec::with_capacity(sections.len());
     // folded titles already seen, for E-STATUS-DUP at later occurrences
     let mut seen_titles = HashSet::new();
+    // titles heading more than one section: their W-STATUS-NAME repair is
+    // the same merge E-STATUS-DUP asks for, not one new name per copy
+    let mut once = HashSet::new();
+    let repeated: HashSet<&str> = sections
+        .iter()
+        .map(|sec| sec.title.as_str())
+        .filter(|title| !once.insert(*title))
+        .collect();
 
     for (si, sec) in sections.iter().enumerate() {
         let status = sec.title.clone();
         let head_no = ctx.idx_at(sec.head.start) + 1;
         let valid_name = names::valid_status(&status);
         if !valid_name {
-            ctx.push(
-                Diagnostic::new("W-STATUS-NAME", head_no)
-                    .with("name", names::display_text(&status))
-                    .with("n", head_no.to_string())
-                    .with("lowercased", suggest_status(&status)),
-            );
+            let d = Diagnostic::new("W-STATUS-NAME", head_no)
+                .with("name", names::display_text(&status))
+                .with("n", head_no.to_string())
+                .with("lowercased", suggest_status(&status));
+            ctx.push(if repeated.contains(status.as_str()) {
+                d.with("repeated", "1")
+            } else {
+                d
+            });
         }
         if !seen_titles.insert(sec.title.as_str()) {
             ctx.push(Diagnostic::new("E-STATUS-DUP", head_no).with("status", status.clone()));

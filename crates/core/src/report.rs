@@ -38,7 +38,9 @@ impl Status {
 ///   no values renders as indent + key only, not a synthetic value column.
 ///   This makes every row splittable on `/ {2,}/` (spec §8.1.4).
 /// - `Text`: a line with the key alone, then one `    | ` prefixed line per
-///   content line, verbatim, never folded or truncated (spec §8.1.7).
+///   content line, verbatim, never folded or truncated (spec §8.1.7). A
+///   final `\n` terminates the last line rather than adding an empty one;
+///   empty content renders as the key line alone.
 /// - `Diagnostic`: the raw diagnostic; the renderer renders message / why /
 ///   fix through the diag catalog with the invocation's `diag::Context`.
 #[derive(Clone, Debug)]

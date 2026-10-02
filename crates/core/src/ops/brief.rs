@@ -5,10 +5,12 @@
 //! one shot; everything else splices the original bytes via `text::apply`.
 //!
 //! Every byte-writing form runs the functional-lock verdict inside the
-//! exclusive fastfail lock (§10.8); the `unchanged` form never judges one
-//! (§10.8.1). After every successful write the new bytes are re-parsed and
-//! any surviving non-blocking `E-*` is reported as `remaining` rows — the
-//! last rows of the output, with a `warn` first line (§2.7.4).
+//! exclusive fastfail lock (§10.8); the bare `unchanged` form never judges
+//! one (§10.8.1). A splice form whose result equals the current bytes
+//! writes nothing and ends its rows with `unchanged  <file>`. After every
+//! successful write the new bytes are re-parsed and any surviving
+//! non-blocking `E-*` is reported as `remaining` rows — the last rows of
+//! the output, with a `warn` first line (§2.7.4).
 
 use std::io::ErrorKind;
 use std::path::Path;
@@ -21,16 +23,17 @@ use crate::fsx::{self, Mutation};
 use crate::hash;
 use crate::names;
 use crate::ops::context::{self, Ctx};
-use crate::report::Report;
+use crate::report::{Report, Row};
 use crate::text::{self, Splice};
 use crate::types::brief::Entry;
 use crate::types::property_parts;
 use crate::Time;
 
 use super::post::{
-    after_line_and_blank, checked_doc, fence_block, finish, flock_blocked, guarded_apply, is_blank,
-    line_end, removed_lines_label, require_valid_stem, section_delete_splice, stash_flock,
-    strip_term, unchanged_done, Applied, Done, Early, FlockStash, Step,
+    after_line_and_blank, checked_doc, fence_block, file_check_fix, finish, flock_blocked,
+    guarded_apply, is_blank, line_end, removed_lines_label, require_valid_stem,
+    section_delete_splice, separated, stash_flock, strip_term, unchanged_done, Applied, Done,
+    Early, FlockStash, Step,
 };
 use super::{reason_report, BriefForm, BriefParams, BriefTarget, RegexOpt};
 
@@ -62,12 +65,19 @@ pub fn run(ctx: &mut Ctx, p: &BriefParams) -> Result<Report, Fault> {
             Err(err) if err.kind() == ErrorKind::NotFound => {
                 let dctx = context::diag_context_for_file(ctx, "brief", &p.path);
                 let object = context::object_of_path(&p.path);
+                // `target` stays the value the user typed (and the brief
+                // would store); `resolved` is the path actually looked
+                // for, joined under the brief's directory (§10.4.3), so a
+                // reader checking from the shell checks the right file.
                 return Ok(reason_report(
                     &dctx,
                     "brief",
                     &object,
                     "E-TARGET-MISSING",
-                    vec![("target", display_stored_path(&t.target).into())],
+                    vec![
+                        ("target", display_stored_path(&t.target).into()),
+                        ("resolved", context::display_file(&resolved).into()),
+                    ],
                 ));
             }
             Err(err) => return Err(Fault::io("read", resolved, err)),
@@ -94,7 +104,7 @@ fn step(
     p: &BriefParams,
     target: Option<&TargetInfo>,
     stash: &mut Option<FlockStash>,
-    bytes: Vec<u8>,
+    bytes: &[u8],
     created: bool,
 ) -> Result<(Mutation, Step), Fault> {
     match &p.form {
@@ -114,7 +124,7 @@ fn bare_step(
     ctx: &mut Ctx,
     p: &BriefParams,
     stash: &mut Option<FlockStash>,
-    bytes: Vec<u8>,
+    bytes: &[u8],
     created: bool,
 ) -> Result<(Mutation, Step), Fault> {
     if created {
@@ -127,7 +137,7 @@ fn bare_step(
             Step::Done(Done::empty()),
         ));
     }
-    match checked_doc(&bytes, &p.path, ctx.now, doc::Kind::Brief) {
+    match checked_doc(bytes, &p.path, ctx.now, doc::Kind::Brief) {
         Ok(_) => Ok((Mutation::Unchanged, Step::Done(unchanged_done(&p.path)))),
         Err(Early::Step(step)) => Ok((Mutation::Unchanged, step)),
         Err(Early::Fault(fault)) => Err(fault),
@@ -140,7 +150,7 @@ fn description_step(
     ctx: &mut Ctx,
     p: &BriefParams,
     stash: &mut Option<FlockStash>,
-    bytes: Vec<u8>,
+    bytes: &[u8],
     created: bool,
     description: &str,
 ) -> Result<(Mutation, Step), Fault> {
@@ -156,7 +166,7 @@ fn description_step(
         content.push_str(&fence_block(description));
         return Ok((Mutation::Write(content.into_bytes()), Step::Done(done)));
     }
-    let doc = match checked_doc(&bytes, &p.path, ctx.now, doc::Kind::Brief) {
+    let doc = match checked_doc(bytes, &p.path, ctx.now, doc::Kind::Brief) {
         Ok(doc) => doc,
         Err(Early::Step(step)) => return Ok((Mutation::Unchanged, step)),
         Err(Early::Fault(fault)) => return Err(fault),
@@ -175,18 +185,15 @@ fn description_step(
                 after_line_and_blank(&doc.source, anchor, &fence_block(description));
             vec![Splice {
                 range: pos..pos,
-                replacement: inserted.into_bytes(),
+                replacement: separated(&doc.source, pos, inserted).into_bytes(),
             }]
         }
     };
     if stash_flock(stash, ctx, &p.path, p.as_nick.as_deref()) {
         return flock_blocked();
     }
-    match guarded_apply(&bytes, splices, doc.kind.as_ref().map(doc::Kind::as_str))? {
-        Applied::Bytes(new_bytes) => {
-            append_remaining(&mut done, &new_bytes, &p.path, ctx.now)?;
-            Ok((Mutation::Write(new_bytes), Step::Done(done)))
-        }
+    match guarded_apply(bytes, splices, doc.kind.as_ref().map(doc::Kind::as_str))? {
+        Applied::Bytes(new_bytes) => commit_or_unchanged(done, bytes, new_bytes, &p.path, ctx.now),
         Applied::Refused(step) => Ok((Mutation::Unchanged, step)),
     }
 }
@@ -197,7 +204,7 @@ fn target_step(
     ctx: &mut Ctx,
     p: &BriefParams,
     stash: &mut Option<FlockStash>,
-    bytes: Vec<u8>,
+    bytes: &[u8],
     created: bool,
     t: &BriefTarget,
     target: Option<&TargetInfo>,
@@ -226,7 +233,7 @@ fn target_step(
         content.push_str(&entry_block(&info.title, t, &info.sha));
         return Ok((Mutation::Write(content.into_bytes()), Step::Done(done)));
     }
-    let doc = match checked_doc(&bytes, &p.path, ctx.now, doc::Kind::Brief) {
+    let doc = match checked_doc(bytes, &p.path, ctx.now, doc::Kind::Brief) {
         Ok(doc) => doc,
         Err(Early::Step(step)) => return Ok((Mutation::Unchanged, step)),
         Err(Early::Fault(fault)) => return Err(fault),
@@ -242,7 +249,7 @@ fn target_step(
             if stash_flock(stash, ctx, &p.path, p.as_nick.as_deref()) {
                 return flock_blocked();
             }
-            match guarded_apply(&bytes, splices, doc.kind.as_ref().map(doc::Kind::as_str))? {
+            match guarded_apply(bytes, splices, doc.kind.as_ref().map(doc::Kind::as_str))? {
                 Applied::Bytes(new_bytes) => {
                     append_remaining(&mut done, &new_bytes, &p.path, ctx.now)?;
                     Ok((Mutation::Write(new_bytes), Step::Done(done)))
@@ -261,12 +268,13 @@ fn target_step(
                     let new_norm = hash::normalized_target(&t.target);
                     let existing_norm = hash::normalized_target(&prop.value);
                     if existing_norm != new_norm {
+                        // The fix is the original command line plus
+                        // `--entry` (diag::title_taken_fix), not a
+                        // recomposed command that would drop options.
                         return Err(Fault::reason("E-ENTRY-TITLE-TAKEN")
                             .with("title", info.title.clone())
                             .with("existing", display_stored_path(&prop.value))
-                            .with("target", display_stored_path(&t.target))
-                            .with("target_arg", t.target.clone())
-                            .with("path_arg", p.path.as_os_str()));
+                            .with("target", display_stored_path(&t.target)));
                     }
                 }
             }
@@ -287,10 +295,9 @@ fn target_step(
             if t.note.is_some() {
                 done.kv("note", vec!["set".to_string()]);
             }
-            match guarded_apply(&bytes, splices, doc.kind.as_ref().map(doc::Kind::as_str))? {
+            match guarded_apply(bytes, splices, doc.kind.as_ref().map(doc::Kind::as_str))? {
                 Applied::Bytes(new_bytes) => {
-                    append_remaining(&mut done, &new_bytes, &p.path, ctx.now)?;
-                    Ok((Mutation::Write(new_bytes), Step::Done(done)))
+                    commit_or_unchanged(done, bytes, new_bytes, &p.path, ctx.now)
                 }
                 Applied::Refused(step) => Ok((Mutation::Unchanged, step)),
             }
@@ -303,11 +310,11 @@ fn note_step(
     ctx: &mut Ctx,
     p: &BriefParams,
     stash: &mut Option<FlockStash>,
-    bytes: Vec<u8>,
+    bytes: &[u8],
     entry_title: &str,
     note: &str,
 ) -> Result<(Mutation, Step), Fault> {
-    let doc = match checked_doc(&bytes, &p.path, ctx.now, doc::Kind::Brief) {
+    let doc = match checked_doc(bytes, &p.path, ctx.now, doc::Kind::Brief) {
         Ok(doc) => doc,
         Err(Early::Step(step)) => return Ok((Mutation::Unchanged, step)),
         Err(Early::Fault(fault)) => return Err(fault),
@@ -330,19 +337,18 @@ fn note_step(
         }
         None => {
             let (pos, inserted) = note_insert(&doc, entry, note);
+            let mut replacement = inserted.into_bytes();
+            separate_from_next(&doc.source, pos, &mut replacement);
             vec![Splice {
                 range: pos..pos,
-                replacement: inserted.into_bytes(),
+                replacement,
             }]
         }
     };
     let mut done = Done::empty();
     done.kv("note", vec!["set".to_string()]);
-    match guarded_apply(&bytes, splices, doc.kind.as_ref().map(doc::Kind::as_str))? {
-        Applied::Bytes(new_bytes) => {
-            append_remaining(&mut done, &new_bytes, &p.path, ctx.now)?;
-            Ok((Mutation::Write(new_bytes), Step::Done(done)))
-        }
+    match guarded_apply(bytes, splices, doc.kind.as_ref().map(doc::Kind::as_str))? {
+        Applied::Bytes(new_bytes) => commit_or_unchanged(done, bytes, new_bytes, &p.path, ctx.now),
         Applied::Refused(step) => Ok((Mutation::Unchanged, step)),
     }
 }
@@ -352,10 +358,10 @@ fn remove_entry_step(
     ctx: &mut Ctx,
     p: &BriefParams,
     stash: &mut Option<FlockStash>,
-    bytes: Vec<u8>,
+    bytes: &[u8],
     entry_title: &str,
 ) -> Result<(Mutation, Step), Fault> {
-    let doc = match checked_doc(&bytes, &p.path, ctx.now, doc::Kind::Brief) {
+    let doc = match checked_doc(bytes, &p.path, ctx.now, doc::Kind::Brief) {
         Ok(doc) => doc,
         Err(Early::Step(step)) => return Ok((Mutation::Unchanged, step)),
         Err(Early::Fault(fault)) => return Err(fault),
@@ -377,7 +383,7 @@ fn remove_entry_step(
     );
     done.kv("removed-lines", vec![label]);
     match guarded_apply(
-        &bytes,
+        bytes,
         vec![splice],
         doc.kind.as_ref().map(doc::Kind::as_str),
     )? {
@@ -391,15 +397,18 @@ fn remove_entry_step(
 
 /// §4.5.7: refresh `- hash:` values for the selected (default: all)
 /// entries from each target's current bytes. Missing targets and entries
-/// without a `path` line are skipped (first line `warn`).
+/// without a `path` line are skipped (first line `warn`). Skipped entries
+/// without remaining errors get the read-only check pointer here;
+/// remaining errors get the same pointer in [`finish`]. That pointer does
+/// not replace the lock-scan fix assembled later by [`finish`].
 fn refresh_step(
     ctx: &mut Ctx,
     p: &BriefParams,
     stash: &mut Option<FlockStash>,
-    bytes: Vec<u8>,
+    bytes: &[u8],
     entry_title: &Option<String>,
 ) -> Result<(Mutation, Step), Fault> {
-    let doc = match checked_doc(&bytes, &p.path, ctx.now, doc::Kind::Brief) {
+    let doc = match checked_doc(bytes, &p.path, ctx.now, doc::Kind::Brief) {
         Ok(doc) => doc,
         Err(Early::Step(step)) => return Ok((Mutation::Unchanged, step)),
         Err(Early::Fault(fault)) => return Err(fault),
@@ -414,9 +423,15 @@ fn refresh_step(
     if stash_flock(stash, ctx, &p.path, p.as_nick.as_deref()) {
         return flock_blocked();
     }
+    // A brief without entries has nothing to refresh: say so with the
+    // same `unchanged  <file>` row as the other no-write forms (§4.5.7).
+    if selected.is_empty() {
+        return Ok((Mutation::Unchanged, Step::Done(unchanged_done(&p.path))));
+    }
     let mut done = Done::empty();
     let mut splices: Vec<Splice> = Vec::new();
     let mut inserts: Vec<(usize, Vec<u8>)> = Vec::new();
+    let mut skipped = false;
     for &idx in &selected {
         let entry = &doc.brief.entries[idx];
         let path_prop = match &entry.path {
@@ -431,6 +446,7 @@ fn refresh_step(
                     ],
                 );
                 done.warn = true;
+                skipped = true;
                 continue;
             }
         };
@@ -447,6 +463,7 @@ fn refresh_step(
                     ],
                 );
                 done.warn = true;
+                skipped = true;
                 continue;
             }
             Err(err) => return Err(Fault::io("read", resolved, err)),
@@ -471,15 +488,46 @@ fn refresh_step(
         );
     }
     let splices = merge_inserts(&doc.source, splices, inserts);
+    // Every selected entry was skipped: say so with the same
+    // `unchanged  <file>` row as the other no-write forms.
     if splices.is_empty() {
+        attach_skipped_check(&mut done, &p.path, skipped);
+        done.rows.extend(unchanged_done(&p.path).rows);
         return Ok((Mutation::Unchanged, Step::Done(done)));
     }
-    match guarded_apply(&bytes, splices, doc.kind.as_ref().map(doc::Kind::as_str))? {
+    match guarded_apply(bytes, splices, doc.kind.as_ref().map(doc::Kind::as_str))? {
         Applied::Bytes(new_bytes) => {
-            append_remaining(&mut done, &new_bytes, &p.path, ctx.now)?;
-            Ok((Mutation::Write(new_bytes), Step::Done(done)))
+            let (mutation, step) = commit_or_unchanged(done, bytes, new_bytes, &p.path, ctx.now)?;
+            Ok((mutation, with_skipped_check(step, &p.path, skipped)))
         }
         Applied::Refused(step) => Ok((Mutation::Unchanged, step)),
+    }
+}
+
+/// Read-only pointer at `check` on this brief for `--refresh` skips when
+/// [`finish`] will not attach one (no `remaining` rows). `finish` still
+/// appends the lock-scan fix after this row; `remaining` stays last.
+fn attach_skipped_check(done: &mut Done, path: &Path, skipped: bool) {
+    if !skipped {
+        return;
+    }
+    if done
+        .rows
+        .iter()
+        .any(|row| matches!(row, Row::Fields { key, .. } if key == "remaining"))
+    {
+        return;
+    }
+    done.kv("fix", vec![file_check_fix(path)]);
+}
+
+fn with_skipped_check(step: Step, path: &Path, skipped: bool) -> Step {
+    match step {
+        Step::Done(mut done) => {
+            attach_skipped_check(&mut done, path, skipped);
+            Step::Done(done)
+        }
+        other => other,
     }
 }
 
@@ -548,7 +596,7 @@ fn target_update_splices(
                 replacement: pattern.clone().into_bytes(),
             }),
             None => inserts.push((
-                attrs_anchor(doc, entry),
+                properties_end(doc, entry),
                 format!("- regex: {pattern}\n").into_bytes(),
             )),
         },
@@ -572,11 +620,25 @@ fn target_update_splices(
     merge_inserts(&doc.source, splices, inserts)
 }
 
-/// Line-start offset where new property lines of `entry` belong: the
-/// parser's `attrs_end` (start of the first non-property non-blank line
-/// after the H2, or the section end), clamped to the source length.
+/// Line-start offset where an entry's note fence belongs: the parser's
+/// `attrs_end` (start of the first non-property non-blank line after the
+/// H2, or the section end), clamped to the source length.
 fn attrs_anchor(doc: &doc::Document, entry: &Entry) -> usize {
     entry.attrs_end.min(doc.source.len())
+}
+
+/// Where a new property line joins the entry's existing ones: right after
+/// the last property line, so it stays in one list with them instead of
+/// landing after the blank line that separates the list from the note.
+/// An entry without properties falls back to [`attrs_anchor`].
+fn properties_end(doc: &doc::Document, entry: &Entry) -> usize {
+    [&entry.path, &entry.hash, &entry.regex]
+        .into_iter()
+        .flatten()
+        .chain(&entry.attributes)
+        .map(|prop| line_end(&doc.source, prop.span.start))
+        .max()
+        .unwrap_or_else(|| attrs_anchor(doc, entry))
 }
 
 /// `--regex ''`: drop every syntactically active `- regex:` line in the
@@ -604,14 +666,24 @@ fn regex_delete_splices(doc: &doc::Document, entry: &Entry) -> Vec<Splice> {
 }
 
 /// Insertion point and bytes for an entry's note fence when it has none:
-/// after the attribute area, adding one blank line when the area is not
-/// already followed by one.
+/// after the attribute area, adding one blank line when the area neither
+/// ends with nor is followed by one.
 fn note_insert(doc: &doc::Document, entry: &Entry, note: &str) -> (usize, String) {
+    let src = &doc.source;
     let pos = attrs_anchor(doc, entry);
-    if pos < doc.source.len() {
-        let next_end = line_end(&doc.source, pos);
-        if is_blank(strip_term(&doc.source[pos..next_end])) {
+    if pos < src.len() {
+        let next_end = line_end(src, pos);
+        if is_blank(strip_term(&src[pos..next_end])) {
             return (next_end, fence_block(note));
+        }
+    }
+    // The area already ends with a blank line when the line just before
+    // `pos` (still inside the entry) is blank.
+    let head_end = line_end(src, doc.sections[entry.section].head.start);
+    if pos > head_end && src.as_bytes()[pos - 1] == b'\n' {
+        let prev_start = src[..pos - 1].rfind('\n').map_or(0, |i| i + 1);
+        if is_blank(strip_term(&src[prev_start..pos])) {
+            return (pos, fence_block(note));
         }
     }
     (pos, format!("\n{}", fence_block(note)))
@@ -626,7 +698,8 @@ fn note_insert(doc: &doc::Document, entry: &Entry, note: &str) -> (usize, String
 /// at EOF, §2.1.2) gets a leading `\n`, unless that insert already starts
 /// with one (`after_line_and_blank` / `note_insert`). Coincident hash and
 /// regex inserts therefore share a single terminator and stay separate
-/// property lines (§2.6.1, §4.5.4).
+/// property lines (§2.6.1, §4.5.4). Each merged insert is then kept apart
+/// from a following note fence, heading or text by one blank line.
 fn merge_inserts(
     src: &str,
     splices: Vec<Splice>,
@@ -652,13 +725,52 @@ fn merge_inserts(
             }
         }
     }
+    for splice in &mut merged {
+        separate_from_next(src, splice.range.start, &mut splice.replacement);
+    }
     let mut all = splices;
     all.extend(merged);
     all
 }
 
+/// Add one blank line after an inserted block when the line already at
+/// `pos` is a fence, heading or text. A following property line is part
+/// of the same list and stays adjacent; an isolated CR is never a property.
+fn separate_from_next(src: &str, pos: usize, block: &mut Vec<u8>) {
+    if pos >= src.len() {
+        return;
+    }
+    let line = strip_term(&src[pos..line_end(src, pos)]);
+    if !is_blank(line) && (line.contains('\r') || property_parts(line).is_none()) {
+        block.push(b'\n');
+    }
+}
+
 fn needs_line_before(src: &str, at: usize) -> bool {
     at > 0 && src.as_bytes()[at - 1] != b'\n'
+}
+
+/// Outcome of a splice-based form whose splices can reproduce the
+/// original bytes exactly: a refresh whose hashes are already current, a
+/// note or description set to its stored text, a `--target` overwrite
+/// with the stored path and hash. Then nothing is written, and the form's
+/// own rows are followed by the same `unchanged  <file>` row as the other
+/// no-write forms, so the output alone tells a rewrite from a
+/// verification. A real change is written and followed by the
+/// `remaining` rows (§2.7.4).
+fn commit_or_unchanged(
+    mut done: Done,
+    old_bytes: &[u8],
+    new_bytes: Vec<u8>,
+    path: &Path,
+    now: Time,
+) -> Result<(Mutation, Step), Fault> {
+    if new_bytes == old_bytes {
+        done.rows.extend(unchanged_done(path).rows);
+        return Ok((Mutation::Unchanged, Step::Done(done)));
+    }
+    append_remaining(&mut done, &new_bytes, path, now)?;
+    Ok((Mutation::Write(new_bytes), Step::Done(done)))
 }
 
 /// §2.7.4: after a successful write, re-parse the new bytes and list every
@@ -1026,6 +1138,82 @@ mod tests {
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0][1], "fresh");
         assert!(!entries[0].iter().any(|v| v == "regex not found"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A refresh with nothing to refresh must still say what happened: the
+    /// report names the untouched file instead of being an empty `ok`, and
+    /// the bytes stay as they were.
+    #[test]
+    fn refresh_without_entries_reports_unchanged_and_writes_nothing() {
+        let dir = scratch("refresh-empty");
+        let brief = dir.join("plan.agent-besties.md");
+        let original = "# plan.brief\n\n> paths below are relative to this file's directory; hashes are SHA-256 of the target's bytes.\n";
+        std::fs::write(&brief, original).unwrap();
+        let mut ctx = test_ctx(time::parse(NOW).unwrap());
+        let report = run(
+            &mut ctx,
+            &BriefParams {
+                path: brief.clone(),
+                as_nick: None,
+                form: BriefForm::Refresh { entry: None },
+            },
+        )
+        .unwrap();
+        assert_eq!(report.status, Status::Ok);
+        assert_eq!(report.exit, 0);
+        assert_eq!(
+            row_values(&report, "unchanged"),
+            vec![vec![context::display_file(&brief)]]
+        );
+        assert!(row_values(&report, "entry").is_empty());
+        assert_eq!(std::fs::read_to_string(&brief).unwrap(), original);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A refresh whose stored hash is already current verifies the entry
+    /// but writes nothing, and the report must say so; once the target
+    /// changes, the same command writes and the `unchanged` row is gone.
+    #[test]
+    fn refresh_with_current_hash_reports_unchanged_until_the_target_changes() {
+        let dir = scratch("refresh-current");
+        let brief = dir.join("plan.agent-besties.md");
+        let target = dir.join("a.rs");
+        std::fs::write(&target, b"one\n").unwrap();
+        let sha = hash::read_target(&target).unwrap().sha256;
+        let original = format!(
+            "# plan.brief\n\n> paths below are relative to this file's directory; hashes are SHA-256 of the target's bytes.\n\n## a\n\n- path: a.rs\n- hash: {sha}\n"
+        );
+        std::fs::write(&brief, &original).unwrap();
+        let refresh = BriefParams {
+            path: brief.clone(),
+            as_nick: None,
+            form: BriefForm::Refresh { entry: None },
+        };
+        let mut ctx = test_ctx(time::parse(NOW).unwrap());
+        let report = run(&mut ctx, &refresh).unwrap();
+        assert_eq!(report.status, Status::Ok);
+        assert_eq!(
+            row_values(&report, "entry"),
+            vec![vec![
+                "a".to_string(),
+                "refreshed".to_string(),
+                "a.rs".to_string()
+            ]]
+        );
+        assert_eq!(
+            row_values(&report, "unchanged"),
+            vec![vec![context::display_file(&brief)]]
+        );
+        assert_eq!(std::fs::read_to_string(&brief).unwrap(), original);
+
+        std::fs::write(&target, b"two\n").unwrap();
+        let new_sha = hash::read_target(&target).unwrap().sha256;
+        let report = run(&mut ctx, &refresh).unwrap();
+        assert_eq!(report.status, Status::Ok);
+        assert!(row_values(&report, "unchanged").is_empty());
+        let text = std::fs::read_to_string(&brief).unwrap();
+        assert!(text.contains(&format!("- hash: {new_sha}\n")));
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

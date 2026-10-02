@@ -139,7 +139,6 @@ pub fn diag_context_for_file(ctx: &Ctx, command: &'static str, file: &Path) -> d
         stem,
         argv: ctx.argv.clone(),
         command: command.to_string(),
-        now: time::format(ctx.now),
     }
 }
 
@@ -152,11 +151,23 @@ pub fn diag_context_for_dir(ctx: &Ctx, command: &'static str, dir: &Path) -> dia
     } else {
         format!("{dir_display}/state")
     };
-    let path_arg = dir.join(format!("state{}", consts::SUFFIX));
-    // wait-state inspects this exact native path. Other DIR commands do
-    // not identify one inspected file for these recovery diagnostics.
-    let state_file_selected = command == "wait-state"
-        && super::shared::is_reserved_state_file(&path_arg).unwrap_or(false);
+    let reserved = dir.join(format!("state{}", consts::SUFFIX));
+    let (path_arg, state_file_selected) = match command {
+        // `state` reads and writes exactly the file the reserved-state
+        // lookup selects, so its diagnostics describe that file.
+        "state" => match fsx::walk::state_file(dir) {
+            Ok(Some(selected)) => (selected, true),
+            _ => (reserved, false),
+        },
+        // wait-state inspects this exact native path.
+        "wait-state" => {
+            let selected = super::shared::is_reserved_state_file(&reserved).unwrap_or(false);
+            (reserved, selected)
+        }
+        // Other DIR commands do not identify one inspected file for these
+        // recovery diagnostics.
+        _ => (reserved, false),
+    };
     diag::Context {
         path,
         dir: dir_display,
@@ -166,7 +177,6 @@ pub fn diag_context_for_dir(ctx: &Ctx, command: &'static str, dir: &Path) -> dia
         state_file_selected,
         argv: ctx.argv.clone(),
         command: command.to_string(),
-        now: time::format(ctx.now),
     }
 }
 
@@ -176,6 +186,26 @@ pub(crate) fn parent_dir(path: &Path) -> &Path {
     path.parent()
         .filter(|parent| !parent.as_os_str().is_empty())
         .unwrap_or_else(|| Path::new("."))
+}
+
+/// Nearest existing lexical ancestor of a missing `path`. Same walk as
+/// `file_missing_params`: the immediate parent when that path is already a
+/// directory; otherwise the first existing ancestor beyond it, or `.`.
+/// The `bool` is `true` when that ancestor is not the immediate parent, so
+/// a listing recipe must not name a directory that does not exist.
+/// Called only after `path` was found missing (`is_dir` per ancestor).
+pub(crate) fn nearest_existing_ancestor(path: &Path) -> (&Path, bool) {
+    let parent = parent_dir(path);
+    if parent.is_dir() {
+        return (parent, false);
+    }
+    let existing = parent
+        .ancestors()
+        .skip(1)
+        .find(|dir| dir.as_os_str().is_empty() || dir.is_dir())
+        .filter(|dir| !dir.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."));
+    (existing, true)
 }
 
 fn split_object(object: &str) -> (String, String) {
