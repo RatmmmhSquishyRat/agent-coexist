@@ -56,19 +56,9 @@ All notable changes to this project are documented here. The format follows
   The command reference also states that a wait `removed` report has no
   after snapshot and therefore no warning rows, and its `Lifecycle`
   section prints the three wait restore sentences in full.
-- Runtime examples page (`docs/runtime-examples.md`, in Chinese): what
-  the CLI prints for help, guide pages, reports, diagnostics, and
-  recovery advice, recorded by running the CLI in isolated example
-  directories. Many failure examples continue with the commands run
-  after following the `fix`. stdout, stderr, and exit code are shown
-  separately; the page lists the path placeholders it substitutes, and
-  blocks that contain control characters or invalid UTF-8 are shown in
-  a labeled escaped view. On Linux, a path in a file-change list whose
-  bytes are not printable UTF-8 (a name with control characters or
-  invalid bytes) is shown as one POSIX `$'…'` word — newline as `\n`,
-  backslash as `\\`, apostrophe as `\'`, every other control or
-  non-ASCII byte as `\xHH` — so those rows are a quoting form, not the
-  path's literal bytes; Windows file-change rows are never rewritten.
+- Runtime examples pages (`docs/runtime-examples.md`, in Chinese):
+  grouped examples of the CLI's actual output and recovery advice for
+  common and failing situations; topics are linked from the entry page.
 - MIT license for the project's own code and authored documentation.
   The vendored `ignore` crate keeps its upstream notices and license
   (Unlicense OR MIT); the supplied cover image is not part of the MIT
