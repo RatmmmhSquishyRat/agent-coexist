@@ -57,8 +57,10 @@ All notable changes to this project are documented here. The format follows
   after snapshot and therefore no warning rows, and its `Lifecycle`
   section prints the three wait restore sentences in full.
 - Runtime examples pages (`docs/runtime-examples.md`, in Chinese):
-  grouped examples of the CLI's actual output and recovery advice for
-  common and failing situations; topics are linked from the entry page.
+  a catalog of actual commands and their captured output
+  (stdout/stderr/exit code) by situation, including the full stdout of
+  the five built-in `guide` pages and every `--help`; topics are linked
+  from the entry page.
 - MIT license for the project's own code and authored documentation.
   The vendored `ignore` crate keeps its upstream notices and license
   (Unlicense OR MIT); the supplied cover image is not part of the MIT

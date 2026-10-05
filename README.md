@@ -199,9 +199,10 @@ targets, so hand-written notes and formatting survive. The
   [crates/cli/guide/](crates/cli/guide/index.md).
 - [Command reference](docs/usage.md): every command, flag, exit code, and
   output rule.
-- [Runtime examples](docs/runtime-examples.md) (in Chinese): the CLI's
-  actual output in common and failure situations, including what to do
-  next when a report gives a `fix`; topics linked from the entry page.
+- [Runtime examples](docs/runtime-examples.md) (in Chinese): a catalog
+  of actual commands and their captured output (stdout/stderr/exit
+  code) by situation, including the full stdout of the five built-in
+  `guide` pages and every `--help`; topics linked from the entry page.
 - [File format reference](docs/file-format.md): the four record types as
   a human editor sees them.
 - [Project skill](.agents/skills/agent-coexist/SKILL.md): the short agent
