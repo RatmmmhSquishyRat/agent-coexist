@@ -1,10 +1,10 @@
-# 查询与写入报告
+# Read and write reports
 
 <a id="list-dir"></a>
 
-## list：查看目录下有什么
+## list: see what a directory holds
 
-`agent-coexist list` · 被 ignore 跳过的目录不出现在树里、不计入 total。
+`agent-coexist list` · Directories skipped by ignore rules appear neither in the tree nor in total.
 ```text
 ok  list  .
   ignore        .gitignore, .ignore, exclude
@@ -23,7 +23,7 @@ ok  list  .
 
 <a id="list-unknown-leaves"></a>
 
-## list：类型读不出的文件
+## list: files whose type cannot be read
 
 `agent-coexist list`
 ```text
@@ -40,7 +40,7 @@ warn  list  .
 
 <a id="list-include-empty"></a>
 
-## list：--include 结果为空
+## list: --include leaves nothing
 
 `agent-coexist list --include 'build/**'`
 ```text
@@ -52,9 +52,9 @@ warn  list  .
 
 <a id="check-previews"></a>
 
-## check：单份文件的概览
+## check: one file at a glance
 
-`agent-coexist check docs/standup` · topic 是第一条评论，latest 是最后一条。
+`agent-coexist check docs/standup` · topic is the first comment; latest is the last one.
 ```text
 ok  check  docs/standup
   file          docs/standup.agent-besties.md
@@ -81,7 +81,7 @@ ok  check  docs/onboarding
 
 <a id="lookfor-comment"></a>
 
-## lookfor-comment：查找评论
+## lookfor-comment: find comments
 
 `agent-coexist lookfor-comment docs/standup`
 ```text
@@ -94,14 +94,14 @@ ok  lookfor-comment  docs/standup
   total         5
 ```
 
-`agent-coexist lookfor-comment docs/onboarding` · 退出码 1
+`agent-coexist lookfor-comment docs/onboarding` · exit code 1
 ```text
 error  lookfor-comment  docs/onboarding
   reason        file type is brief, not post
   fix           this command needs a file of type post; rerun it with such a path; files of that type under this directory: agent-coexist list docs --type=post
 ```
 
-`agent-coexist lookfor-comment docs/t` · 退出码 1
+`agent-coexist lookfor-comment docs/t` · exit code 1
 ```text
 error  lookfor-comment  docs/t
   file          docs/t.agent-besties.md
@@ -116,9 +116,9 @@ error  lookfor-comment  docs/t
 
 <a id="read-brief"></a>
 
-## read-brief：阅读导读
+## read-brief: read a brief
 
-`agent-coexist read-brief docs/onboarding` · 带 regex 的条目只显示匹配覆盖的行，哈希仍覆盖整个目标文件。
+`agent-coexist read-brief docs/onboarding` · An entry with a regex shows only the lines the match covers; the hash still covers the whole target file.
 ```text
 ok  read-brief  docs/onboarding
   description
@@ -159,14 +159,14 @@ warn  read-brief  docs/states
   entry         dir target  unchecked  ../src/dir  target unreadable
 ```
 
-`agent-coexist read-brief docs/big` · 大小上限 64 MiB。
+`agent-coexist read-brief docs/big` · Size cap: 64 MiB.
 ```text
 warn  read-brief  docs/big
   entry         with regex  unchecked  ../data/big.txt  target too large
   entry         hash only  fresh  ../data/big.txt  target too large
 ```
 
-`agent-coexist read-brief docs/onboarding --entry parser` · 退出码 1 · 标题要完整匹配。
+`agent-coexist read-brief docs/onboarding --entry parser` · exit code 1 · The title must match exactly.
 ```text
 error  read-brief  docs/onboarding
   reason        no entry titled "parser"
@@ -175,9 +175,9 @@ error  read-brief  docs/onboarding
 
 <a id="read-notification"></a>
 
-## read-notification：收通知
+## read-notification: read notifications
 
-`agent-coexist read-notification --as alice --since 2026-09-17T08:00:00Z` · 同一评论既是回复又提及时只记一条 reply。
+`agent-coexist read-notification --as alice --since 2026-09-17T08:00:00Z` · A comment that is both a reply and a mention is recorded once, as a reply.
 ```text
 ok  read-notification  .
   as            alice
@@ -190,7 +190,7 @@ ok  read-notification  .
   total         5
 ```
 
-`agent-coexist read-notification --as alice --since 2026-09-17T08:00:00Z` · expiring 的剩余时间按整分钟向下取整。
+`agent-coexist read-notification --as alice --since 2026-09-17T08:00:00Z` · A different directory contains state declarations; `expiring` rounds the remaining time down to whole minutes.
 ```text
 warn  read-notification  .
   as            alice
@@ -205,7 +205,7 @@ warn  read-notification  .
   total         7
 ```
 
-`agent-coexist read-notification --as alice --since 2h` · skipped 是整份没读，partial 是读了部分。
+`agent-coexist read-notification --as alice --since 2h` · skipped means the file was not read at all; partial means only part of it was.
 ```text
 warn  read-notification  .
   as            alice
@@ -232,9 +232,9 @@ ok  read-notification  empty
 
 <a id="check-state"></a>
 
-## check-state：查看目录的锁
+## check-state: see a directory's locks
 
-`agent-coexist check-state src/parser` · 已到期的祖先声明不继承。
+`agent-coexist check-state src/parser` · Expired ancestor declarations are not inherited.
 ```text
 warn  check-state  src/parser
   inherited     locked  alice  2026-09-17T09:00:00Z..2026-09-17T12:00:00Z  .  conflict
@@ -270,30 +270,30 @@ warn  check-state  src
 
 <a id="query-path-errors"></a>
 
-## 路径写错时的错误与建议
+## Mistyped paths: errors and suggestions
 
-`agent-coexist check docs/stanup` · 退出码 1
+`agent-coexist check docs/stanup` · exit code 1
 ```text
 error  check  docs/stanup
   reason        docs/stanup.agent-besties.md does not exist
   fix           correct the path and rerun (this command never creates the file); collaboration files under that directory: agent-coexist list docs
 ```
 
-`agent-coexist list doc` · 退出码 1
+`agent-coexist list doc` · exit code 1
 ```text
 error  list  doc
   reason        directory doc does not exist
   fix           correct the directory and rerun; collaboration files under its parent: agent-coexist list .
 ```
 
-`agent-coexist list docs/standup.agent-besties.md --type post` · 退出码 1
+`agent-coexist list docs/standup.agent-besties.md --type post` · exit code 1
 ```text
 error  list  docs/standup.agent-besties.md
   reason        docs/standup.agent-besties.md is not a directory
   fix           rerun on its directory: agent-coexist list docs --type post
 ```
 
-`agent-coexist state alice --as alice --status locked` · 退出码 1 · 路径与其他参数同名、无法确定替换哪一个时，用 `<same flags>` 标记。
+`agent-coexist state alice --as alice --status locked` · exit code 1 · The path `alice` matches `--as alice`; the fix uses `<same flags>` rather than guessing which occurrence to replace.
 ```text
 error  state  alice
   reason        alice is not a directory
@@ -302,7 +302,7 @@ error  state  alice
 
 <a id="write-post"></a>
 
-## post：发出与管理评论
+## post: publish and manage comments
 
 `agent-coexist post parser-review --as alice -m $'Decision: keep the parser API unchanged; adjust the error mapping.\nEvidence: src/parser/mod.rs and reports/parser-check.txt.\nRequest: @bob review the mapping before integration; reply here.'`
 ```text
@@ -312,7 +312,7 @@ ok  post  parser-review
   mentions      bob
 ```
 
-`AGENT_COEXIST_NOW=2026-09-17T10:05:00Z agent-coexist post parser-review --as bob -m $'@#5 Mapping looks right.\nNext: cover the empty-input case.'` · AGENT_COEXIST_NOW 指定本例时间。
+`AGENT_COEXIST_NOW=2026-09-17T10:05:00Z agent-coexist post parser-review --as bob -m $'@#5 Mapping looks right.\nNext: cover the empty-input case.'` · AGENT_COEXIST_NOW fixes the time used in this example.
 ```text
 warn  post  parser-review
   comment       #2  L10
@@ -320,30 +320,30 @@ warn  post  parser-review
   fix           if you meant another comment, edit this one so the reply names a number this post carries: agent-coexist post parser-review.agent-besties.md --as=bob --edit=2 -m '<the whole body, with the reference corrected>'
 ```
 
-`agent-coexist post parser-review --as bob --edit 1 -m 'Decision: keep the API; map errors in map_io_error.'` · 退出码 1
+`agent-coexist post parser-review --as bob --edit 1 -m 'Decision: keep the API; map errors in map_io_error.'` · exit code 1
 ```text
 error  post  parser-review
   reason        comment #1 was written by alice, not bob
   fix           reply instead: agent-coexist post parser-review.agent-besties.md --as=bob -m '@#1 <your reply>'
 ```
 
-`agent-coexist post 'standup notes!' --as alice -m 'Standup at 10:00.'` · 退出码 1
+`agent-coexist post 'standup notes!' --as alice -m 'Standup at 10:00.'` · exit code 1
 ```text
 error  post  standup notes!
   reason        file name "standup notes!" is not a valid name
   fix           nothing was created; choose a name of 1-100 letters, digits, "_", "-" or ".", starting with a letter, digit, "_" or "-", and run the same command with that name
 ```
 
-`agent-coexist post $'standup\nnotes' --as alice -m 'Standup at 10:00.'` · 退出码 1 · Windows：原因行的系统消息随系统语言变化。
+`agent-coexist post $'standup\nnotes' --as alice -m 'Standup at 10:00.'` · exit code 1 · Windows: the system message in the reason line follows the OS language.
 ```text
 error  post  standup notes
-  reason        cannot open standup notes.agent-besties.md: 文件名、目录名或卷标语法不正确。 (os error 123)
+  reason        cannot open standup notes.agent-besties.md: The filename, directory name, or volume label syntax is incorrect. (os error 123)
   fix           the path contains a line break or other control character (original: 'standup<U+000A>notes.agent-besties.md'); fix the path, then run the corrected command
 ```
 
 <a id="write-profile"></a>
 
-## profile：建立与维护档案
+## profile: create and maintain an agent profile
 
 `agent-coexist profile team/agents/alice --as alice --section scope -m 'Parser error mapping. Send review requests to parser-review.'`
 ```text
@@ -369,7 +369,7 @@ ok  profile  agents/alice
 
 <a id="write-subscribe"></a>
 
-## subscribe：订阅
+## subscribe: subscribe to a thread
 
 `agent-coexist subscribe standup --as alice`
 ```text
@@ -380,7 +380,7 @@ ok  subscribe  standup
 
 <a id="write-brief"></a>
 
-## brief：维护导读
+## brief: maintain a brief
 
 `agent-coexist brief onboarding --as alice --target src/parser/mod.rs --entry 'parser entry point' -m 'Start at parse_document; check its error mapping before changing callers.'`
 ```text
@@ -391,7 +391,7 @@ ok  brief  onboarding
   note          set
 ```
 
-`agent-coexist brief docs/onboarding --as alice --target src/parser/mod.rs --entry 'parser entry point'` · 退出码 1
+`agent-coexist brief docs/onboarding --as alice --target src/parser/mod.rs --entry 'parser entry point'` · exit code 1
 ```text
 error  brief  docs/onboarding
   reason        target src/parser/mod.rs does not exist; looked for docs/src/parser/mod.rs
@@ -421,7 +421,7 @@ warn  brief  onboarding
   remaining     E-ENTRY-HASH  L15
 ```
 
-`agent-coexist brief --as alice --target src/render/mod.rs -m 'Optional depth: render walks the parsed document.' --regex 'fn render' -- onboarding` · 退出码 1
+`agent-coexist brief --as alice --target src/render/mod.rs -m 'Optional depth: render walks the parsed document.' --regex 'fn render' -- onboarding` · exit code 1
 ```text
 error  brief  onboarding
   reason        entry "mod.rs" already points at src/parser/mod.rs, not src/render/mod.rs
@@ -430,7 +430,7 @@ error  brief  onboarding
 
 <a id="write-state"></a>
 
-## state：声明与删除状态
+## state: declare and remove status
 
 `agent-coexist state src --as alice --status locked --for 30m`
 ```text
@@ -447,14 +447,14 @@ warn  state  src/parser
   conflict      locked  alice  2026-09-17T10:00:00Z..2026-09-17T11:00:00Z  src
 ```
 
-`AGENT_COEXIST_NOW=2026-09-17T10:40:00Z agent-coexist state src --as bob --status observing` · 被清理的 alice 声明已过期。
+`AGENT_COEXIST_NOW=2026-09-17T10:40:00Z agent-coexist state src --as bob --status observing` · alice's cleaned declaration had already expired.
 ```text
 ok  state  src
   set           observing  bob  2026-09-17T10:40:00Z..2026-09-17T18:40:00Z
   cleaned       locked  alice  2026-09-17T10:00:00Z..2026-09-17T10:30:00Z
 ```
 
-`AGENT_COEXIST_NOW=2026-09-17T10:13:00Z agent-coexist state src --remove bob` · src 里只有 bob 的 observing 声明。
+`AGENT_COEXIST_NOW=2026-09-17T10:13:00Z agent-coexist state src --remove bob` · src holds only bob's observing declaration at this point.
 ```text
 ok  state  src
   removed       observing  bob
@@ -462,7 +462,7 @@ ok  state  src
   deleted       src/state.agent-besties.md
 ```
 
-`AGENT_COEXIST_NOW=2026-09-17T10:10:00Z agent-coexist state src --remove carol --as bob` · src 里只有 carol 的 review 声明。
+`AGENT_COEXIST_NOW=2026-09-17T10:10:00Z agent-coexist state src --remove carol --as bob` · src holds only carol's review declaration.
 ```text
 warn  state  src
   removed       review  carol
@@ -471,14 +471,14 @@ warn  state  src
   removed-other  carol
 ```
 
-`agent-coexist state src --remove alice --status locked` · 退出码 1 · src 里 alice 只有 observing 声明。
+`agent-coexist state src --remove alice --status locked` · exit code 1 · alice's only declaration in src is observing.
 ```text
 error  state  src
   reason        alice has no entry under status "locked" in src
   fix           check which statuses hold this nick, then rerun with the right --status (without --status, --remove deletes every status of the nick): agent-coexist check-state src
 ```
 
-`agent-coexist state src/parsr --as alice --status locked` · 退出码 1
+`agent-coexist state src/parsr --as alice --status locked` · exit code 1
 ```text
 error  state  src/parsr
   reason        directory src/parsr does not exist
@@ -487,7 +487,7 @@ error  state  src/parsr
 
 <a id="write-lock-scan-partial"></a>
 
-## 写入成功但锁检查读不全
+## Write succeeds, but the lock check cannot read everything
 
 `agent-coexist profile team/agents/alice --as alice --section role -m 'Parser reviewer.'`
 ```text
@@ -509,16 +509,16 @@ warn  state  team/agents
 
 <a id="write-type-mismatch"></a>
 
-## 对另一种类型的文件写入
+## Writing to a file of a different type
 
-`agent-coexist post onboarding --as bob -m 'Is the parser entry still current?'` · 退出码 1
+`agent-coexist post onboarding --as bob -m 'Is the parser entry still current?'` · exit code 1
 ```text
 error  post  onboarding
   reason        file type is brief, not post
   fix           this command needs a file of type post; rerun it with such a path, or with a new path that no file uses yet to create one; files of that type under this directory: agent-coexist list . --type=post
 ```
 
-`agent-coexist state src --as alice --status locked` · 退出码 1
+`agent-coexist state src --as alice --status locked` · exit code 1
 ```text
 error  state  src
   reason        file type is post, not state

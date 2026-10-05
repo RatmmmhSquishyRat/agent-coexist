@@ -1,24 +1,24 @@
-# 平台差异：Windows 与 Linux
+# Platform differences: Windows and Linux
 
 <a id="plat-lock-vs-sharing-windows"></a>
 
-## Windows：进程锁与独占打开是两种错误
+## Windows: a process lock and an exclusive open are two different errors
 
-`agent-coexist check standup` · 退出码 3 · E-LOCKED：另一进程持有同种锁。
+`agent-coexist check standup` · exit code 3 · E-LOCKED: another process holds the same kind of lock.
 ```text
 error  check  standup
   reason        file is locked by another process
   fix           retry shortly: agent-coexist check standup
 ```
 
-`agent-coexist check standup` · 退出码 3 · E-INUSE：另一程序以不共享方式打开。
+`agent-coexist check standup` · exit code 3 · E-INUSE: another program has the file open without sharing.
 ```text
 error  check  standup
   reason        file is in use by another program
   fix           close it, then retry: agent-coexist check standup
 ```
 
-`agent-coexist list .` · list 继续：读不到的叶子标为 busy。
+`agent-coexist list .` · list still runs: leaves it cannot read are marked busy.
 ```text
 warn  list  .
   ignore        none
@@ -31,9 +31,9 @@ warn  list  .
 
 <a id="plat-write-scan-warning"></a>
 
-## 写入成功但写后核对读不到：warn 而不是 error
+## Write succeeds but the post-write check cannot read: warn, not error
 
-目录的 state 文件被另一进程锁住时写入自己的档案。
+The directory's state file is locked by another process while this agent's own profile is written.
 
 `agent-coexist profile bob --as bob --section role -m 'parser owner'`
 ```text
@@ -46,11 +46,11 @@ warn  profile  bob
 
 <a id="plat-denied-io-linux"></a>
 
-## Linux：权限不足的读取失败
+## Linux: a read fails for lack of permission
 
-普通用户运行；文件已 chmod 000。
+Run as a normal user; the file has been chmod 000.
 
-`agent-coexist check room/standup` · 退出码 1
+`agent-coexist check room/standup` · exit code 1
 ```text
 error  check  room/standup
   reason        cannot open room/standup.agent-besties.md: Permission denied (os error 13)
@@ -59,24 +59,24 @@ error  check  room/standup
 
 <a id="plat-denied-delete-pending-windows"></a>
 
-## Windows：待删除的文件报告为普通 I/O 失败
+## Windows: a delete-pending file is reported as a plain I/O failure
 
-另一程序对文件设置删除标记但句柄未关闭：文件名仍可见，新打开都被拒绝。
+Another program has marked the file for deletion but not closed its handle: the name stays visible, and every new open is refused.
 
-`agent-coexist check standup` · 退出码 1 · 待删除状态：拒绝访问，不是锁。
+`agent-coexist check standup` · exit code 1 · Delete-pending: access denied, not a lock.
 ```text
 error  check  standup
-  reason        cannot open standup.agent-besties.md: 拒绝访问。 (os error 5)
+  reason        cannot open standup.agent-besties.md: Access is denied. (os error 5)
   fix           check the permissions of standup.agent-besties.md and of the directories on its path, or wait until another program stops using, deleting or replacing it, then retry: agent-coexist check standup
 ```
 
 <a id="plat-readonly-fs-linux"></a>
 
-## Linux：只读文件系统上的写入失败
+## Linux: a write fails on a read-only file system
 
-room 所在文件系统只读。
+The file system holding room is read-only.
 
-`agent-coexist post room/standup --as bob -m status` · 退出码 1
+`agent-coexist post room/standup --as bob -m status` · exit code 1
 ```text
 error  post  room/standup
   reason        cannot open room/standup.agent-besties.md: Read-only file system (os error 30)
@@ -85,9 +85,9 @@ error  post  room/standup
 
 <a id="plat-operands"></a>
 
-## 反斜杠路径：Windows 与 Linux
+## Backslash paths: Windows and Linux
 
-`agent-coexist check 'room\standup'` · Windows：反斜杠路径正常打开。
+`agent-coexist check 'room\standup'` · Windows: the backslash path opens normally.
 ```text
 ok  check  room/standup
   file          room/standup.agent-besties.md
@@ -99,7 +99,7 @@ ok  check  room/standup
   subscribers   none
 ```
 
-`agent-coexist check 'room\standup'` · 退出码 1 · Linux：同一写法指向不存在的文件。
+`agent-coexist check 'room\standup'` · exit code 1 · Linux: the same spelling names a file that does not exist.
 ```text
 error  check  room\standup
   reason        room\standup.agent-besties.md does not exist
@@ -108,23 +108,23 @@ error  check  room\standup
 
 <a id="plat-nonutf8-quoting"></a>
 
-## Linux：非 UTF-8 与含换行的路径
+## Linux: non-UTF-8 paths and paths containing line breaks
 
-`agent-coexist check $'room-\xff/nothere'` · 退出码 1 · 目录名含字节 0xFF，输出中显示为替换字符。
+`agent-coexist check $'room-\xff/nothere'` · exit code 1 · The directory name contains byte 0xFF, shown as a replacement character in the output.
 ```text
 error  check  room-�/nothere
   reason        room-�/nothere.agent-besties.md does not exist
   fix           correct the path and rerun (this command never creates the file); collaboration files under that directory: agent-coexist list room-"$(printf '\377')"
 ```
 
-`agent-coexist check $'a\nb/s'` · 退出码 3 · 路径含换行；另一进程正持有 flock，故退出 3。
+`agent-coexist check $'a\nb/s'` · exit code 3 · The path contains a line break; another process holds a `flock` lock on the file, hence exit 3.
 ```text
 error  check  a b/s
   reason        file is locked by another process
   fix           retry shortly by hand; no copyable command can be printed because a path or argument contains a line break or characters this text cannot reproduce exactly
 ```
 
-`agent-coexist check $'a\nb/p'` · 目录名含换行；fix 中路径为 `<path of this file>` 标记。
+`agent-coexist check $'a\nb/p'` · The directory name contains a line break; the fix carries the `<path of this file>` marker in place of the path.
 ```text
 warn  check  a b/p
   file          a b/p.agent-besties.md
@@ -137,36 +137,36 @@ warn  check  a b/p
 
 <a id="plat-args-unicode"></a>
 
-## 参数或环境变量不是有效 Unicode / UTF-8
+## Invalid UTF-8 in an argument
 
-`agent-coexist post standup --as $'al\xe9' -m hi` · stderr · 退出码 2 · --as 的值是 Latin-1 字节 al 0xE9。
+`agent-coexist post standup --as $'al\xe9' -m hi` · stderr · exit code 2 · The --as value is the Latin-1 bytes al 0xE9.
 ```text
 error: the value of --as is not valid Unicode text; retype it, or re-encode the text it came from as Unicode, then run the command again. Only PATH and DIR arguments accept file names that are not valid Unicode
 ```
 
 <a id="plat-progress-lines"></a>
 
-## 扫描进度：Linux 终端、Windows 管道
+## Scan progress: a Linux terminal, a Windows pipe
 
-扫描超过 500 ms 且 stderr 接终端时才出现进度行。
+Progress lines appear only when the scan runs past 500 ms and stderr is attached to a terminal.
 
-`agent-coexist list big` · Linux：真实 PTY 终端，stdout 重定向到文件。
+`agent-coexist list big` · Linux: a real PTY terminal, stdout redirected to a file.
 
-stdout：
+stdout:
 ```text
 ok  list  big
   ignore        none
   total         0
 ```
 
-终端帧（stderr 直连终端，未单独捕获；随时序变化：进度帧的条数和计数取决于扫描速度；转义视图；末尾没有换行符）：
-<!-- runtime-examples:volatile:start -->
+terminal frame (stderr went straight to the terminal, not captured separately; varies between runs: frame count and counters depend on scanning speed; escaped view; no trailing newline):
+<!-- output-summary:volatile:start -->
 ```text
 \rscanning dirs: 28982, files: 0...\rscanning dirs: 40380, files: 0...\rscanning dirs: 51300, files: 0...\r                                 \r
 ```
-<!-- runtime-examples:volatile:end -->
+<!-- output-summary:volatile:end -->
 
-`agent-coexist list big` · Windows：另一目录，stderr 是管道，无进度行。
+`agent-coexist list big` · Windows: a different directory, stderr is a pipe, no progress lines.
 ```text
 ok  list  big
   ignore        none

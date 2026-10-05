@@ -1,10 +1,10 @@
-# 写入文件的说明文字
+# Text written to files
 
 <a id="brief-new-file"></a>
 
-## brief：新建空导读
+## brief: create a new, empty brief
 
-目录里还没有导读。
+The directory holds no brief yet.
 
 `agent-coexist brief onboarding --as alice`
 ```text
@@ -12,7 +12,7 @@ ok  brief  onboarding
   created       onboarding.agent-besties.md
 ```
 
-文件 onboarding.agent-besties.md：
+file onboarding.agent-besties.md:
 ```text
 # onboarding.brief
 
@@ -21,9 +21,9 @@ ok  brief  onboarding
 
 <a id="state-new-file"></a>
 
-## state：新建状态文件
+## state: create a new state file
 
-目录已存在、还没有状态文件。
+The directory exists and holds no state file yet.
 
 `agent-coexist state src/parser --as alice --status locked --for 30m`
 ```text
@@ -32,7 +32,7 @@ ok  state  src/parser
   set           locked  alice  2026-09-17T10:00:00Z..2026-09-17T10:30:00Z
 ```
 
-文件 src/parser/state.agent-besties.md：
+file src/parser/state.agent-besties.md:
 ```text
 # .state
 

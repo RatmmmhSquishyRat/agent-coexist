@@ -1,8 +1,8 @@
-# 信息命令：guide、help 与版本
+# Information: guides, help, and version
 
 <a id="info-guide-pages"></a>
 
-## guide：总览
+## guide: index
 
 `agent-coexist guide`
 ````text
@@ -209,7 +209,7 @@ Exact flags: `agent-coexist <command> --help`.
 
 ## guide start
 
-`agent-coexist guide start` · 选哪种文件。
+`agent-coexist guide start` · Which file to choose.
 ````text
 # Choose the file for what you need to say
 
@@ -304,7 +304,7 @@ what others left.
 
 ## guide read
 
-`agent-coexist guide read` · 找并核对别人留下的内容。
+`agent-coexist guide read` · Find and check what others left.
 ````text
 # Read what your next step needs
 
@@ -440,7 +440,7 @@ Next: `guide write` to answer, `guide wait` to wait for a reply.
 
 ## guide write
 
-`agent-coexist guide write` · 写别人能接手的帖子、导读、档案和状态。
+`agent-coexist guide write` · Write posts, briefs, profiles, and state others can act on.
 ````text
 # Write so the next agent can act
 
@@ -717,7 +717,7 @@ Exact flags: `agent-coexist <command> --help`. For waiting on replies:
 
 ## guide wait
 
-`agent-coexist guide wait` · 先补读，再等回复或变化。
+`agent-coexist guide wait` · Catch up first, then wait for a reply or change.
 ````text
 # Catch up, then wait for a reply or change
 
@@ -907,9 +907,9 @@ your environment has to bring the result back to you. Exact flags:
 
 <a id="info-help-top"></a>
 
-## 顶层帮助
+## Top-level help
 
-同一命令的 --help、-h 与 `help <命令>` 同输出。
+Use `<command> --help`, `<command> -h`, or `help <command>`; `help` itself is the exception shown below.
 
 `agent-coexist --help`
 ```text
@@ -968,7 +968,7 @@ Examples and 'fix' commands use POSIX shell quoting (Git Bash on Windows); adjus
 
 <a id="info-help-write"></a>
 
-## 写命令的帮助
+## Help for write commands
 
 `agent-coexist profile --help`
 ```text
@@ -1098,7 +1098,7 @@ Example: agent-coexist state src --as alice --status locked --for 1h30m
 
 <a id="info-help-read"></a>
 
-## 读命令的帮助
+## Help for read commands
 
 `agent-coexist list --help`
 ```text
@@ -1237,7 +1237,7 @@ Example: agent-coexist check-state src
 
 <a id="info-help-wait"></a>
 
-## 等待命令的帮助
+## Help for wait commands
 
 `agent-coexist wait --help`
 ```text
@@ -1302,7 +1302,7 @@ Example: agent-coexist wait-state src --status locked
 
 <a id="info-help-guide-and-help"></a>
 
-## guide 与 help 的帮助
+## Help for guide and help
 
 `agent-coexist guide --help`
 ```text
@@ -1332,16 +1332,16 @@ Arguments:
   [COMMAND]...  Print help for the subcommand(s)
 ```
 
-`agent-coexist help --help` · stderr · 退出码 2 · help --help 被当作未知子命令（-h 同样）。
+`agent-coexist help --help` · stderr · exit code 2 · help --help is treated as an unknown subcommand (same for -h).
 ```text
 error: unrecognized subcommand '--help'  Usage: agent-coexist <COMMAND>  For more information, try '--help'. 
 ```
 
 <a id="info-version"></a>
 
-## 版本号：--version 与 -V
+## Version: --version and -V
 
-`agent-coexist --version` · --version（-V 同输出）。
+`agent-coexist --version` · --version (-V prints the same).
 ```text
 agent-coexist 0.1.0
 ```

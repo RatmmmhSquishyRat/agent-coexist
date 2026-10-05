@@ -1,10 +1,10 @@
-# 诊断与恢复
+# Diagnostics and recovery
 
 <a id="diag-file-unusable"></a>
 
-## 读不了、太大、首行不是标题
+## File encoding, size, and structure errors
 
-`agent-coexist check standup` · 退出码 1 · 第 6 行的 é 是 Latin-1 编码
+`agent-coexist check standup` · exit code 1 · The é on line 6 is Latin-1 encoded
 ```text
 error  check  standup
   file          standup.agent-besties.md
@@ -13,7 +13,7 @@ error  check  standup
          fix  re-save the file as UTF-8
 ```
 
-`agent-coexist post standup --as bob -m 'Count me in.'` · 退出码 1
+`agent-coexist post standup --as bob -m 'Count me in.'` · exit code 1
 ```text
 error  post  standup
   file          standup.agent-besties.md
@@ -23,7 +23,7 @@ error  post  standup
   refused       nothing was written: writes are refused while the file has errors that make its structure ambiguous; fix E-UTF8 at L6 first, as the fix rows above say, then run this command again
 ```
 
-`agent-coexist check build-log` · 退出码 1
+`agent-coexist check build-log` · exit code 1
 ```text
 error  check  build-log
   file          build-log.agent-besties.md
@@ -32,7 +32,7 @@ error  check  build-log
          fix  move the large content elsewhere and keep only a short post or brief here
 ```
 
-`agent-coexist post release --as bob -m 'Release notes: .........................................................................................................................................................................................'` · 退出码 1
+`agent-coexist post release --as bob -m 'Release notes: .........................................................................................................................................................................................'` · exit code 1
 ```text
 error  post  release
   file          release.agent-besties.md
@@ -42,7 +42,7 @@ error  post  release
          fix  nothing was written; the file itself is still readable; shorten the new text, or put it in a new file (for a comment, a new post)
 ```
 
-`agent-coexist check notes` · 退出码 1
+`agent-coexist check notes` · exit code 1
 ```text
 error  check  notes
   file          notes.agent-besties.md
@@ -51,7 +51,7 @@ error  check  notes
          fix  set line 1 to "# notes.post" (or .brief / .agent-profile), or "# .state" for a state file
 ```
 
-`agent-coexist check review` · 退出码 1
+`agent-coexist check review` · exit code 1
 ```text
 error  check  review
   file          review.agent-besties.md
@@ -68,9 +68,9 @@ error  check  review
 
 <a id="diag-h1-rename"></a>
 
-## 文件名抄不成标题
+## File name is not a valid heading
 
-`agent-coexist check 'standup notes'` · 退出码 1 · `<name>` 自选
+`agent-coexist check 'standup notes'` · exit code 1 · `<name>` is your choice
 ```text
 error  check  standup notes
   file          standup notes.agent-besties.md
@@ -81,9 +81,9 @@ error  check  standup notes
 
 <a id="diag-comment-headers"></a>
 
-## 评论标题坏了
+## Broken comment headers
 
-`agent-coexist check standup` · 退出码 1
+`agent-coexist check standup` · exit code 1
 ```text
 error  check  standup
   file          standup.agent-besties.md
@@ -110,7 +110,7 @@ error  check  standup
   subscribers   none
 ```
 
-`agent-coexist post standup --as bob --edit 2 -m 'Parser done, tests green.'` · 退出码 1
+`agent-coexist post standup --as bob --edit 2 -m 'Parser done, tests green.'` · exit code 1
 ```text
 error  post  standup
   file          standup.agent-besties.md
@@ -127,7 +127,7 @@ error  post  standup
   refused       nothing was written: writes are refused while the file has errors that make its structure ambiguous; fix E-HEAD at L9 first, as the fix rows above say, then run this command again; the other rows above do not block this write
 ```
 
-`agent-coexist post review --as bob --edit 2 -m '@#1 Looks good; carol is fixing the nit.'` · 退出码 1
+`agent-coexist post review --as bob --edit 2 -m '@#1 Looks good; carol is fixing the nit.'` · exit code 1
 ```text
 error  post  review
   file          review.agent-besties.md
@@ -143,9 +143,9 @@ error  post  review
 
 <a id="diag-numbering"></a>
 
-## 评论编号重复或已用尽
+## Duplicate or exhausted comment numbers
 
-`agent-coexist check standup` · 退出码 1
+`agent-coexist check standup` · exit code 1
 ```text
 error  check  standup
   file          standup.agent-besties.md
@@ -166,7 +166,7 @@ error  check  standup
   subscribers   none
 ```
 
-`agent-coexist check standup` · 退出码 1
+`agent-coexist check standup` · exit code 1
 ```text
 error  check  standup
   file          standup.agent-besties.md
@@ -190,7 +190,7 @@ error  check  standup
   subscribers   none
 ```
 
-`agent-coexist post standup --as bob -m 'Count me in.'` · 退出码 1
+`agent-coexist post standup --as bob -m 'Count me in.'` · exit code 1
 ```text
 error  post  standup
   reason        comment numbering is exhausted: #18446744073709551614 is the highest number a header can carry
@@ -199,7 +199,7 @@ error  post  standup
 
 <a id="diag-post-warnings"></a>
 
-## 顺序、回复与游离文字告警
+## Sequence, reply, and stray-text warnings
 
 `agent-coexist check seq`
 ```text
@@ -269,7 +269,7 @@ warn  check  standup
 
 <a id="diag-post-encoding"></a>
 
-## BOM、CRLF、重复订阅行、文件名不一致
+## BOM, CRLF, duplicate subscriber lines, name mismatch
 
 `agent-coexist check standup`
 ```text
@@ -327,9 +327,9 @@ warn  check  my notes
 
 <a id="diag-brief-entries"></a>
 
-## 导读条目的问题
+## Brief entry problems
 
-`agent-coexist check handoff` · 退出码 1
+`agent-coexist check handoff` · exit code 1
 ```text
 error  check  handoff
   file          handoff.agent-besties.md
@@ -355,7 +355,7 @@ error  check  handoff
   entry         parser  unchecked  src/lexer.rs  no hash  Tokens come from here.
 ```
 
-`agent-coexist check handoff` · 退出码 1
+`agent-coexist check handoff` · exit code 1
 ```text
 error  check  handoff
   file          handoff.agent-besties.md
@@ -381,7 +381,7 @@ error  check  handoff
   entry         notes  unchecked  ?  no path  Any function.
 ```
 
-`agent-coexist check handoff` · 退出码 1
+`agent-coexist check handoff` · exit code 1
 ```text
 error  check  handoff
   file          handoff.agent-besties.md
@@ -389,7 +389,7 @@ error  check  handoff
   error  L5  entry "config" target src cannot be read: is a directory, not a file
          why  the target exists but its bytes are not readable, so neither hash nor regex can be checked
          fix  the path names a directory, not a file; choose a file you know is the right target, review that file and the note, update the note if it no longer describes it, then point the entry at it; this command also records the target's current hash: agent-coexist brief handoff.agent-besties.md --target <file> --entry=config
-  error  L14  entry "private" target notes/private.txt cannot be read: 拒绝访问。 (os error 5)
+  error  L14  entry "private" target notes/private.txt cannot be read: Access is denied. (os error 5)
          why  the target exists but its bytes are not readable, so neither hash nor regex can be checked
          fix  the path must name a readable file; fix its permissions and run check again without changing the entry, or choose a file you know is the right target, review that file and the note, update the note if it no longer describes it, then point the entry at it; this command also records the target's current hash: agent-coexist brief handoff.agent-besties.md --target <file> --entry=private
   entries       2
@@ -424,7 +424,7 @@ warn  check  handoff
   entry         errors  stale  src/errors.rs  regex not found  Error type.
 ```
 
-`agent-coexist check handoff` · 输出中的 ⟨root⟩ 代替临时目录绝对路径。
+`agent-coexist check handoff` · ⟨root⟩ in the output replaces the example temp directory's absolute path.
 ```text
 warn  check  handoff
   file          handoff.agent-besties.md
@@ -448,9 +448,9 @@ warn  check  handoff
 
 <a id="diag-profile-sections"></a>
 
-## 档案节的问题
+## Profile section problems
 
-`agent-coexist check alice` · 退出码 1
+`agent-coexist check alice` · exit code 1
 ```text
 error  check  alice
   file          alice.agent-besties.md
@@ -495,11 +495,11 @@ warn  check  bob
 
 <a id="diag-control-headings"></a>
 
-## 标题里的控制字符
+## Control characters in headings
 
-前提：两个状态标题本来都想写 locked；fix 里的 locked 只是示例。
+Premise: both status headings were meant to say locked; the locked in the fix rows is only an example.
 
-`agent-coexist check state` · 退出码 1
+`agent-coexist check state` · exit code 1
 ```text
 error  check  state
   file          state.agent-besties.md
@@ -520,7 +520,7 @@ error  check  state
 
 <a id="diag-state-warnings"></a>
 
-## 冲突、重复、倒置与过期
+## Conflicts, duplicates, inverted ranges, and expiry
 
 `agent-coexist check state`
 ```text
@@ -551,7 +551,7 @@ warn  check  state
   review        frank  2026-09-17T08:00:00Z..2026-09-17T09:00:00Z  expired
 ```
 
-`agent-coexist state . --as gina --status observing --for 4h` · 退出码 1
+`agent-coexist state . --as gina --status observing --for 4h` · exit code 1
 ```text
 error  state  .
   file          ./state.agent-besties.md
@@ -571,7 +571,7 @@ error  state  .
   refused       nothing was written: writes are refused while the file has errors that make its structure ambiguous; fix E-STATUS-DUP at L11 first, as the fix rows above say, then run this command again; the other rows above do not block this write
 ```
 
-`agent-coexist state . --as carol --status observing --for 2h` · 退出码 1
+`agent-coexist state . --as carol --status observing --for 2h` · exit code 1
 ```text
 error  state  .
   file          ./state.agent-besties.md
@@ -590,7 +590,7 @@ error  state  .
 
 <a id="diag-state-unselected"></a>
 
-## 状态内容写在了别的文件名里
+## State content under a different file name
 
 `agent-coexist check locks`
 ```text
@@ -617,9 +617,9 @@ warn  check  locks
 
 <a id="diag-state-dirty"></a>
 
-## 要删的声明和读不懂的内容在同一行
+## Declaration to remove shares a line with unparseable text
 
-`agent-coexist state . --remove alice --status locked` · 退出码 1
+`agent-coexist state . --remove alice --status locked` · exit code 1
 ```text
 error  state  .
   reason        alice is still declared on line 5 of the state file in ., mixed with unparseable fragments
@@ -628,23 +628,23 @@ error  state  .
 
 <a id="diag-functional-locks"></a>
 
-## locked 锁挡住了写入
+## `locked` declarations block writes
 
-`agent-coexist profile agents/alice --section role -m 'Rust implementer.'` · 退出码 3
+`agent-coexist profile agents/alice --section role -m 'Rust implementer.'` · exit code 3
 ```text
 error  profile  agents/alice
   reason        agents is locked by alice until 2026-09-17T11:00:00Z
   fix           if the lock is yours, add --as=alice before any -- separator; otherwise wait for it to expire or ask its holder to release it, then retry: agent-coexist profile agents/alice --section role -m 'Rust implementer.'
 ```
 
-`agent-coexist profile agents/alice --as alcie --section role -m 'Rust implementer.'` · 退出码 3
+`agent-coexist profile agents/alice --as alcie --section role -m 'Rust implementer.'` · exit code 3
 ```text
 error  profile  agents/alice
   reason        agents is locked by alice until 2026-09-17T11:00:00Z
   fix           if the lock is yours and the --as in this command names someone else, rerun it with --as=alice in place of that --as; otherwise wait for it to expire or ask its holder to release it, then retry: agent-coexist profile agents/alice --as alcie --section role -m 'Rust implementer.'
 ```
 
-`agent-coexist brief docs/agents/handoff --as bob -m 'Parser handoff notes.'` · 退出码 3
+`agent-coexist brief docs/agents/handoff --as bob -m 'Parser handoff notes.'` · exit code 3
 ```text
 error  brief  docs/agents/handoff
   reason        . is locked by carol until 2026-09-17T12:00:00Z
@@ -655,23 +655,23 @@ error  brief  docs/agents/handoff
 
 <a id="diag-ignore-syntax"></a>
 
-## ignore 规则写错
+## Malformed ignore rules
 
-`agent-coexist list .` · 退出码 1
+`agent-coexist list .` · exit code 1
 ```text
 error  list  .
   reason        cannot scan ./.ignore: line 1: error parsing glob 'notes/{broken': unclosed alternate group; missing '}' (maybe escape '{' with '[{]'?)
   fix           correct line 1 of ./.ignore, then retry: agent-coexist list .
 ```
 
-`agent-coexist list work` · 退出码 1
+`agent-coexist list work` · exit code 1
 ```text
 error  list  work
   reason        cannot scan work/.ignore: line 2: stream did not contain valid UTF-8
   fix           correct line 2 of work/.ignore, then retry: agent-coexist list work
 ```
 
-`agent-coexist list . --no-ignore` · .ignore 语法错误
+`agent-coexist list . --no-ignore` · .ignore has a syntax error
 ```text
 ok  list  .
   ignore        --no-ignore
@@ -684,45 +684,45 @@ ok  list  .
 
 <a id="diag-ignore-unreadable"></a>
 
-## ignore 来源读不了：不是语法错
+## Unreadable ignore sources: not a syntax error
 
-括号里的系统消息随系统不同。
+The OS message and code in the reason line vary by system; on Windows both cases surface as access denied (os error 5).
 
-`agent-coexist list .` · 退出码 1 · .ignore 无读权限
+`agent-coexist list .` · exit code 1 · .ignore has no read permission
 ```text
 error  list  .
-  reason        cannot scan ./.ignore: 拒绝访问。 (os error 5)
+  reason        cannot scan ./.ignore: Access is denied. (os error 5)
   fix           check that ./.ignore can be read, then retry: agent-coexist list .
 ```
 
-`agent-coexist list .` · 退出码 1 · .ignore 是目录
+`agent-coexist list .` · exit code 1 · .ignore is a directory
 ```text
 error  list  .
-  reason        cannot scan ./.ignore: 拒绝访问。 (os error 5)
+  reason        cannot scan ./.ignore: Access is denied. (os error 5)
   fix           replace ./.ignore with a regular file or remove it, then retry: agent-coexist list .
 ```
 
 <a id="diag-git-file"></a>
 
-## .git 文件的问题
+## .git file problems
 
-worktree/子模块里 .git 是指向真实 git 目录的小文件。
+In a worktree or submodule, .git is a small file pointing at the real git directory.
 
-`agent-coexist list work` · 退出码 1
+`agent-coexist list work` · exit code 1
 ```text
 error  list  work
   reason        cannot scan work/.git: invalid gitdir reference
   fix           correct the contents of work/.git, then retry: agent-coexist list work
 ```
 
-`agent-coexist list work` · 退出码 1
+`agent-coexist list work` · exit code 1
 ```text
 error  list  work
-  reason        cannot scan work/.git: gitdir points to work/nowhere: 系统找不到指定的文件。 (os error 2)
+  reason        cannot scan work/.git: gitdir points to work/nowhere: The system cannot find the file specified. (os error 2)
   fix           correct the contents of work/.git, then retry: agent-coexist list work
 ```
 
-`agent-coexist list work` · 退出码 1
+`agent-coexist list work` · exit code 1
 ```text
 error  list  work
   reason        cannot scan work/.git: gitdir points to work/../gitdata: gitdir reference is not a directory
@@ -731,9 +731,9 @@ error  list  work
 
 <a id="diag-state-scan-after-write"></a>
 
-## 写入成功，写后扫描失败
+## Write succeeds, post-write scan fails
 
-`agent-coexist state src --as alice --status locked` · .ignore 语法错误
+`agent-coexist state src --as alice --status locked` · .ignore has a syntax error
 ```text
 warn  state  src
   created       src/state.agent-besties.md
@@ -742,29 +742,29 @@ warn  state  src
   fix           correct line 1 of .ignore, then check for conflicts without declaring again: agent-coexist check-state src
 ```
 
-`agent-coexist state src --as alice --status locked` · .ignore 无读权限
+`agent-coexist state src --as alice --status locked` · .ignore has no read permission
 ```text
 warn  state  src
   created       src/state.agent-besties.md
   set           locked  alice  2026-09-17T10:00:00Z..2026-09-17T12:00:00Z
-  scan          .ignore  拒绝访问。 (os error 5)
+  scan          .ignore  Access is denied. (os error 5)
   fix           check that .ignore can be read, then check for conflicts without declaring again: agent-coexist check-state src
 ```
 
-`agent-coexist state src --as alice --status locked` · .ignore 是目录
+`agent-coexist state src --as alice --status locked` · .ignore is a directory
 ```text
 warn  state  src
   created       src/state.agent-besties.md
   set           locked  alice  2026-09-17T10:00:00Z..2026-09-17T12:00:00Z
-  scan          .ignore  拒绝访问。 (os error 5)
+  scan          .ignore  Access is denied. (os error 5)
   fix           replace .ignore with a regular file or remove it, then check for conflicts without declaring again: agent-coexist check-state src
 ```
 
 <a id="diag-ignore-too-large"></a>
 
-## ignore 规则合起来超过上限
+## Combined ignore rules exceed the limit
 
-`agent-coexist list room` · 退出码 1
+`agent-coexist list room` · exit code 1
 ```text
 error  list  room
   reason        cannot scan room/.ignore: error building NFA
