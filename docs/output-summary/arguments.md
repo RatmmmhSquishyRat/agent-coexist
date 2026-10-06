@@ -124,6 +124,11 @@ error: --for must be a duration such as 1h30m: Nd, Nh, Nm, Ns in that order, eac
 error: the declaration would end after 9999-12-31T23:59:59Z, the latest representable time; use a shorter --for (without --for, 'locked' lasts 2h and other statuses 8h)
 ```
 
+`agent-coexist read-notification --as alice --since '2026-09-17 09:00:00Z'` · stderr · exit code 2
+```text
+error: --since must be an RFC 3339 time such as 2026-09-17T09:12:00Z, or a duration back from now such as 1h30m: Nd, Nh, Nm, Ns in that order, each at most once, total above zero (got '2026-09-17 09:00:00Z'); separate the date and time with 'T', not a space
+```
+
 <a id="arg-glob-regex"></a>
 
 ## Malformed filter globs and regexes

@@ -144,6 +144,11 @@ warn  check  a b/p
 error: the value of --as is not valid Unicode text; retype it, or re-encode the text it came from as Unicode, then run the command again. Only PATH and DIR arguments accept file names that are not valid Unicode
 ```
 
+`agent-coexist guide $'\xff'` · stderr · exit code 2 · The guide topic is the single byte 0xFF.
+```text
+error: the guide topic is not valid Unicode text; retype it, or re-encode the text it came from as Unicode, then run the command again. Only PATH and DIR arguments accept file names that are not valid Unicode
+```
+
 <a id="plat-progress-lines"></a>
 
 ## Scan progress: a Linux terminal, a Windows pipe

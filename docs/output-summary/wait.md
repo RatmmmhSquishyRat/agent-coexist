@@ -138,6 +138,60 @@ stderr:
 waiting  wait-post  standup
 ```
 
+<a id="wait-brief-entry-added"></a>
+
+## wait: a brief gains an entry
+
+After the ready line, alice adds the `parser entry point` entry to `onboarding`, pointing to `src/parser/mod.rs` with a regex and note.
+
+`agent-coexist wait onboarding`
+
+stdout:
+```text
+ok  wait  onboarding
+  bytes         changed
+  semantic      changed
+  add     entry  parser entry point
+  path
+    | src/parser/mod.rs
+  hash
+    | c399aff1248675b25447a94e5e2b618b8cba18985d5e5b2fe52ed174124cd367
+  regex
+    | fn parse_document
+  note
+    | Start at parse_document.
+```
+
+stderr:
+```text
+waiting  wait  onboarding
+```
+
+<a id="wait-profile-section-updated"></a>
+
+## wait: a profile section changes
+
+After the ready line, alice updates the `role` section in `agents/alice` to include ownership of `crates/cli`.
+
+`agent-coexist wait agents/alice`
+
+stdout:
+```text
+ok  wait  agents/alice
+  bytes         changed
+  semantic      changed
+  update  section  role  body
+  before
+    | Rust implementer. Owns crates/core.
+  after
+    | Rust implementer. Owns crates/core and crates/cli.
+```
+
+stderr:
+```text
+waiting  wait  agents/alice
+```
+
 <a id="wait-byte-only"></a>
 
 ## wait: bytes change, content does not
