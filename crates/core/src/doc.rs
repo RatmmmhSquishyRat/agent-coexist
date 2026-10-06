@@ -364,17 +364,24 @@ pub fn parse(bytes: Vec<u8>, path: &Path, now: DateTime<Utc>) -> Result<Document
     };
     let (post, brief, profile, state) = match kind {
         Some(Kind::Post) => {
-            let mut ctx = ScanCtx::new(&source, &lines, &fence, now, &mut diagnostics);
+            let mut ctx = ScanCtx::new(Kind::Post, &source, &lines, &fence, now, &mut diagnostics);
             let post = types::post::scan(&mut ctx, preamble_lines.clone(), &sections);
             (post, empty_brief(), Vec::new(), Vec::new())
         }
         Some(Kind::Brief) => {
-            let mut ctx = ScanCtx::new(&source, &lines, &fence, now, &mut diagnostics);
+            let mut ctx = ScanCtx::new(Kind::Brief, &source, &lines, &fence, now, &mut diagnostics);
             let brief = types::brief::scan(&mut ctx, preamble_lines.clone(), &sections);
             (empty_post(), brief, Vec::new(), Vec::new())
         }
         Some(Kind::Profile) => {
-            let mut ctx = ScanCtx::new(&source, &lines, &fence, now, &mut diagnostics);
+            let mut ctx = ScanCtx::new(
+                Kind::Profile,
+                &source,
+                &lines,
+                &fence,
+                now,
+                &mut diagnostics,
+            );
             ctx.stray_preamble(preamble_lines.clone());
             let profile = types::profile::scan(&mut ctx, &sections);
             if sections.is_empty() {
@@ -384,7 +391,7 @@ pub fn parse(bytes: Vec<u8>, path: &Path, now: DateTime<Utc>) -> Result<Document
             (empty_post(), empty_brief(), profile, Vec::new())
         }
         Some(Kind::State) => {
-            let mut ctx = ScanCtx::new(&source, &lines, &fence, now, &mut diagnostics);
+            let mut ctx = ScanCtx::new(Kind::State, &source, &lines, &fence, now, &mut diagnostics);
             ctx.stray_preamble(preamble_lines.clone());
             let state = types::state::scan(&mut ctx, &sections);
             (empty_post(), empty_brief(), Vec::new(), state)
@@ -625,11 +632,11 @@ mod tests {
         let sections = [
             "## before\n",
             concat!(
-                "## 第一\r\n",
+                "## \u{7b2c}\u{4e00}\r\n",
                 "```md\r\n",
                 "# body H1\r\n",
                 "## fenced H2\r\n",
-                "一\r二\r\n",
+                "\u{4e00}\r\u{4e8c}\r\n",
                 "```\r\n",
                 "```md\n",
                 "ignored second fence\n",
@@ -646,12 +653,12 @@ mod tests {
                 .iter()
                 .map(|s| s.title.as_str())
                 .collect::<Vec<_>>(),
-            vec!["before", "第一", "gap", "after", "unfinished"]
+            vec!["before", "\u{7b2c}\u{4e00}", "gap", "after", "unfinished"]
         );
         assert_eq!(d.text(&d.preamble), preamble);
         let bodies = [
             None,
-            Some("# body H1\r\n## fenced H2\r\n一\r二"),
+            Some("# body H1\r\n## fenced H2\r\n\u{4e00}\r\u{4e8c}"),
             None,
             Some("last"),
             None,
@@ -660,10 +667,10 @@ mod tests {
             assert_eq!(d.text(&d.sections[i].span), *expected);
             assert_eq!(d.body(i), bodies[i]);
         }
-        assert_eq!(d.text(&d.sections[1].head), "## 第一");
+        assert_eq!(d.text(&d.sections[1].head), "## \u{7b2c}\u{4e00}");
         assert_eq!(
             d.text(&d.sections[1].body.as_ref().unwrap().span),
-            "```md\r\n# body H1\r\n## fenced H2\r\n一\r二\r\n```"
+            "```md\r\n# body H1\r\n## fenced H2\r\n\u{4e00}\r\u{4e8c}\r\n```"
         );
     }
 

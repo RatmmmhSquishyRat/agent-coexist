@@ -15,13 +15,15 @@ use std::ops::Range;
 
 use chrono::{DateTime, Utc};
 
-use crate::doc::{Body, Section};
+use crate::doc::{Body, Kind, Section};
 use crate::error::Diagnostic;
 use crate::text::{FenceBlock, FenceScan, LineIndex, Span};
 
 /// Read-only scan context over one parsed document (frozen interface; type
 /// scanners never touch the raw line/fence structures directly).
 pub(crate) struct ScanCtx<'a> {
+    /// The parsed H1 kind, independent of the command inspecting this file.
+    kind: Kind,
     source: &'a str,
     lines: &'a LineIndex,
     inside: &'a [bool],
@@ -34,6 +36,7 @@ pub(crate) struct ScanCtx<'a> {
 
 impl<'a> ScanCtx<'a> {
     pub(crate) fn new(
+        kind: Kind,
         source: &'a str,
         lines: &'a LineIndex,
         fence: &'a FenceScan,
@@ -41,6 +44,7 @@ impl<'a> ScanCtx<'a> {
         diag: &'a mut Vec<Diagnostic>,
     ) -> Self {
         ScanCtx {
+            kind,
             source,
             lines,
             inside: &fence.inside,
@@ -62,7 +66,10 @@ impl<'a> ScanCtx<'a> {
     /// Append a diagnostic. Ordering (anchor line, catalog order) happens
     /// once in `doc::parse`; scanners push in whatever order they find
     /// things.
-    pub(crate) fn push(&mut self, d: Diagnostic) {
+    pub(crate) fn push(&mut self, mut d: Diagnostic) {
+        if d.id == "W-STRAY" {
+            d = d.with("type", self.kind.as_str());
+        }
         self.diag.push(d);
     }
 

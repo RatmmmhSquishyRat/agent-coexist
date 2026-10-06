@@ -15,23 +15,23 @@ error  check  standup
 ```text
 error  check  standup
   reason        file is in use by another program
-  fix           close it, then retry: agent-coexist check standup
+  fix           close the other program, then retry: agent-coexist check standup
 ```
 
-`agent-coexist list .` · list still runs: leaves it cannot read are marked busy.
+`agent-coexist list .` · list still runs: files it cannot read are marked busy.
 ```text
 warn  list  .
   ignore        none
   onboarding                  busy
   standup                     busy
   state                       busy
-  fix           some leaves above have no known type (? or busy) or some directories could not be read or entered (skipped rows), so types or files may be missing here; read each one again to see what it holds or why it cannot be read: agent-coexist check ./onboarding; agent-coexist check ./standup; agent-coexist check ./state
+  fix           some files above have no known type (? or busy) or some directories could not be read or entered (skipped rows), so types or files may be missing here; read each one again to see what it holds or why it cannot be read: agent-coexist check ./onboarding; agent-coexist check ./standup; agent-coexist check ./state
   total         3
 ```
 
 <a id="plat-write-scan-warning"></a>
 
-## Write succeeds but the post-write check cannot read: warn, not error
+## Write succeeds but the lock check cannot read: warn, not error
 
 The directory's state file is locked by another process while this agent's own profile is written.
 
@@ -41,7 +41,7 @@ warn  profile  bob
   created       bob.agent-besties.md
   section       role  set
   skipped       .  busy
-  fix           any change reported above is already written, but the lock check could not read everything it needed (the rows above that start with skipped, partial or canonicalize), so a lock that applies here may have been missed; before writing again, look at what it could not read and agree with any holder named there: agent-coexist check state
+  fix           changes reported above are already written; rows starting with skipped, partial or canonicalize mean the lock check may have missed a holder. Before writing again, run these checks, then agree with any holder they show: agent-coexist check state
 ```
 
 <a id="plat-denied-io-linux"></a>
@@ -162,7 +162,9 @@ ok  list  big
 terminal frame (stderr went straight to the terminal, not captured separately; varies between runs: frame count and counters depend on scanning speed; escaped view; no trailing newline):
 <!-- output-summary:volatile:start -->
 ```text
-\rscanning dirs: 28982, files: 0...\rscanning dirs: 40380, files: 0...\rscanning dirs: 51300, files: 0...\r                                 \r
+\rscanning dirs: 10708, files: 0...
+[... 10 progress frames omitted; they differ from the frames shown only in their counters, and the actual frame count and counters vary between runs ...]
+\rscanning dirs: 57475, files: 0...\r                                 \r
 ```
 <!-- output-summary:volatile:end -->
 

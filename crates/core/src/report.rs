@@ -37,10 +37,10 @@ impl Status {
 ///   value renders as `/` so it remains a column under `/ {2,}/`. A row with
 ///   no values renders as indent + key only, not a synthetic value column.
 ///   This makes every row splittable on `/ {2,}/` (spec §8.1.4).
-/// - `Text`: a line with the key alone, then one `    | ` prefixed line per
-///   content line, verbatim, never folded or truncated (spec §8.1.7). A
-///   final `\n` terminates the last line rather than adding an empty one;
-///   empty content renders as the key line alone.
+/// - `Text`: two spaces, then the key, then one `    | ` prefixed line
+///   per content line, verbatim, never folded or truncated (spec
+///   §8.1.7). A final `\n` terminates the last line rather than adding
+///   an empty one; empty content renders as the key line alone.
 /// - `Diagnostic`: the raw diagnostic; the renderer renders message / why /
 ///   fix through the diag catalog with the invocation's `diag::Context`.
 #[derive(Clone, Debug)]
@@ -110,7 +110,8 @@ impl Report {
         self
     }
 
-    /// Text block row (spec §8.1.7): key alone, then verbatim `| ` lines.
+    /// Text block row (spec §8.1.7): two spaces + key, then verbatim
+    /// `| ` lines.
     pub fn text(&mut self, key: impl Into<String>, content: impl Into<String>) -> &mut Self {
         self.rows.push(Row::Text {
             key: key.into(),

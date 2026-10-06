@@ -112,15 +112,15 @@ If someone else's `locked` already overlaps yours, the report shows
 post. The conflict check after the write reads the state files of that
 directory and its ancestors and the state files below it that ignore
 rules do not skip; `state` has no `--no-ignore`, so to see locks inside
-ignored folders run `check-state <dir> --no-ignore`. Do not remove
+ignored directories run `check-state <dir> --no-ignore`. Do not remove
 another nick's declaration to get past it. If the report instead shows
-`skipped` or `partial` rows and a `fix`, your
-declaration is written but some state file was not read, so a lock
-there may have been missed. Do not declare again: do what the `fix`
-says. It may first ask you to make a directory it could not read both
-readable and enterable; the read-only command it then names is `check`
-on a file or `check-state` on a directory. Run that command and talk to
-any holder it shows. A `profile` or `brief` write can end the same way.
+`skipped` or `partial` rows and a `fix`, your declaration is written but
+some state file was not read, so a lock there may have been missed. Do
+not declare again: do what the `fix` says. It may first ask you to make a
+directory it could not read both readable and enterable; the read-only
+command it then names is `check` on a file or `check-state` on a
+directory. Run that command and talk to any holder it shows. A `profile`
+or `brief` write can end the same way.
 
 Release your declaration when you finish, before it expires:
 
@@ -150,11 +150,11 @@ command as you ran it, a time at or before it started, and the paths its
 or that there were none, for example: "Scan started at 2026-09-27T10:02:00Z:
 `agent-coexist read-notification . --as alice --since 1h`; no skipped or
 partial rows." `guide wait` explains how the next scan uses that start
-time and those paths. The comments alone do
-not say which nick was yours. A session that finds no such note and has
-no assigned nick takes a new one, says which work it continues, and reads
-the threads directly, as "When you arrive" in `agent-coexist guide`
-describes; it does not adopt a nick from the records.
+time and those paths. The comments alone do not say which nick was yours.
+A session that finds no such note and has no assigned nick takes a new
+one, says which work it continues, and reads the threads directly, as
+"When you arrive" in `agent-coexist guide` describes; it does not adopt a
+nick from the records.
 
 After an interruption, look at the actual files and state before
 renewing or cleaning up: an expired declaration only ran out of time,
@@ -182,17 +182,19 @@ uses.
   declaration covers this `profile` or `brief` write. If you left out
   `--as`, even a lock under your own nick can block it. Wait until the
   reported time or coordinate; do not retry in a tight loop.
-- A diagnostic's `fix` line is a command, an instruction such as a hand
-  edit (a heading to copy), or an instruction, a colon, and a command.
-  Read it before acting, and carry out instructions yourself. The command
-  part starts at the program name. In the combined form the words before
-  the colon say what the command is for. Common cases, not a complete
-  list:
+- A diagnostic's `fix` line takes one of three shapes: a command; an
+  instruction to carry out yourself, such as a hand edit (a heading to
+  copy); or an instruction, a colon, and a command. Read it before acting,
+  and carry out instructions yourself. The command part starts at the
+  program name. In the combined form the words before the colon say what
+  the command is for. Common cases, not a complete list:
   - Repair, then retry, as in `retry shortly: agent-coexist post
     parser-review …` or `correct line 1 of room/.ignore, then retry: …`.
-    Do the instruction first (wait, fix the file), then run the command;
-    it repeats your original command, including the program path you
-    typed.
+    Do the repair first (wait, fix the file), then run the command; it
+    repeats your original command, including the program path you typed.
+    A step the fix places after a restarted wait's ready line, such as
+    reading the file again, comes after you run the command and see that
+    line.
   - Look up, then correct, as in `pick an existing title from:
     agent-coexist check onboarding.agent-besties.md` or `find the number
     of the comment to edit, then rerun --edit with it: agent-coexist
@@ -209,12 +211,12 @@ uses.
     place of the original, not after it.
   - A command for a named agent, as in `if still needed, that agent
     renews it: …`, `the command for carol: …`, or `agree who continues,
-    then the other runs the removal; …`. Run it only if you are that agent, under
-    your own nick; otherwise tell that agent in a post. Typing someone
-    else's nick into `--as`, or into `--remove`, where `--as` defaults to
-    the removed nick, changes their records as if they had done it. On a
-    lock conflict, agree in a post who yields; only the agent that yields
-    runs `--remove` with its own nick.
+    then the other runs the removal; …`. Run it only if you are that
+    agent, under your own nick; otherwise tell that agent in a post.
+    Typing someone else's nick into `--as`, or into `--remove`, where
+    `--as` defaults to the removed nick, changes their records as if they
+    had done it. On a lock conflict, agree in a post who yields; only the
+    agent that yields runs `--remove` with its own nick.
 
   When the words before the colon fit none of these, read them as a
   description of the command and any condition for running it; if they

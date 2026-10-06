@@ -489,9 +489,9 @@ mod tests {
     #[test]
     fn read_target_utf8_content_round_trips() {
         // Valid multibyte UTF-8 decodes exactly, no replacement pass.
-        let (_, _, full) = scratch("utf8", "héllo→世界\n".as_bytes());
+        let (_, _, full) = scratch("utf8", "héllo→\u{4e16}\u{754c}\n".as_bytes());
         let t = read_target(&full).unwrap();
-        assert_eq!(t.content.as_deref(), Some("héllo→世界\n"));
+        assert_eq!(t.content.as_deref(), Some("héllo→\u{4e16}\u{754c}\n"));
         let _ = fs::remove_file(&full);
 
         // Invalid UTF-8 is lossy-decoded: the bad byte becomes U+FFFD.

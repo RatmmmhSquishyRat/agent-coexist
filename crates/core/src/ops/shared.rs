@@ -79,10 +79,16 @@ pub enum Follow {
     /// name was listed, the file could not be opened): `check <dir>/state`
     /// once the directory is readable.
     StateInUnreadable(PathBuf),
-    /// Directory identity fell back to lexical paths (`canonicalize` rows):
-    /// `check-state <dir>` on the command's own directory, after the path
-    /// exists and every ancestor has search permission.
-    Here(PathBuf),
+    /// Directory identity fell back to lexical paths (`canonicalize` rows)
+    /// in a scan declared on this directory: `check-state <dir>` on that
+    /// declared directory, once the path exists and every ancestor grants
+    /// read and search permission.
+    DeclaredDir(PathBuf),
+    /// Directory identity fell back to lexical paths (`canonicalize` rows)
+    /// in a write command's lock scan: `check-state <dir>` on the written
+    /// file's parent directory, once the path exists and every ancestor
+    /// grants read and search permission.
+    WrittenFileDir(PathBuf),
     /// A `list` leaf of unknown type (`?` or `busy`): `check <path>`, which
     /// reads it again with the single-file lock wait and says why.
     Leaf(PathBuf),
@@ -184,7 +190,8 @@ pub fn scan_fix<'a>(
 ) -> String {
     let mut commands: Vec<String> = Vec::new();
     let mut copyable = true;
-    let (mut state_of, mut file, mut unreadable, mut here) = (false, false, false, false);
+    let (mut state_of, mut file, mut unreadable) = (false, false, false);
+    let (mut declared, mut written_file) = (false, false);
     let (mut leaf, mut listing) = (false, false);
     // `{unreadable}`: some directory must be made readable first, and/or a
     // canonicalize fallback must restore existence and ancestor search.
@@ -209,8 +216,13 @@ pub fn scan_fix<'a>(
                 readable_first = true;
                 shown_operand(dir, None).map(|op| format!("agent-coexist check-state {op}"))
             }
-            Follow::Here(dir) => {
-                here = true;
+            Follow::DeclaredDir(dir) => {
+                declared = true;
+                diag::path_operand(dir.as_os_str())
+                    .map(|op| format!("agent-coexist check-state {op}"))
+            }
+            Follow::WrittenFileDir(dir) => {
+                written_file = true;
                 diag::path_operand(dir.as_os_str())
                     .map(|op| format!("agent-coexist check-state {op}"))
             }
@@ -237,7 +249,7 @@ pub fn scan_fix<'a>(
     if readable_first {
         extra.push_str(diag::SCAN_UNREADABLE_FIRST);
     }
-    if here {
+    if declared || written_file {
         extra.push_str(diag::SCAN_CANONICALIZE_FIRST);
     }
     // `{commands}` last: a path must never be read as a placeholder.
@@ -261,8 +273,11 @@ pub fn scan_fix<'a>(
         if listing {
             parts.push(diag::MANUAL_LIST_UNREADABLE);
         }
-        if here {
-            parts.push(diag::MANUAL_CHECK_STATE_HERE);
+        if declared {
+            parts.push(diag::MANUAL_CHECK_STATE_DECLARED);
+        }
+        if written_file {
+            parts.push(diag::MANUAL_CHECK_STATE_WRITTEN_FILE);
         }
         manual
             .replace("{unreadable}", &extra)

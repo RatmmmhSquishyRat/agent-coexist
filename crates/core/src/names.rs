@@ -357,8 +357,8 @@ mod tests {
         assert_eq!(echo_raw("\u{202e}locked"), "<U+202E>locked");
         assert_eq!(echo_raw("a\u{2028}b\u{a0}"), "a<U+2028>b<U+00A0>");
         assert_eq!(
-            echo_raw("e\u{301} maría 日本 'x\""),
-            "e\u{301} maría 日本 'x\""
+            echo_raw("e\u{301} maría \u{65e5}\u{672c} 'x\""),
+            "e\u{301} maría \u{65e5}\u{672c} 'x\""
         );
         // No repair strips a format character: the value stays invalid.
         assert_eq!(

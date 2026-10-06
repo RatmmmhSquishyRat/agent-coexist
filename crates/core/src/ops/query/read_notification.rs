@@ -13,7 +13,9 @@
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
-use super::{canonicalize_notes, dir_error, include_hints, sort_diagnostics, INCLUDE_HINT_EMPTY};
+use super::{
+    canonicalize_notes, dir_error, include_hints, sort_diagnostics, INCLUDE_HINT_EMPTY_STATE,
+};
 use crate::consts;
 use crate::diag;
 use crate::doc;
@@ -319,7 +321,7 @@ pub fn read_notification(ctx: &mut Ctx, p: &ReadNotificationParams) -> Result<Re
         &scanned.zero_includes,
         &p.walk,
         shared::ignore_in_play(&scanned.ignore_sources),
-        INCLUDE_HINT_EMPTY,
+        INCLUDE_HINT_EMPTY_STATE,
     );
 
     report.total(record_count + aux_count);
@@ -407,7 +409,9 @@ fn state_events(
     for entry in &info.entries {
         if entry.nick == nick {
             if entry.until >= since && entry.until < now {
-                let at = time::format(entry.until);
+                // The end time is the first column; per §10.6.3 the
+                // qualifier column stays additive (like `until <t>` /
+                // `ends in <m>`), so an expired row simply has none.
                 events.push(Event {
                     when: entry.until,
                     path_key: info.display_dir.clone(),
@@ -415,11 +419,10 @@ fn state_events(
                     tie: *tie,
                     key: "expired",
                     values: vec![
-                        at.clone(),
+                        time::format(entry.until),
                         info.display_dir.clone(),
                         names::display_text(&entry.status),
                         entry.nick.clone(),
-                        format!("expired at {at}"),
                     ],
                 });
                 *tie += 1;

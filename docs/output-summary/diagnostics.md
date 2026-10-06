@@ -93,7 +93,7 @@ error  check  standup
          fix  rewrite the header as "## #2 bob (2026-09-17T09:05:00Z)"
   error  L15  "## #02 carol (2026-09-17T09:10:00Z)" looks like a comment header but is malformed
          why  comment headers must be "## #<n> <nick> (<time>)"; a malformed one makes numbering and @#n references ambiguous
-         fix  rewrite the header as "## #5 carol (2026-09-17T09:10:00Z)"; its number changes from #2 to #5 if no reply in this post already names @#5, otherwise to another number that no header in this post carries, that no other repair in this report gives a header, and that no reply already names; change any @#2 that meant this comment to that number
+         fix  rewrite the header as "## #5 carol (2026-09-17T09:10:00Z)"; its number changes from #2 to #5 if no reply in this post already names @#5, otherwise to another number that no header in this post carries, that no other repair in this report gives a header, and that no reply in this post already names; change any @#2 that meant this comment to that number
   warn   L21  comment numbers jump from #1 to #3
          why  no comment in this post has number #2, so @#2 cannot be resolved; a malformed comment header before this one may be that comment
          fix  repair the malformed header first; if the gap remains, leave the numbering as is, because other files may already reference #3
@@ -117,7 +117,7 @@ error  post  standup
   type          post
   error  L9  "## #x bob (2026-09-17T09:05:00Z)" looks like a comment header but is malformed
          why  comment headers must be "## #<n> <nick> (<time>)"; a malformed one makes numbering and @#n references ambiguous
-         fix  rewrite the header as "## #4 bob (2026-09-17T09:05:00Z)"; the header shows no usable number, so use #4 if no reply in this post already names @#4, otherwise another number that no header in this post carries, that no other repair in this report gives a header, and that no reply already names, and change any reply that meant this comment to that number; if you know this comment's original number and no header in this post carries it or is given it by another repair, use that number instead and no reply needs to change
+         fix  rewrite the header as "## #4 bob (2026-09-17T09:05:00Z)"; the header shows no usable number, so use #4 if no reply in this post already names @#4, otherwise another number that no header in this post carries, that no other repair in this report gives a header, and that no reply in this post already names; change any reply that meant this comment to that number; if you know this comment's original number and no header in this post carries it or is given it by another repair, use that number instead and no reply needs to change
   warn   L15  comment numbers jump from #1 to #3
          why  no comment in this post has number #2, so @#2 cannot be resolved; a malformed comment header before this one may be that comment
          fix  repair the malformed header first; if the gap remains, leave the numbering as is, because other files may already reference #3
@@ -152,13 +152,13 @@ error  check  standup
   type          post
   error  L9  comment number #1 appears twice
          why  @#1 and --edit 1 cannot tell the two apart
-         fix  renumber the later one to #2 if no reply in this post already names @#2, otherwise to another number that no header in this post carries, that no other repair in this report gives a header, and that no reply already names, and update any @#1 that meant it to that number
+         fix  renumber the later one to #2 if no reply in this post already names @#2, otherwise to another number that no header in this post carries, that no other repair in this report gives a header, and that no reply in this post already names; change any @#1 that meant it to that number
   warn   L9  comment #1 replies to @#2 which does not exist
          why  the reply cannot be followed to its target
          fix  ask the author of #1 which comment was meant
   error  L15  "## #x carol (2026-09-17T09:10:00Z)" looks like a comment header but is malformed
          why  comment headers must be "## #<n> <nick> (<time>)"; a malformed one makes numbering and @#n references ambiguous
-         fix  rewrite the header as "## #3 carol (2026-09-17T09:10:00Z)"; the header shows no usable number, so use #3 if no reply in this post already names @#3, otherwise another number that no header in this post carries, that no other repair in this report gives a header, and that no reply already names, and change any reply that meant this comment to that number; if you know this comment's original number and no header in this post carries it or is given it by another repair, use that number instead and no reply needs to change
+         fix  rewrite the header as "## #3 carol (2026-09-17T09:10:00Z)"; the header shows no usable number, so use #3 if no reply in this post already names @#3, otherwise another number that no header in this post carries, that no other repair in this report gives a header, and that no reply in this post already names; change any reply that meant this comment to that number; if you know this comment's original number and no header in this post carries it or is given it by another repair, use that number instead and no reply needs to change
   comments      2
   authors       alice, bob
   topic         #1  alice  Daily standup. Post your status here.
@@ -176,10 +176,10 @@ error  check  standup
          fix  leave the numbering as is; other files may already reference #18446744073709551614
   error  L9  "## #x bob" looks like a comment header but is malformed
          why  comment headers must be "## #<n> <nick> (<time>)"; a malformed one makes numbering and @#n references ambiguous
-         fix  no comment number above #18446744073709551614, the highest in this post, is left for this header; to keep the comment where it is, with its author, time and text, rewrite the header by hand as "## #<n> bob (<time>)", replacing <n> with an unused lower number: one that no header in this post carries, that you give no other header, and that no reply in this post already names (@#n), and each <nick> or <time> with the comment's original author or the time it was first written; then change any reply that meant this comment to @# with that number; if you know this comment's original number and no header in this post carries it or is given it by another repair, use that number instead and no reply needs to change; a lower number can leave a W-SEQ-ORDER or W-SEQ-GAP warning, which does not block writes; this frees no number for new comments: once post stops with E-SEQ-EXHAUSTED, new comments go in a new post
+         fix  no number above #18446744073709551614 is available; rewrite the header by hand as "## #<n> bob (<time>)", filling each <nick> or <time> with the original author or first-written time, keeping the comment's position, author, time and text. For <n>, restore its known original number if no header uses it or receives it in another repair; replies then stay unchanged. Otherwise choose a lower number unused by headers, other repairs and @#n replies in this post, then retarget replies meant for this comment; W-SEQ-ORDER or W-SEQ-GAP may remain but do not block writes; this frees no append number, so use a new post when E-SEQ-EXHAUSTED stops an append
   error  L15  comment number #18446744073709551614 appears twice
          why  @#18446744073709551614 and --edit 18446744073709551614 cannot tell the two apart
-         fix  no comment number above #18446744073709551614, the highest in this post, is left to renumber this later #18446744073709551614; to keep it where it is, with its author, time and text, change only the number in its header by hand to an unused lower number: one that no header in this post carries, that you give no other header, and that no reply in this post already names (@#n); then update any @#18446744073709551614 that meant it to that number; a lower number can leave a W-SEQ-ORDER or W-SEQ-GAP warning, which does not block writes; this frees no number for new comments: once post stops with E-SEQ-EXHAUSTED, new comments go in a new post
+         fix  no number above #18446744073709551614 is available; change only this later #18446744073709551614's header number by hand to a lower number unused by headers, other repairs and @#n replies in this post. Keep its position, author, time and text; retarget any @#18446744073709551614 replies meant for it; W-SEQ-ORDER or W-SEQ-GAP may remain but do not block writes; this frees no append number, so use a new post when E-SEQ-EXHAUSTED stops an append
   warn   L21  comment #1 appears after #18446744073709551614
          why  readers assume comments are in order; @#n still resolves
          fix  move the section so numbers increase, or leave it if the order is intentional
@@ -207,8 +207,8 @@ warn  check  seq
   file          seq.agent-besties.md
   type          post
   warn   L3  text outside any fence at L3 is not part of the record
-         why  the CLI only reads fenced bodies, attribute lines and headings; this text is kept but never shown
-         fix  this file does not record who wrote this text, even when it sits under another agent's heading; whoever wrote it moves it where it belongs (a fenced body, or in a state file an entry line under a status) or deletes it, and only a comment's author changes that comment; anyone else asks who wrote it before moving or deleting it
+         why  this text stays in the file but is not included in CLI reports
+         fix  the writer may move this text into a fenced body or delete it; others must ask the writer, not infer who wrote it from a nearby heading; only a comment's author edits that comment
   warn   L11  comment numbers jump from #1 to #4
          why  no comment in this post has number #3, so @#3 cannot be resolved; that comment may have been deleted or renumbered by hand, or a new comment was written with the highest number plus one after numbers were already out of order
          fix  leave the numbering as is; other files may already reference #4
@@ -219,11 +219,11 @@ warn  check  seq
          why  readers assume comments are in order; @#n still resolves
          fix  move the section so numbers increase, or leave it if the order is intentional
   warn   L23  text outside any fence at L23 is not part of the record
-         why  the CLI only reads fenced bodies, attribute lines and headings; this text is kept but never shown
-         fix  this file does not record who wrote this text, even when it sits under another agent's heading; whoever wrote it moves it where it belongs (a fenced body, or in a state file an entry line under a status) or deletes it, and only a comment's author changes that comment; anyone else asks who wrote it before moving or deleting it
+         why  this text stays in the file but is not included in CLI reports
+         fix  the writer may move this text into a fenced body or delete it; others must ask the writer, not infer who wrote it from a nearby heading; only a comment's author edits that comment
   warn   L25  text outside any fence at L25 is not part of the record
-         why  the CLI only reads fenced bodies, attribute lines and headings; this text is kept but never shown
-         fix  this file does not record who wrote this text, even when it sits under another agent's heading; whoever wrote it moves it where it belongs (a fenced body, or in a state file an entry line under a status) or deletes it, and only a comment's author changes that comment; anyone else asks who wrote it before moving or deleting it
+         why  this text stays in the file but is not included in CLI reports
+         fix  the writer may move this text into a fenced body or delete it; others must ask the writer, not infer who wrote it from a nearby heading; only a comment's author edits that comment
   comments      3
   authors       alice, bob, carol
   topic         #1  alice  Parser plan.
@@ -258,8 +258,8 @@ warn  check  standup
          why  there is nothing to show as its content
          fix  only carol, the comment's author, can add its body; anyone else asks carol to, or replies with @#2 instead; the command for carol: agent-coexist post standup.agent-besties.md --as=carol --edit=2 -m '<text>'
   warn   L11  text outside any fence at L11 is not part of the record
-         why  the CLI only reads fenced bodies, attribute lines and headings; this text is kept but never shown
-         fix  this file does not record who wrote this text, even when it sits under another agent's heading; whoever wrote it moves it where it belongs (a fenced body, or in a state file an entry line under a status) or deletes it, and only a comment's author changes that comment; anyone else asks who wrote it before moving or deleting it
+         why  this text stays in the file but is not included in CLI reports
+         fix  the writer may move this text into a fenced body or delete it; others must ask the writer, not infer who wrote it from a nearby heading; only a comment's author edits that comment
   comments      2
   authors       alice, carol
   topic         #1  alice  Daily standup. Post your status here.
@@ -277,17 +277,17 @@ warn  check  standup
   file          standup.agent-besties.md
   type          post
   warn   L1  file starts with a UTF-8 BOM
-         why  the BOM is skipped when reading; appends and splices leave it in place, so it stays until someone re-saves the file
+         why  the BOM is skipped when reading; the CLI leaves it in place when adding or changing content
          fix  re-save the file without BOM
   warn   L1  file uses CRLF line endings
          why  lines the CLI adds use LF, so the file will end up mixed
          fix  convert the file to LF
   warn   L3  subscribers line repeated or contains duplicates
          why  only the first line counts and duplicates are ignored; the extra text is noise for readers
-         fix  keep only the first "- subscribers:" line, with each nick once; delete any later "- subscribers:" line instead of merging it in: a nick named only there is not subscribed now, and merging would subscribe it; each agent named only there decides for itself whether to subscribe
+         fix  keep the first "- subscribers:" line, each nick once; delete later lines without merging them. Nicks found only there are not subscribed; those agents decide whether to subscribe
   warn   L4  subscribers line repeated or contains duplicates
          why  only the first line counts and duplicates are ignored; the extra text is noise for readers
-         fix  keep only the first "- subscribers:" line, with each nick once; delete any later "- subscribers:" line instead of merging it in: a nick named only there is not subscribed now, and merging would subscribe it; each agent named only there decides for itself whether to subscribe
+         fix  keep the first "- subscribers:" line, each nick once; delete later lines without merging them. Nicks found only there are not subscribed; those agents decide whether to subscribe
   comments      1
   authors       alice
   topic         #1  alice  Daily standup.
@@ -430,10 +430,10 @@ warn  check  handoff
   file          handoff.agent-besties.md
   type          brief
   warn   L7  text outside any fence at L7 is not part of the record
-         why  the CLI only reads fenced bodies, attribute lines and headings; this text is kept but never shown
-         fix  this file does not record who wrote this text, even when it sits under another agent's heading; whoever wrote it moves it where it belongs (a fenced body, or in a state file an entry line under a status) or deletes it, and only a comment's author changes that comment; anyone else asks who wrote it before moving or deleting it
+         why  this text stays in the file but is not included in CLI reports
+         fix  the writer may move this text into a fenced body or delete it; others must ask the writer, not infer who wrote it from a nearby heading
   warn   L11  entry "parser" uses an absolute path
-         why  the brief only verifies on this machine; on any other checkout the target will be stale
+         why  an absolute path stays fixed when the brief moves; in another checkout it may read a file outside that checkout or point to a missing file
          fix  choose a file you know is the right target, review that file and the note, update the note if it no longer describes it, then point the entry at a path relative to the brief's directory; this command also records the target's current hash: agent-coexist brief handoff.agent-besties.md --target <relative path> --entry=parser
   warn   L13  entry "parser" has unknown attribute "owner"
          why  the line is kept but has no meaning to the CLI
@@ -471,8 +471,8 @@ error  check  alice
          why  --section cannot address it; allowed: starts with a letter, digit or _, then letters, digits, _ and -, at most 64 characters
          fix  rename this heading by hand to a valid section name distinct from every other section and any other planned heading repair, then run check again
   warn   L31  text outside any fence at L31 is not part of the record
-         why  the CLI only reads fenced bodies, attribute lines and headings; this text is kept but never shown
-         fix  this file does not record who wrote this text, even when it sits under another agent's heading; whoever wrote it moves it where it belongs (a fenced body, or in a state file an entry line under a status) or deletes it, and only a comment's author changes that comment; anyone else asks who wrote it before moving or deleting it
+         why  this text stays in the file but is not included in CLI reports
+         fix  the writer may move this text into a fenced body or delete it; others must ask the writer, not infer who wrote it from a nearby heading
   sections      6
   section       role  Rust implementer.
   section       role  Reviews parser changes.
@@ -506,13 +506,13 @@ error  check  state
   type          state
   warn   L3  status "lo�cked" at L3 is not a valid status name
          why  entries under it are shown but never treated as locked or observing; allowed: starts with a lowercase letter, then lowercase letters, digits and -, at most 32 characters
-         fix  this status heading appears more than once, so do not give its copies different names, which would split one status into two; merge its sections by hand into one under one valid status name, e.g. "## locked", together with any section that already uses that name, then run check again
+         fix  merge this status's sections by hand under one valid name you choose, including any section already using it; "## locked" is only an example. Keep one status, then run check again
   error  L7  status "lo�cked" appears twice
-         why  entries under a status must live in one place, or upsert and cleanup would touch the wrong one
+         why  entries for one status must share one section; state writes are refused until the duplicates are merged
          fix  edit the two "## lo�cked" headings by hand: remove their control characters and merge the two sections into one, together with any section that already uses the cleaned name, then run check again
   warn   L7  status "lo�cked" at L7 is not a valid status name
          why  entries under it are shown but never treated as locked or observing; allowed: starts with a lowercase letter, then lowercase letters, digits and -, at most 32 characters
-         fix  this status heading appears more than once, so do not give its copies different names, which would split one status into two; merge its sections by hand into one under one valid status name, e.g. "## locked", together with any section that already uses that name, then run check again
+         fix  merge this status's sections by hand under one valid name you choose, including any section already using it; "## locked" is only an example. Keep one status, then run check again
   entries       2
   lo�cked       alice  2026-09-17T09:00:00Z..2026-09-17T11:00:00Z
   lo�cked       bob  2026-09-17T09:00:00Z..2026-09-17T11:00:00Z
@@ -532,7 +532,7 @@ warn  check  state
          fix  agree who continues, then the other runs the removal; it is refused with E-STATE-DIRTY when that declaration's line also has unparseable fragments (W-STATE-ENTRY), and that error's fix names the by-hand deletion: agent-coexist state . --remove <nick> --status=locked
   warn   L11  carol appears twice under observing
          why  the latest end time wins; the next state write that rewrites the observing section (a declaration or removal under it, or expiry cleanup of an entry in it) merges them into one unless either entry sits on a line that also has unparseable fragments (W-STATE-ENTRY)
-         fix  optional; to merge them now, that agent declares again, which replaces both with one entry from now (add --for to choose its length), but only when both entries are on clean lines; when either entry sits on a line that also has unparseable fragments (W-STATE-ENTRY), that line is kept as is and the duplicate stays: inspect the file, delete carol's entries from every such line by hand, keeping each line's other content, then look at the remaining entries and declare again to merge any duplicate that is left or to start one entry from now: agent-coexist state . --as=carol --status=observing
+         fix  optional; to merge them now, that agent declares again, which replaces both with one entry from now (add --for to choose its length), but only when both entries are on clean lines; when either entry sits on a line that also has unparseable fragments (W-STATE-ENTRY), that line is kept as is and the duplicate stays: inspect the file, carol deletes its own entries from every such line by hand, keeping each line's other content, then looks at the remaining entries and declares again to merge any duplicate that is left or to start one entry from now: agent-coexist state . --as=carol --status=observing
   warn   L15  dave under review ends before it starts
          why  treated as expired: it never counts as a lock; the next state write removes it unless the line also has unparseable fragments (W-STATE-ENTRY)
          fix  if still needed, that agent declares it again: agent-coexist state . --as=dave --status=review
@@ -558,12 +558,12 @@ error  state  .
   type          state
   warn   L7  status "Review Queue" at L7 is not a valid status name
          why  entries under it are shown but never treated as locked or observing; allowed: starts with a lowercase letter, then lowercase letters, digits and -, at most 32 characters
-         fix  rename the heading by hand to a valid, distinct status name, e.g. "## review-queue" only if that name is unused, then run check again
+         fix  choose a valid, unused status name and rename the heading by hand; "## review-queue" is only an example, not a guess at your intended name. Then run check again
   warn   L9  erin under Review Queue expired at 2026-09-17T08:00:00Z
          why  expired entries are ignored by conflict checks and removed on the next state write unless the line also has unparseable fragments (W-STATE-ENTRY)
          fix  rename the status heading by hand to a valid, distinct status name, then run check again before renewing or changing its declarations
   error  L11  status "observing" appears twice
-         why  entries under a status must live in one place, or upsert and cleanup would touch the wrong one
+         why  entries for one status must share one section; state writes are refused until the duplicates are merged
          fix  merge the two "## observing" sections into one
   warn   L13  "frank tomorrow" under observing is not "<nick> <start>..<until>"
          why  the fragment is kept but ignored by conflict checks and cleanup
@@ -578,13 +578,13 @@ error  state  .
   type          state
   warn   L3  status "Review Queue" at L3 is not a valid status name
          why  entries under it are shown but never treated as locked or observing; allowed: starts with a lowercase letter, then lowercase letters, digits and -, at most 32 characters
-         fix  this status heading appears more than once, so do not give its copies different names, which would split one status into two; merge its sections by hand into one under one valid status name, e.g. "## review-queue", together with any section that already uses that name, then run check again
+         fix  merge this status's sections by hand under one valid name you choose, including any section already using it; "## review-queue" is only an example. Keep one status, then run check again
   error  L7  status "Review Queue" appears twice
-         why  entries under a status must live in one place, or upsert and cleanup would touch the wrong one
+         why  entries for one status must share one section; state writes are refused until the duplicates are merged
          fix  merge the two "## Review Queue" sections into one
   warn   L7  status "Review Queue" at L7 is not a valid status name
          why  entries under it are shown but never treated as locked or observing; allowed: starts with a lowercase letter, then lowercase letters, digits and -, at most 32 characters
-         fix  this status heading appears more than once, so do not give its copies different names, which would split one status into two; merge its sections by hand into one under one valid status name, e.g. "## review-queue", together with any section that already uses that name, then run check again
+         fix  merge this status's sections by hand under one valid name you choose, including any section already using it; "## review-queue" is only an example. Keep one status, then run check again
   refused       nothing was written: writes are refused while the file has errors that make its structure ambiguous; fix E-STATUS-DUP at L7 first, as the fix rows above say, then run this command again; the other rows above do not block this write
 ```
 
@@ -602,13 +602,13 @@ warn  check  locks
          fix  inspect this file and any state.agent-besties.md already in its directory; resolve their intended declarations before choosing which file should use that name, and never overwrite a separate existing state file (keep line 1 as "# .state")
   warn   L5  alice appears twice under locked
          why  the latest end time wins; no state write merges them, because state commands do not write this file until it is confirmed as this directory's state.agent-besties.md
-         fix  no state command is printed because this file is not confirmed as this directory's state.agent-besties.md; first settle which file that should be (when a W-NAME-STATE row is shown, its fix describes how; never overwrite a separate existing state file), then run check on this file again before anyone changes a declaration by hand; only the agent that declared an entry changes, renews or removes its own entry
+         fix  this file is not confirmed as this directory's state.agent-besties.md; settle which file should be, without overwriting another state file, then run check on this file again before editing declarations by hand. Only the declaring agent may change, renew or remove its entry
   warn   L9  dave under review ends before it starts
          why  treated as expired: it never counts as a lock; no state write removes it, because state commands do not write this file until it is confirmed as this directory's state.agent-besties.md
-         fix  no state command is printed because this file is not confirmed as this directory's state.agent-besties.md; first settle which file that should be (when a W-NAME-STATE row is shown, its fix describes how; never overwrite a separate existing state file), then run check on this file again before anyone changes a declaration by hand; only the agent that declared an entry changes, renews or removes its own entry
+         fix  this file is not confirmed as this directory's state.agent-besties.md; settle which file should be, without overwriting another state file, then run check on this file again before editing declarations by hand. Only the declaring agent may change, renew or remove its entry
   warn   L10  erin under review expired at 2026-09-17T08:00:00Z
          why  expired entries are ignored by conflict checks; no state write removes them, because state commands do not write this file until it is confirmed as this directory's state.agent-besties.md
-         fix  no state command is printed because this file is not confirmed as this directory's state.agent-besties.md; first settle which file that should be (when a W-NAME-STATE row is shown, its fix describes how; never overwrite a separate existing state file), then run check on this file again before anyone changes a declaration by hand; only the agent that declared an entry changes, renews or removes its own entry
+         fix  this file is not confirmed as this directory's state.agent-besties.md; settle which file should be, without overwriting another state file, then run check on this file again before editing declarations by hand. Only the declaring agent may change, renew or remove its entry
   entries       3
   locked        alice  2026-09-17T09:00:00Z..2026-09-17T12:00:00Z
   review        dave  2026-09-17T11:00:00Z..2026-09-17T10:30:00Z  expired

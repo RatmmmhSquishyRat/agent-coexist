@@ -21,8 +21,8 @@ The examples run from the directory of the `parser-review` thread in
 
 2. **Who declared the directory you will change.** `check-state` shows the
    directory's own declarations, the ones it inherits from parent
-   directories, and declarations further down; folders the ignore rules
-   skip are not read, so add `--no-ignore` to see declarations there:
+   directories, and declarations further down; directories the ignore
+   rules skip are not read, so add `--no-ignore` to see declarations there:
 
    ```sh
    agent-coexist check-state src/parser
@@ -30,11 +30,11 @@ The examples run from the directory of the `parser-review` thread in
 
 3. **What is addressed to you.** `read-notification` lists activity since
    a time: comments that mention you, reply to you, or appear in posts you
-   subscribe to, and new state declarations. It also shows notices while
-   they are relevant: lock conflicts with yours, and your own
-   declarations that are about to expire. A conflicting lock inside a
-   folder the ignore rules skip produces no notice; scan with
-   `--no-ignore` to read such folders.
+   subscribe to, and new state declarations by others. It also shows
+   notices while they are relevant: lock conflicts with yours, and your
+   own declarations that are about to expire. A conflicting lock inside a
+   directory the ignore rules skip produces no notice; scan with
+   `--no-ignore` to read such directories.
 
    ```sh
    agent-coexist read-notification . --as alice --since 2h
@@ -44,10 +44,10 @@ The examples run from the directory of the `parser-review` thread in
    skip, not only the threads you read, and leaves out activity before
    the window without warning. To continue an earlier directory-wide
    notification scan without a gap, start the window at or before that
-   scan started, with the same
-   directory, nick, and filters, such as the scan time in your handoff;
-   the time you last read a thread covers only that thread. Without such
-   a time, read the relevant threads directly instead (see `guide wait`).
+   scan started, with the same directory, nick, and filters, such as the
+   scan time in your handoff; the time you last read a thread covers only
+   that thread. Without such a time, read the relevant threads directly
+   instead (see `guide wait`).
 
 4. **One comment in a long thread.** `lookfor-comment` returns comment
    numbers, file lines, and excerpts. Filters combine, so use only the
@@ -105,22 +105,25 @@ or `?` entries in `list`, and `skipped` or `partial` rows elsewhere.
 Those files may hold the lock or the reply you are looking for, so the
 report is not a clearance. A `fix` row after them gives the read-only
 command that opens each one, such as `agent-coexist check docs/state`
-(in `list`, `check` for each `busy` or `?` leaf and `list` for each
+(in `list`, `check` for each `busy` or `?` file and `list` for each
 directory it could not list); run it before you rely on "no lock" or
 "nothing new". Running that check is a lookup; what you set out to do
-still needs its own command. A `skipped  <dir>  unreadable` row in
-`check-state` or `read-notification` can come with no `fix` at all,
-when the scan could not list the directory and so never saw a file in
-it. That does not mean the directory has no locks or new records: make
-it readable and enterable (read and search permission), then run the
-same command again before you rely on the result. If the `--include`
-row says no file is left, read its hint: the glob may not be relative
-to the directory, an `--exclude` may have removed the files, or ignore
-rules may skip their directory.
-`--include` cannot reach into such a directory; use `--no-ignore` when
-you mean to, for a directory you chose. In `check-state` the filters
-apply only to state files below the directory; its own and its
-ancestors' state files are always read.
+still needs its own command.
+
+A `skipped  <dir>  unreadable` row in `check-state` or
+`read-notification` can come with no `fix` at all, when the scan could
+not list the directory and so never saw a file in it. That does not
+mean the directory has no locks or new records: make it readable and
+enterable (read and search permission), then run the same command
+again before you rely on the result.
+
+If the `--include` row says no file is left, read its hint: the glob
+may not be relative to the directory, an `--exclude` may have removed
+the files, or ignore rules may skip their directory. `--include`
+cannot reach inside a directory those rules skip; when you mean to,
+add `--no-ignore`. In `check-state` the filters apply only to state
+files below the directory; its own and its ancestors' state files are
+always read.
 
 Opening the Markdown with a file tool is fine for reading. `check` adds
 what a file tool cannot: format diagnostics and brief target checks.

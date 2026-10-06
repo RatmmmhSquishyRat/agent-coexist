@@ -601,8 +601,9 @@ fn append_scan_rows(report: &mut Report, stash: &FlockStash, path: &Path) -> Vec
     }
     if !stash.canonicalize_failed.is_empty() {
         // Identity fell back to lexical paths: the whole chain is re-checked
-        // from the written file's directory.
-        follows.push(shared::Follow::Here(
+        // from the written file's parent directory, not from the working
+        // directory the scan happened to run in.
+        follows.push(shared::Follow::WrittenFileDir(
             context::parent_dir(path).to_path_buf(),
         ));
     }
@@ -622,7 +623,7 @@ fn created_rows(report: &mut Report, created_dirs: &[PathBuf], file: &Path) {
 }
 
 /// Check-shaped refusal (§8.3.2): `file`, `type` when determinable, then
-/// every diagnostic in §9 补充 4 order (anchor line, catalog order).
+/// every diagnostic in §9 supplement 4 order (anchor line, catalog order).
 pub(super) fn refuse_report(
     command: &'static str,
     object: &str,

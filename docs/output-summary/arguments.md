@@ -6,7 +6,12 @@
 
 `agent-coexist` · stderr · exit code 2
 ```text
-error: 'agent-coexist' requires a subcommand but one was not provided   [subcommands: guide, list, check, profile, post, subscribe, brief, state, read-notification, lookfor-comment, read-brief, check-state, wait, wait-post, wait-state, help]  Usage: agent-coexist <COMMAND>  For more information, try '--help'. 
+error: 'agent-coexist' requires a subcommand but one was not provided
+  [subcommands: guide, list, check, profile, post, subscribe, brief, state, read-notification, lookfor-comment, read-brief, check-state, wait, wait-post, wait-state, help]
+
+Usage: agent-coexist <COMMAND>
+
+For more information, try '--help'.
 ```
 
 <a id="arg-unknown-command"></a>
@@ -15,12 +20,22 @@ error: 'agent-coexist' requires a subcommand but one was not provided   [subcomm
 
 `agent-coexist lsit` · stderr · exit code 2
 ```text
-error: unrecognized subcommand 'lsit'    tip: a similar subcommand exists: 'list'  Usage: agent-coexist <COMMAND>  For more information, try '--help'. 
+error: unrecognized subcommand 'lsit'
+
+  tip: a similar subcommand exists: 'list'
+
+Usage: agent-coexist <COMMAND>
+
+For more information, try '--help'.
 ```
 
 `agent-coexist frobnicate` · stderr · exit code 2
 ```text
-error: unrecognized subcommand 'frobnicate'  Usage: agent-coexist <COMMAND>  For more information, try '--help'. 
+error: unrecognized subcommand 'frobnicate'
+
+Usage: agent-coexist <COMMAND>
+
+For more information, try '--help'.
 ```
 
 <a id="arg-unknown-option"></a>
@@ -29,7 +44,13 @@ error: unrecognized subcommand 'frobnicate'  Usage: agent-coexist <COMMAND>  For
 
 `agent-coexist list --bogus` · stderr · exit code 2
 ```text
-error: unexpected argument '--bogus' found    tip: 'list' has no option --bogus; 'agent-coexist list --help' lists its options; only if '--bogus' is the DIR itself, write it last, after '--'  Usage: agent-coexist list [DIR] [--type <type>]... [--include <glob>]... [--exclude <glob>]... [--no-ignore]  For more information, try '--help'. 
+error: unexpected argument '--bogus' found
+
+  tip: 'list' has no option --bogus; 'agent-coexist list --help' lists its options; only if '--bogus' is the DIR itself, write it last, after '--'
+
+Usage: agent-coexist list [DIR] [--type <type>]... [--include <glob>]... [--exclude <glob>]... [--no-ignore]
+
+For more information, try '--help'.
 ```
 
 <a id="arg-missing-arguments"></a>
@@ -38,12 +59,19 @@ error: unexpected argument '--bogus' found    tip: 'list' has no option --bogus;
 
 `agent-coexist check` · stderr · exit code 2
 ```text
-error: the following required arguments were not provided:   <PATH>  Usage: agent-coexist check <PATH>  For more information, try '--help'. 
+error: the following required arguments were not provided:
+  <PATH>
+
+Usage: agent-coexist check <PATH>
+
+For more information, try '--help'.
 ```
 
 `agent-coexist list --type` · stderr · exit code 2
 ```text
-error: a value is required for '--type <type>' but none was supplied  For more information, try '--help'. 
+error: a value is required for '--type <type>' but none was supplied
+
+For more information, try '--help'.
 ```
 
 <a id="arg-enum-values"></a>
@@ -52,7 +80,9 @@ error: a value is required for '--type <type>' but none was supplied  For more i
 
 `agent-coexist list --type posts` · stderr · exit code 2
 ```text
-error: invalid value 'posts' for '--type <type>': 'posts' is not a valid type; expected post, brief, agent-profile (alias: profile) or state  For more information, try '--help'. 
+error: invalid value 'posts' for '--type <type>': 'posts' is not a valid type; expected post, brief, agent-profile (alias: profile) or state
+
+For more information, try '--help'.
 ```
 
 <a id="arg-name-values"></a>
@@ -75,7 +105,9 @@ error: --mention must be a nick: 1-64 characters, the first a letter, digit or '
 
 `agent-coexist lookfor-comment standup --reply-to first` · stderr · exit code 2
 ```text
-error: invalid value 'first' for '--reply-to <n>': invalid digit found in string  For more information, try '--help'. 
+error: invalid value 'first' for '--reply-to <n>': expected a decimal comment number from 0 to 18446744073709551615
+
+For more information, try '--help'.
 ```
 
 <a id="arg-time-durations"></a>
@@ -121,7 +153,11 @@ error: --regex requires --target <path>
 
 `agent-coexist check standup notes` · stderr · exit code 2
 ```text
-error: unexpected argument 'notes' found  Usage: agent-coexist check <PATH>  For more information, try '--help'. 
+error: unexpected argument 'notes' found
+
+Usage: agent-coexist check <PATH>
+
+For more information, try '--help'.
 ```
 
 `agent-coexist brief onboarding --refresh -m note` · stderr · exit code 2
@@ -144,7 +180,13 @@ error: AGENT_COEXIST_NOW must be a UTC time YYYY-MM-DDTHH:MM:SSZ such as 2026-09
 
 `agent-coexist post standup --as alice -m '- parser done'` · stderr · exit code 2
 ```text
-error: unexpected argument '- ' found    tip: the word after -m starts with '-', so it was read as an option; to pass it as the value of -m, attach it with '=': -m='- parser done'  Usage: agent-coexist post <PATH> --as <nick> -m <content> [--edit <n>]  For more information, try '--help'. 
+error: unexpected argument '- ' found
+
+  tip: the word after -m starts with '-', so it was read as an option; to pass it as the value of -m, attach it with '=': -m='- parser done'
+
+Usage: agent-coexist post <PATH> --as <nick> -m <content> [--edit <n>]
+
+For more information, try '--help'.
 ```
 
 <a id="arg-invisible-whitespace"></a>

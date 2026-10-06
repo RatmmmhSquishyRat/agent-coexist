@@ -11,8 +11,8 @@
 //! - [`blocking_report`]: the §8.3.2 form — `file` row, `type` row when
 //!   the H1 kind survived, diagnostic rows, first line `error`.
 //! - [`dir_error`]: the §7.3.3 DIR preconditions.
-//! - [`sort_diagnostics`]: §9 补充4 anchor ordering (line ascending,
-//!   same line in §9 table order).
+//! - [`sort_diagnostics`]: §9 supplement 4 anchor ordering (line
+//!   ascending, same line in §9 table order).
 //!
 //! Command row logic lives in the per-command files below.
 
@@ -106,13 +106,15 @@ fn canonicalize_notes(
     true
 }
 
-/// `include` hint of `list` and `read-notification`, whose every file comes
-/// from the filtered walk: what happened, and the first cause to check.
+/// `include` hint of `list`, whose every file comes from the filtered
+/// walk: what happened, and the first cause to check.
 const INCLUDE_HINT_EMPTY: &str =
     "no file is left after the filters; check that this glob is relative to DIR";
-/// `include` hint of `check-state`: the filters apply only to the walk
-/// under DIR, while the state files of DIR and its ancestors are always
-/// read, so rows from them may stand next to this hint.
+/// `include` hint of `check-state` and `read-notification`: the filters
+/// apply only to the walk under DIR, while the state files of DIR and
+/// its ancestors are always read (the notification ancestor pass also
+/// picks up DIR's own state file when the filtered walk skipped it), so
+/// rows from them may stand next to this hint.
 const INCLUDE_HINT_EMPTY_STATE: &str = "no file under DIR is left after the filters (the state files of DIR and its ancestors are read regardless); check that this glob is relative to DIR";
 /// Appended when `--exclude` was given: exclude wins over include.
 const INCLUDE_HINT_EXCLUDE: &str = ", and that --exclude does not remove the files it matches";
@@ -164,8 +166,8 @@ fn load_file(path: &Path, now: Time, wait_ms: u64) -> Result<doc::Document, Load
     }
 }
 
-/// §9 补充4: anchor line ascending; same line in §9 table order. Stable
-/// for equal keys, so original parse order is kept.
+/// §9 supplement 4: anchor line ascending; same line in §9 table order.
+/// Stable for equal keys, so original parse order is kept.
 fn sort_diagnostics(mut diags: Vec<Diagnostic>) -> Vec<Diagnostic> {
     diags.sort_by_key(|d| (d.line, diag::order(d.id)));
     diags

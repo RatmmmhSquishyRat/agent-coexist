@@ -59,7 +59,7 @@ pub struct Entry {
     pub attributes: Vec<Property>,
     /// Offset where NEW property lines are inserted: the start of the first
     /// non-property non-blank line after the H2, or the section end (spec
-    /// §10.3.2 “属性区末尾”). Blank lines belong to the property area.
+    /// §10.3.2 "end of the property area"). Blank lines belong to the property area.
     pub attrs_end: usize,
 }
 

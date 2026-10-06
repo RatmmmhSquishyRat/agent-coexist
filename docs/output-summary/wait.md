@@ -196,7 +196,7 @@ stdout:
 ```text
 error  wait  standup
   reason        file is locked by another process
-  fix           a retried wait starts from a new baseline and does not report changes made while the file was busy, so after its ready line, read the file again; retry shortly: agent-coexist wait standup
+  fix           wait briefly; restart with this command, then read the file again after its ready line (the new wait cannot report changes made while it was stopped): agent-coexist wait standup
 ```
 
 stderr:
@@ -210,7 +210,7 @@ stdout:
 ```text
 error  wait  standup
   reason        file is in use by another program
-  fix           a retried wait starts from a new baseline and does not report changes made while the file was busy, so after its ready line, read the file again; close the other program, then retry: agent-coexist wait standup
+  fix           close the other program; restart with this command, then read the file again after its ready line (the new wait cannot report changes made while it was stopped): agent-coexist wait standup
 ```
 
 stderr:
@@ -222,13 +222,13 @@ waiting  wait  standup
 
 ## The path breaks after the ready line: three fix directives
 
-`agent-coexist wait-post room/standup --as alice` · exit code 1 · The parent directory was removed (Windows).
+`agent-coexist wait-post room/standup --as alice` · exit code 1 · Windows: the parent junction is moved away after ready; the post remains in its backing directory.
 
 stdout:
 ```text
 error  wait-post  room/standup
   reason        cannot open room/standup.agent-besties.md: The system cannot find the path specified. (os error 3)
-  fix           a retried wait starts from a new baseline and does not report changes made while the file could not be read, so after its ready line, read the file again; restore the intended path of room/standup.agent-besties.md: if the directory on it is missing, recreate it, or move it back if it was renamed away; if a file now occupies the directory's place, move that file aside, keeping it; if room/standup.agent-besties.md is a dangling link, restore the file it points at, then retry: agent-coexist wait-post room/standup --as alice
+  fix           restore the intended path of room/standup.agent-besties.md; if the directory on it is missing, recreate it, or move it back if it was renamed away; if a file now occupies the directory's place, move that file aside, keeping it; if room/standup.agent-besties.md is a dangling link, restore the file it points at; restart with this command, then read the file again after its ready line (the new wait cannot report changes made while it was stopped): agent-coexist wait-post room/standup --as alice
 ```
 
 stderr:
@@ -242,7 +242,7 @@ stdout:
 ```text
 error  wait-post  room/standup
   reason        cannot open room/standup.agent-besties.md: Not a directory (os error 20)
-  fix           a retried wait starts from a new baseline and does not report changes made while the file could not be read, so after its ready line, read the file again; a directory on the path of room/standup.agent-besties.md is now a file; move that file aside, keeping it, and recreate the directory it replaced, then retry: agent-coexist wait-post room/standup --as alice
+  fix           a directory on the path of room/standup.agent-besties.md is now a file; move that file aside, keeping it, and recreate the directory it replaced; restart with this command, then read the file again after its ready line (the new wait cannot report changes made while it was stopped): agent-coexist wait-post room/standup --as alice
 ```
 
 stderr:
@@ -256,7 +256,7 @@ stdout:
 ```text
 error  wait  standup
   reason        cannot open standup.agent-besties.md: path does not name a regular file
-  fix           a retried wait starts from a new baseline and does not report changes made while the file could not be read, so after its ready line, read the file again; the path of standup.agent-besties.md itself no longer names a regular file; move whatever now occupies it aside, keeping it; the watch also accepts the file absent, so nothing needs to be created in its place, then retry: agent-coexist wait standup
+  fix           the path of standup.agent-besties.md itself no longer names a regular file; move whatever now occupies it aside, keeping it; the watch also accepts the file absent, so nothing needs to be created in its place; restart with this command, then read the file again after its ready line (the new wait cannot report changes made while it was stopped): agent-coexist wait standup
 ```
 
 stderr:

@@ -27,9 +27,9 @@ agent-coexist check-state src/parser
 
 `list` shows the coexist files below the directory, with their types; it
 follows ignore rules such as `.gitignore`, so an empty result only means
-none were found there. If you expect records inside an ignored folder,
-run `agent-coexist list <dir> --no-ignore` for the directory you chose,
-or open the files there directly. `check-state` shows who declared intent
+none were found there. If you expect records inside an ignored
+directory, run `agent-coexist list <dir> --no-ignore` on it, or open
+the files there directly. `check-state` shows who declared intent
 for the directory you are about to change; name your own directory
 instead of `src/parser`. Open the files that touch your task with your
 file tool and read them. Reading creates nothing.
@@ -45,22 +45,20 @@ for an agent, whether that agent wrote, subscribed, declared state, was
 `@`-mentioned, or is described in a profile. A profile's file name is
 not tied to `--as`, so go by what the profile says. Avoid bare harness,
 model, or role names such as `claude` or `main`: someone else may use
-them too. A nick is 1–64 characters: a Unicode letter, digit, or `_`
-first, then also `-`; no dots, no spaces.
+them too. A nick is 1–64 characters: the first is a Unicode letter,
+digit, or `_`; the rest may also be `-`. No dots, no spaces.
 
 When you continue the same work, in a later session or another harness,
 keep exactly that nick. Others address you by it, and
 `read-notification --as`, `wait-post --as`, `post --edit` of your own
 comment, and `state --remove` of your own declaration match it as typed.
-So that your next session can find it, put the nick, the threads and
-comment numbers you used, and when you last read each of those threads
-into your ordinary handoff or session summary (see "Finishing or handing
-off" in `guide write`). Those times cover only those threads. If you
-also ran `read-notification`, record its command, with directory, nick,
-and filters, a time at or before it started, and the paths its `skipped`
-or `partial` rows named that you have not read directly since, or that
-there were none; `guide wait` explains how the next scan uses them. When
-you come back, take the nick from that summary or from an explicit
+Put the nick in your ordinary handoff or session summary, so the next
+session can find it: the nick, the threads and comment numbers you
+used, when you last read each of those threads (a time covers only its
+own thread), and, if you also ran `read-notification`, what that scan
+recorded. "Finishing or handing off" in `guide write` gives the exact
+recipe; `guide wait` explains how the next scan uses it. When you
+come back, take the nick from that summary or from an explicit
 assignment. A fresh session usually cannot tell its own earlier comments
 from others' by their content, and your harness or model name does not
 tell you which nick you used.
@@ -215,8 +213,8 @@ Exact flags: `agent-coexist <command> --help`.
 
 Coexist has four file types. Pick the one that fits the next thing
 someone must know or do; you do not need all four, and there is nothing
-to initialize. Where a task already has coexist files, a folder for
-notes, or a naming habit, use it.
+to initialize. Where a task already has coexist files, a notes
+directory, or a naming habit, use it.
 
 ## Post: a conversation
 
@@ -225,9 +223,10 @@ Each comment is numbered in file order. In a comment body, `@bob` names a
 recipient and `@#3` replies to comment 3 of the same post. The
 `parser-review` thread in `agent-coexist guide` is a post.
 
-A post may also have subscribers: agents who want every new comment in
-it included when they run `read-notification`, not only mentions and
-replies. Subscribing does not push anything to them:
+A post may also have subscribers: agents who want `read-notification`
+to include new comments by other authors in that post within its scan
+window, not only mentions and replies. Their own comments are excluded.
+Subscribing does not push anything to them:
 
 ```sh
 agent-coexist subscribe parser-review --as bob
@@ -281,13 +280,14 @@ exist: `agent-coexist state src/parser ...` writes
 `src/parser/state.agent-besties.md`.
 
 Put files where the people who need them will look: a thread next to the
-work it discusses, or a shared notes folder the team already uses. A
-folder that ignore rules such as `.gitignore` exclude is skipped by
+work it discusses, or a shared notes directory the team already uses. A
+directory that ignore rules such as `.gitignore` exclude is skipped by
 `list`, `check-state`, and `read-notification`, so others need
 `--no-ignore` or the file's path to find records there. The conflict
-check `state` runs after writing skips such folders too, and `state`
+check `state` runs after writing skips such directories too, and `state`
 has no `--no-ignore`; run `agent-coexist check-state <dir> --no-ignore`
 to see locks inside them.
+
 All participants need access to the same files. Coexist does not copy
 them between checkouts or machines, and locking on network shares is not
 guaranteed.
@@ -329,8 +329,8 @@ The examples run from the directory of the `parser-review` thread in
 
 2. **Who declared the directory you will change.** `check-state` shows the
    directory's own declarations, the ones it inherits from parent
-   directories, and declarations further down; folders the ignore rules
-   skip are not read, so add `--no-ignore` to see declarations there:
+   directories, and declarations further down; directories the ignore
+   rules skip are not read, so add `--no-ignore` to see declarations there:
 
    ```sh
    agent-coexist check-state src/parser
@@ -338,11 +338,11 @@ The examples run from the directory of the `parser-review` thread in
 
 3. **What is addressed to you.** `read-notification` lists activity since
    a time: comments that mention you, reply to you, or appear in posts you
-   subscribe to, and new state declarations. It also shows notices while
-   they are relevant: lock conflicts with yours, and your own
-   declarations that are about to expire. A conflicting lock inside a
-   folder the ignore rules skip produces no notice; scan with
-   `--no-ignore` to read such folders.
+   subscribe to, and new state declarations by others. It also shows
+   notices while they are relevant: lock conflicts with yours, and your
+   own declarations that are about to expire. A conflicting lock inside a
+   directory the ignore rules skip produces no notice; scan with
+   `--no-ignore` to read such directories.
 
    ```sh
    agent-coexist read-notification . --as alice --since 2h
@@ -352,10 +352,10 @@ The examples run from the directory of the `parser-review` thread in
    skip, not only the threads you read, and leaves out activity before
    the window without warning. To continue an earlier directory-wide
    notification scan without a gap, start the window at or before that
-   scan started, with the same
-   directory, nick, and filters, such as the scan time in your handoff;
-   the time you last read a thread covers only that thread. Without such
-   a time, read the relevant threads directly instead (see `guide wait`).
+   scan started, with the same directory, nick, and filters, such as the
+   scan time in your handoff; the time you last read a thread covers only
+   that thread. Without such a time, read the relevant threads directly
+   instead (see `guide wait`).
 
 4. **One comment in a long thread.** `lookfor-comment` returns comment
    numbers, file lines, and excerpts. Filters combine, so use only the
@@ -413,22 +413,25 @@ or `?` entries in `list`, and `skipped` or `partial` rows elsewhere.
 Those files may hold the lock or the reply you are looking for, so the
 report is not a clearance. A `fix` row after them gives the read-only
 command that opens each one, such as `agent-coexist check docs/state`
-(in `list`, `check` for each `busy` or `?` leaf and `list` for each
+(in `list`, `check` for each `busy` or `?` file and `list` for each
 directory it could not list); run it before you rely on "no lock" or
 "nothing new". Running that check is a lookup; what you set out to do
-still needs its own command. A `skipped  <dir>  unreadable` row in
-`check-state` or `read-notification` can come with no `fix` at all,
-when the scan could not list the directory and so never saw a file in
-it. That does not mean the directory has no locks or new records: make
-it readable and enterable (read and search permission), then run the
-same command again before you rely on the result. If the `--include`
-row says no file is left, read its hint: the glob may not be relative
-to the directory, an `--exclude` may have removed the files, or ignore
-rules may skip their directory.
-`--include` cannot reach into such a directory; use `--no-ignore` when
-you mean to, for a directory you chose. In `check-state` the filters
-apply only to state files below the directory; its own and its
-ancestors' state files are always read.
+still needs its own command.
+
+A `skipped  <dir>  unreadable` row in `check-state` or
+`read-notification` can come with no `fix` at all, when the scan could
+not list the directory and so never saw a file in it. That does not
+mean the directory has no locks or new records: make it readable and
+enterable (read and search permission), then run the same command
+again before you rely on the result.
+
+If the `--include` row says no file is left, read its hint: the glob
+may not be relative to the directory, an `--exclude` may have removed
+the files, or ignore rules may skip their directory. `--include`
+cannot reach inside a directory those rules skip; when you mean to,
+add `--no-ignore`. In `check-state` the filters apply only to state
+files below the directory; its own and its ancestors' state files are
+always read.
 
 Opening the Markdown with a file tool is fine for reading. `check` adds
 what a file tool cannot: format diagnostics and brief target checks.
@@ -556,15 +559,15 @@ If someone else's `locked` already overlaps yours, the report shows
 post. The conflict check after the write reads the state files of that
 directory and its ancestors and the state files below it that ignore
 rules do not skip; `state` has no `--no-ignore`, so to see locks inside
-ignored folders run `check-state <dir> --no-ignore`. Do not remove
+ignored directories run `check-state <dir> --no-ignore`. Do not remove
 another nick's declaration to get past it. If the report instead shows
-`skipped` or `partial` rows and a `fix`, your
-declaration is written but some state file was not read, so a lock
-there may have been missed. Do not declare again: do what the `fix`
-says. It may first ask you to make a directory it could not read both
-readable and enterable; the read-only command it then names is `check`
-on a file or `check-state` on a directory. Run that command and talk to
-any holder it shows. A `profile` or `brief` write can end the same way.
+`skipped` or `partial` rows and a `fix`, your declaration is written but
+some state file was not read, so a lock there may have been missed. Do
+not declare again: do what the `fix` says. It may first ask you to make a
+directory it could not read both readable and enterable; the read-only
+command it then names is `check` on a file or `check-state` on a
+directory. Run that command and talk to any holder it shows. A `profile`
+or `brief` write can end the same way.
 
 Release your declaration when you finish, before it expires:
 
@@ -594,11 +597,11 @@ command as you ran it, a time at or before it started, and the paths its
 or that there were none, for example: "Scan started at 2026-09-27T10:02:00Z:
 `agent-coexist read-notification . --as alice --since 1h`; no skipped or
 partial rows." `guide wait` explains how the next scan uses that start
-time and those paths. The comments alone do
-not say which nick was yours. A session that finds no such note and has
-no assigned nick takes a new one, says which work it continues, and reads
-the threads directly, as "When you arrive" in `agent-coexist guide`
-describes; it does not adopt a nick from the records.
+time and those paths. The comments alone do not say which nick was yours.
+A session that finds no such note and has no assigned nick takes a new
+one, says which work it continues, and reads the threads directly, as
+"When you arrive" in `agent-coexist guide` describes; it does not adopt a
+nick from the records.
 
 After an interruption, look at the actual files and state before
 renewing or cleaning up: an expired declaration only ran out of time,
@@ -626,17 +629,19 @@ uses.
   declaration covers this `profile` or `brief` write. If you left out
   `--as`, even a lock under your own nick can block it. Wait until the
   reported time or coordinate; do not retry in a tight loop.
-- A diagnostic's `fix` line is a command, an instruction such as a hand
-  edit (a heading to copy), or an instruction, a colon, and a command.
-  Read it before acting, and carry out instructions yourself. The command
-  part starts at the program name. In the combined form the words before
-  the colon say what the command is for. Common cases, not a complete
-  list:
+- A diagnostic's `fix` line takes one of three shapes: a command; an
+  instruction to carry out yourself, such as a hand edit (a heading to
+  copy); or an instruction, a colon, and a command. Read it before acting,
+  and carry out instructions yourself. The command part starts at the
+  program name. In the combined form the words before the colon say what
+  the command is for. Common cases, not a complete list:
   - Repair, then retry, as in `retry shortly: agent-coexist post
     parser-review …` or `correct line 1 of room/.ignore, then retry: …`.
-    Do the instruction first (wait, fix the file), then run the command;
-    it repeats your original command, including the program path you
-    typed.
+    Do the repair first (wait, fix the file), then run the command; it
+    repeats your original command, including the program path you typed.
+    A step the fix places after a restarted wait's ready line, such as
+    reading the file again, comes after you run the command and see that
+    line.
   - Look up, then correct, as in `pick an existing title from:
     agent-coexist check onboarding.agent-besties.md` or `find the number
     of the comment to edit, then rerun --edit with it: agent-coexist
@@ -653,12 +658,12 @@ uses.
     place of the original, not after it.
   - A command for a named agent, as in `if still needed, that agent
     renews it: …`, `the command for carol: …`, or `agree who continues,
-    then the other runs the removal; …`. Run it only if you are that agent, under
-    your own nick; otherwise tell that agent in a post. Typing someone
-    else's nick into `--as`, or into `--remove`, where `--as` defaults to
-    the removed nick, changes their records as if they had done it. On a
-    lock conflict, agree in a post who yields; only the agent that yields
-    runs `--remove` with its own nick.
+    then the other runs the removal; …`. Run it only if you are that
+    agent, under your own nick; otherwise tell that agent in a post.
+    Typing someone else's nick into `--as`, or into `--remove`, where
+    `--as` defaults to the removed nick, changes their records as if they
+    had done it. On a lock conflict, agree in a post who yields; only the
+    agent that yields runs `--remove` with its own nick.
 
   When the words before the colon fit none of these, read them as a
   description of the command and any condition for running it; if they
@@ -786,8 +791,9 @@ neither a wait nor a notification scan is a message queue.
 ## Pick the wait
 
 - `agent-coexist wait-post parser-review --as alice`: a comment in that
-  post that mentions alice or replies to one of her comments is new,
-  edited, or newly relevant. Without `--as`, any change to the post counts.
+  post that is new, edited, or newly relevant and mentions alice or
+  replies to one of her comments. Without `--as`, any change to the
+  post counts.
 - `agent-coexist wait onboarding`: any byte change to that coexist file
   (here the `onboarding` brief from `guide write`), reported as a diff of
   its parsed content. A formatting-only change reports
@@ -821,9 +827,8 @@ read again in a later second or open the thread directly.
 The scan covers every post under the directory that ignore rules do not
 skip. To continue an earlier scan's coverage without a gap, keep its
 directory, `--as` nick, and filters, and pass a time at or before that
-scan started. The time you
-last read a thread, left a session, or last posted says nothing about
-other threads: after a scan at 10:02, an
+scan started. The time you last read a thread, left a session, or last
+posted says nothing about other threads: after a scan at 10:02, an
 `@alice` mention in another thread at 10:03, and a read of alice's own
 thread at 10:05, a `--since` of 10:05 misses the mention, while 10:02
 lists it. An earlier cutoff can show the same record twice; recognize it
@@ -848,9 +853,9 @@ others that touch your task.
 The subscriber list is read as it is now, not as it was when a comment
 was written. Conflicts and your own soon-expiring declarations appear
 whenever they are relevant, regardless of the window. A conflicting
-lock inside a folder the ignore rules skip produces no notice; scan
-with `--no-ignore` to read such folders. Check `skipped` and `partial`
-rows before concluding that nothing is new. The CLI keeps no
+lock inside a directory the ignore rules skip produces no notice; scan
+with `--no-ignore` to read such directories. Check `skipped` and
+`partial` rows before concluding that nothing is new. The CLI keeps no
 read cursor and does not mark anything as delivered.
 
 ## Managing the wait process
@@ -870,28 +875,29 @@ read cursor and does not mark anything as delivered.
   starting point.
 - `E-LOCKED` or `E-INUSE` while sampling exits 3; retry or close the other
   program as for any command. A retried wait records a new starting point
-  and does not report changes made while the file was busy, so after its
-  ready line, read the file again as in step 4 above.
+  and does not report changes made while the file was busy, so once it
+  prints its ready line, read the file again as in step 4 above.
 - The same restart rule covers every failed wait, not only a busy file.
   An invalid snapshot (for example a reply a hand edit left with an
   unclosed fence), an unreadable file, or an I/O error also ends the
-  wait. If that I/O error is after the ready line and the intended
-  path no longer resolves (its parent missing, renamed away or taken
-  by a file) or, on Linux and macOS, the path itself is no longer a
-  regular file, the `fix` says how to restore that path (recreate or
-  move it back; move aside whatever replaced it, keeping it) and then
-  prints the original wait as the command to retry; a path that was
-  wrong from the start still says to correct it, with no retry. On
-  Windows a watched file replaced by a directory after the ready line
-  is reported as access denied and gets the generic remedy — check
+  wait.
+- An I/O error after the ready line can mean the intended path no
+  longer resolves: its parent missing, renamed away or taken by a file,
+  or, on Linux and macOS, the path itself no longer a regular file.
+  Then the `fix` says how to restore that path (recreate or move it
+  back; move aside whatever replaced it, keeping it) and then prints
+  the original wait as the command to retry; a path that was wrong
+  from the start still says to correct it, with no retry. On Windows
+  a watched file replaced by a directory after the ready line is
+  reported as access denied and gets the generic remedy — check
   permissions, or wait until another program stops using, deleting or
   replacing the file — which cannot tell a replacement from a busy
   file; once you establish that a directory now occupies the path,
   move it aside, keep it, start the original wait again, and read the
   file after its ready line. Once you fix the cause and start the wait
-  again, its new starting point already contains everything then in the file,
-  including the change you were waiting for, so read the file again
-  after the new ready line as in step 4 above.
+  again, its new starting point already contains everything then in
+  the file, including the change you were waiting for, so read the
+  file again after the new ready line as in step 4 above.
 - A hit report's state warnings — conflicts and expiry — are judged at
   the wait's start time. A lock that expired while you waited still counts
   as valid, so a conflict warning can appear with no expiry warning.
@@ -957,10 +963,10 @@ Which read command:
 Exit codes of the business commands (all except guide and help):
   0    first line 'ok' or 'warn'; 'warn' also exits 0, so read the first line and rows for conflicts and incomplete scans
   1    first line 'error'; also when a command could not write its report to stdout (a write command may already have changed the file: check it before retrying)
-  2    usage error: one 'error: ...' line on stderr, nothing on stdout
+  2    usage error on stderr (possibly multiple lines), nothing on stdout
   3    busy or locked (E-LOCKED, E-INUSE, E-FLOCKED); the report's 'fix' row says what to do next
   130  wait, wait-post or wait-state cancelled with Ctrl-C; no stdout
-guide, help, --help and --version print information with no ok/warn/error line and exit 0; usage errors still exit 2, and a failed guide write exits 1.
+guide, help, --help and --version print information with no ok/warn/error line and exit 0; usage errors still exit 2, and guide exits 1 if it cannot write or flush its page to stdout.
 
 Scan progress ('scanning dirs: N, files: M...') appears on stderr only when stderr is a terminal. No progress line does not mean success or failure; judge the result by the report and the exit code.
 Examples and 'fix' commands use POSIX shell quoting (Git Bash on Windows); adjust the quoting for cmd.exe or PowerShell.
@@ -982,11 +988,11 @@ Arguments:
 Options:
       --as <nick>       your nick; not written, only exempts your own 'locked' declarations
       --section <name>  the section to set or remove
-  -m <content>          the section body, stored verbatim in a code fence
+  -m <content>          the section body, stored in a code fence
       --remove          delete the whole --section
   -h, --help            Print help
 
---section <name> -m <content> sets that section's body, stored verbatim in a code fence; --section <name> --remove deletes the section. Without --section, creates the file (heading only) or reports 'unchanged'. Content that starts with '-' must be attached: -m='- item'.
+--section <name> -m <content> sets that section's body, stored in a code fence. CRLF line endings become LF, and whitespace at the end of the body is removed. --section <name> --remove deletes the section. Without --section, creates the file (heading only) or reports 'unchanged'. Content that starts with '-' must be attached: -m='- item'.
 --as is your nick. It is not written; it only exempts your own 'locked' declarations. A valid 'locked' by another nick on the file's directory or an ancestor refuses the write with E-FLOCKED (exit 3); without --as, your own 'locked' refuses it too.
 If another write holds the file, fails after about 200ms with E-LOCKED (exit 3); retry shortly. On E-FLOCKED, retry after the time shown in 'reason' or ask the holder; do not retry in a loop.
 Example: agent-coexist profile agents/alice --section role -m 'Rust implementer. Owns crates/core.'
@@ -1003,11 +1009,11 @@ Arguments:
 
 Options:
       --as <nick>  the author nick written in the comment heading
-  -m <content>     the comment body, stored verbatim in a code fence
+  -m <content>     the comment body, stored in a code fence
       --edit <n>   replace the whole body of your own comment #n (its author must be --as)
   -h, --help       Print help
 
--m is the comment body, stored verbatim in a code fence. In it, @nick mentions someone and @#n replies to comment n. A body that starts with '-', such as a Markdown list, must be attached: -m='- item'. --as is the author nick written in the comment heading.
+-m is the comment body, stored in a code fence. CRLF line endings become LF, and whitespace at the end of the body is removed. In it, @nick mentions someone and @#n replies to comment n. A body that starts with '-', such as a Markdown list, must be attached: -m='- item'. --as is the author nick written in the comment heading.
 --edit <n> replaces the whole body of your own comment #n (its author must be --as), so resend everything you want to keep.
 The report's 'comment' row names the comment written.
 Waits up to 5s for the file lock (AGENT_COEXIST_LOCK_WAIT_MS overrides); if still busy: E-LOCKED, exit 3; retry the same command shortly.
@@ -1028,7 +1034,7 @@ Options:
       --cancel     remove --as from the subscriber list instead of adding it
   -h, --help       Print help
 
-Adds --as to the post's subscriber list, so read-notification --as <nick> lists every new comment in that post. Nothing is pushed to subscribers, and wait-post does not use the list.
+Adds --as to the post's subscriber list, so read-notification --as <nick> includes new comments by other authors in that post within the scan's time window. Nothing is pushed to subscribers, and wait-post does not use the list.
 --cancel removes --as from the list. Subscribing twice, or cancelling a nick that is not subscribed, changes nothing ('unchanged <nick>').
 Locking is as for post: waits up to 5s (AGENT_COEXIST_LOCK_WAIT_MS overrides), then E-LOCKED, exit 3.
 Example: agent-coexist subscribe docs/standup --as alice
@@ -1204,7 +1210,7 @@ Options:
       --no-ignore              apply no ignore rules (.gitignore, .ignore, .git/info/exclude, global gitignore)
   -h, --help                   Print help
 
-Lists, oldest first, what happened since --since that concerns the --as nick: comments that mention it, reply to its comments, or appear in posts it subscribes to; state declarations by others; locks that overlap its own; its own declarations that end soon or have ended.
+Lists, oldest first, what happened since --since that concerns the --as nick: comments by other authors that mention it, reply to its comments, or appear in posts it subscribes to; state declarations by others; locks that overlap its own; its own declarations that end soon or have ended.
 Scans every post and state file under DIR that ignore rules do not skip (default: the current directory) and also reads ancestor state files. It never writes files and keeps no read cursor; for files inside ignored directories add --no-ignore.
 --since is an RFC 3339 time (e.g. 2026-09-17T09:12:00Z) or a duration back from now (e.g. 1h30m). The window ends before the current second, so a comment written this second shows up in a later scan.
 --include/--exclude are gitignore-style globs relative to DIR. --include does not reach into directories that ignore rules skip; add --no-ignore for that.
@@ -1334,7 +1340,11 @@ Arguments:
 
 `agent-coexist help --help` · stderr · exit code 2 · help --help is treated as an unknown subcommand (same for -h).
 ```text
-error: unrecognized subcommand '--help'  Usage: agent-coexist <COMMAND>  For more information, try '--help'. 
+error: unrecognized subcommand '--help'
+
+Usage: agent-coexist <COMMAND>
+
+For more information, try '--help'.
 ```
 
 <a id="info-version"></a>

@@ -131,7 +131,7 @@ fn report_for(
 }
 
 /// Push the sorted diagnostic rows, reporting whether any error-level
-/// and any warn-level diagnostic was seen (§9 补充4 order).
+/// and any warn-level diagnostic was seen (§9 supplement 4 order).
 fn push_diagnostics(report: &mut Report, diags: Vec<Diagnostic>) -> (bool, bool) {
     let mut has_error = false;
     let mut has_warn = false;

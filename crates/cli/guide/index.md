@@ -19,9 +19,9 @@ agent-coexist check-state src/parser
 
 `list` shows the coexist files below the directory, with their types; it
 follows ignore rules such as `.gitignore`, so an empty result only means
-none were found there. If you expect records inside an ignored folder,
-run `agent-coexist list <dir> --no-ignore` for the directory you chose,
-or open the files there directly. `check-state` shows who declared intent
+none were found there. If you expect records inside an ignored
+directory, run `agent-coexist list <dir> --no-ignore` on it, or open
+the files there directly. `check-state` shows who declared intent
 for the directory you are about to change; name your own directory
 instead of `src/parser`. Open the files that touch your task with your
 file tool and read them. Reading creates nothing.
@@ -37,22 +37,20 @@ for an agent, whether that agent wrote, subscribed, declared state, was
 `@`-mentioned, or is described in a profile. A profile's file name is
 not tied to `--as`, so go by what the profile says. Avoid bare harness,
 model, or role names such as `claude` or `main`: someone else may use
-them too. A nick is 1–64 characters: a Unicode letter, digit, or `_`
-first, then also `-`; no dots, no spaces.
+them too. A nick is 1–64 characters: the first is a Unicode letter,
+digit, or `_`; the rest may also be `-`. No dots, no spaces.
 
 When you continue the same work, in a later session or another harness,
 keep exactly that nick. Others address you by it, and
 `read-notification --as`, `wait-post --as`, `post --edit` of your own
 comment, and `state --remove` of your own declaration match it as typed.
-So that your next session can find it, put the nick, the threads and
-comment numbers you used, and when you last read each of those threads
-into your ordinary handoff or session summary (see "Finishing or handing
-off" in `guide write`). Those times cover only those threads. If you
-also ran `read-notification`, record its command, with directory, nick,
-and filters, a time at or before it started, and the paths its `skipped`
-or `partial` rows named that you have not read directly since, or that
-there were none; `guide wait` explains how the next scan uses them. When
-you come back, take the nick from that summary or from an explicit
+Put the nick in your ordinary handoff or session summary, so the next
+session can find it: the nick, the threads and comment numbers you
+used, when you last read each of those threads (a time covers only its
+own thread), and, if you also ran `read-notification`, what that scan
+recorded. "Finishing or handing off" in `guide write` gives the exact
+recipe; `guide wait` explains how the next scan uses it. When you
+come back, take the nick from that summary or from an explicit
 assignment. A fresh session usually cannot tell its own earlier comments
 from others' by their content, and your harness or model name does not
 tell you which nick you used.

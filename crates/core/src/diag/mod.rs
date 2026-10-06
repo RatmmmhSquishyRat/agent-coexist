@@ -30,12 +30,13 @@ pub use catalog::{
     FIX_FILE_CHECK_MANUAL, FIX_LIST_UNREAD, FIX_LIST_UNREAD_MANUAL, FIX_LOCK_SCAN_INCOMPLETE,
     FIX_LOCK_SCAN_INCOMPLETE_MANUAL, FIX_NATIVE_OPERAND, FIX_NOTIFY_UNREAD,
     FIX_NOTIFY_UNREAD_MANUAL, FIX_STATE_SCAN_INCOMPLETE, FIX_STATE_SCAN_INCOMPLETE_MANUAL,
-    FIX_STATE_SCAN_STOPPED, FIX_STATE_SCAN_STOPPED_MANUAL, FIX_WAIT_IO_LEAD,
-    FIX_WAIT_RESTORE_DIR_GONE, FIX_WAIT_RESTORE_DIR_REPLACED, FIX_WAIT_RESTORE_NOT_REGULAR,
-    FIX_WRITE_MIXED, FIX_WRITE_UNCONFIRMED, MANUAL_CHECK_LIST_LEAVES, MANUAL_CHECK_SCAN_FILES,
-    MANUAL_CHECK_STATE_FILES, MANUAL_CHECK_STATE_HERE, MANUAL_CHECK_STATE_UNREADABLE,
-    MANUAL_LIST_UNREADABLE, MESSAGE_WRITE_MIXED, MESSAGE_WRITE_UNCONFIRMED, REREAD_FILE,
-    REREAD_STATE, SCAN_CANONICALIZE_FIRST, SCAN_UNREADABLE_FIRST,
+    FIX_STATE_SCAN_STOPPED, FIX_STATE_SCAN_STOPPED_MANUAL, FIX_WAIT_RESTART,
+    FIX_WAIT_RESTART_MANUAL, FIX_WAIT_RESTORE_DIR_GONE, FIX_WAIT_RESTORE_DIR_REPLACED,
+    FIX_WAIT_RESTORE_NOT_REGULAR, FIX_WRITE_MIXED, FIX_WRITE_UNCONFIRMED, MANUAL_CHECK_LIST_LEAVES,
+    MANUAL_CHECK_SCAN_FILES, MANUAL_CHECK_STATE_DECLARED, MANUAL_CHECK_STATE_FILES,
+    MANUAL_CHECK_STATE_UNREADABLE, MANUAL_CHECK_STATE_WRITTEN_FILE, MANUAL_LIST_UNREADABLE,
+    MESSAGE_WRITE_MIXED, MESSAGE_WRITE_UNCONFIRMED, REREAD_FILE, REREAD_STATE,
+    SCAN_CANONICALIZE_FIRST, SCAN_UNREADABLE_FIRST,
 };
 
 /// Error level: every id from the catalog starting with `E-`.
@@ -106,8 +107,9 @@ impl Default for Context {
 
 impl Context {
     /// The `{argv}` value: every argument POSIX-quoted per §8.3.4, joined by
-    /// single spaces (§9: `{argv}` = 原命令行). `None` means at least one
-    /// native argument cannot be represented in a single-line POSIX recipe.
+    /// single spaces (§9: `{argv}` = the original command line). `None` means
+    /// at least one native argument cannot be represented in a single-line
+    /// POSIX recipe.
     pub fn argv_from_args<I, A>(args: I) -> Option<String>
     where
         I: IntoIterator<Item = A>,
@@ -141,7 +143,7 @@ pub fn render(d: &Diagnostic, ctx: &Context) -> Rendered {
 }
 
 /// Render a reason-form failure (spec §8.3.1): the same catalog row, with
-/// the catalog `文案` column serving as the reason text.
+/// the catalog message column serving as the reason text.
 pub fn reason(id: &str, params: &[(&'static str, OsString)], ctx: &Context) -> Rendered {
     parts(id, params, ctx)
 }
@@ -270,20 +272,30 @@ fn fix_text(
         "E-DIR-MISSING" if get(params, "missing_dir").is_some() => {
             catalog::FIX_EDIRMISSING_ANCESTOR
         }
-        // A retried wait takes a new baseline: the re-read belongs to the
-        // recovery, not to optional advice.
+        // A restarted wait takes a new baseline. Manual recovery names
+        // the by-hand restart before the re-read, not after it.
         "E-LOCKED" | "E-INUSE" if wait => {
-            let fix = if id == "E-LOCKED" {
-                catalog::FIX_WAIT_LOCKED
-            } else {
-                catalog::FIX_WAIT_INUSE
+            let manual = ctx.argv.is_none();
+            let fix = match (id, manual) {
+                ("E-LOCKED", false) => catalog::FIX_WAIT_LOCKED,
+                ("E-LOCKED", true) => catalog::FIX_WAIT_LOCKED_MANUAL,
+                (_, false) => catalog::FIX_WAIT_INUSE,
+                (_, true) => catalog::FIX_WAIT_INUSE_MANUAL,
             };
             let reread = if ctx.command == "wait-state" {
                 catalog::REREAD_STATE
             } else {
                 catalog::REREAD_FILE
             };
-            return finish_fix(&fix.replace("{reread}", reread), params, ctx, false);
+            let mut fix = finish_fix(&fix.replace("{reread}", reread), params, ctx, false);
+            if manual {
+                let why = FIX_NATIVE_OPERAND
+                    .split_once("; ")
+                    .map_or(FIX_NATIVE_OPERAND, |(_, why)| why);
+                fix.push_str("; ");
+                fix.push_str(why);
+            }
+            return fix;
         }
         // A wait on a state file refuses a snapshot with duplicate
         // identities: the duplicate must be gone before the wait can
@@ -294,6 +306,12 @@ fn fix_text(
         "E-FLOCKED" if argv_has_as(ctx) => catalog::FIX_EFLOCKED_AS,
         // Copies of one status are merged, never renamed apart.
         "W-STATUS-NAME" if get(params, "repeated").is_some() => catalog::FIX_WSTATUSNAME_REPEATED,
+        "W-STRAY" if get(params, "type").is_some_and(|kind| kind == "post") => {
+            catalog::FIX_WSTRAY_POST
+        }
+        "W-STRAY" if get(params, "type").is_some_and(|kind| kind == "state") => {
+            catalog::FIX_WSTRAY_STATE
+        }
         "E-NOT-DIR" => return enotdir_fix(t, params, ctx),
         "W-SEQ-GAP" if get(params, "malformed").is_some() => catalog::FIX_WSEQGAP_MALFORMED,
         // An invalid stored regex kept any drift since the stored hash
@@ -483,8 +501,8 @@ fn enotdir_fix(
 /// change: an old `@#` would otherwise point at another comment or none.
 /// Choose `#{n}` before rewriting if no reply already names it; otherwise
 /// another number that no header carries, that no other repair in this
-/// report gives a header, and that no reply already names, and retarget
-/// replies to that number. The unnumbered branch also says a
+/// report gives a header, and that no reply in this post already names,
+/// and retarget replies to that number. The unnumbered branch also says a
 /// known original number may be restored when no header carries it and no
 /// other repair is given it.
 fn ehead_fix(t: &catalog::Template, params: &[(&'static str, OsString)], ctx: &Context) -> String {
@@ -1112,45 +1130,19 @@ mod tests {
     }
 
     #[test]
-    fn unprintable_retry_keeps_cause_specific_advice() {
+    fn wait_retry_keeps_original_command_last() {
         let mut c = ctx();
-        c.argv = None;
-        let locked = render(&Diagnostic::new("E-LOCKED", 0), &c).fix;
-        assert!(locked.starts_with("retry shortly by hand; "), "{locked}");
-        assert!(!locked.contains("repair the original file"), "{locked}");
-
-        c.command = "wait-post".into();
-        let wait = render(&Diagnostic::new("E-INUSE", 0), &c).fix;
-        assert!(wait.contains("read the file again"), "{wait}");
-        assert!(
-            wait.contains("close the other program, then retry by hand"),
-            "{wait}"
-        );
-    }
-
-    #[test]
-    fn wait_retry_requires_reread_after_ready() {
-        let mut c = ctx();
-        for (command, reread) in [
-            ("wait", catalog::REREAD_FILE),
-            ("wait-post", catalog::REREAD_FILE),
-            ("wait-state", catalog::REREAD_STATE),
-        ] {
+        for command in ["wait", "wait-post", "wait-state"] {
             c.command = command.into();
             c.argv = Some(format!("agent-coexist {command} docs"));
             for id in ["E-LOCKED", "E-INUSE"] {
                 let fix = render(&Diagnostic::new(id, 0), &c).fix;
-                assert!(fix.contains(reread), "{command} {id}: {fix}");
                 assert!(
                     fix.ends_with(&format!(": agent-coexist {command} docs")),
                     "{fix}"
                 );
             }
         }
-        // Base commands keep the plain retry.
-        c.command = "check".into();
-        let fix = render(&Diagnostic::new("E-LOCKED", 0), &c).fix;
-        assert!(!fix.contains("ready line"), "{fix}");
     }
 
     #[test]

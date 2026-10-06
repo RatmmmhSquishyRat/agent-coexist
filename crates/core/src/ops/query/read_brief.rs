@@ -108,7 +108,7 @@ fn render(
         let verification = hash::verify(path, entry);
         // Renderable when the in-memory target and its content span are
         // present: empty files have content_span 0..0 and no line range
-        // (§10.10.2 全文). Oversized no-regex targets stream the hash
+        // (§10.10.2 "full text"). Oversized no-regex targets stream the hash
         // with content = None (§10.4.2 / §10.10.3).
         let content = verification
             .target

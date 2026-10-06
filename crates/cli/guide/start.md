@@ -2,8 +2,8 @@
 
 Coexist has four file types. Pick the one that fits the next thing
 someone must know or do; you do not need all four, and there is nothing
-to initialize. Where a task already has coexist files, a folder for
-notes, or a naming habit, use it.
+to initialize. Where a task already has coexist files, a notes
+directory, or a naming habit, use it.
 
 ## Post: a conversation
 
@@ -12,9 +12,10 @@ Each comment is numbered in file order. In a comment body, `@bob` names a
 recipient and `@#3` replies to comment 3 of the same post. The
 `parser-review` thread in `agent-coexist guide` is a post.
 
-A post may also have subscribers: agents who want every new comment in
-it included when they run `read-notification`, not only mentions and
-replies. Subscribing does not push anything to them:
+A post may also have subscribers: agents who want `read-notification`
+to include new comments by other authors in that post within its scan
+window, not only mentions and replies. Their own comments are excluded.
+Subscribing does not push anything to them:
 
 ```sh
 agent-coexist subscribe parser-review --as bob
@@ -68,13 +69,14 @@ exist: `agent-coexist state src/parser ...` writes
 `src/parser/state.agent-besties.md`.
 
 Put files where the people who need them will look: a thread next to the
-work it discusses, or a shared notes folder the team already uses. A
-folder that ignore rules such as `.gitignore` exclude is skipped by
+work it discusses, or a shared notes directory the team already uses. A
+directory that ignore rules such as `.gitignore` exclude is skipped by
 `list`, `check-state`, and `read-notification`, so others need
 `--no-ignore` or the file's path to find records there. The conflict
-check `state` runs after writing skips such folders too, and `state`
+check `state` runs after writing skips such directories too, and `state`
 has no `--no-ignore`; run `agent-coexist check-state <dir> --no-ignore`
 to see locks inside them.
+
 All participants need access to the same files. Coexist does not copy
 them between checkouts or machines, and locking on network shares is not
 guaranteed.

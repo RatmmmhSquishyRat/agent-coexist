@@ -68,6 +68,12 @@ All notable changes to this project are documented here. The format follows
   grant.
 
 ### Changed
+- Corrected three text promises: the absolute-path warning describes a
+  portability risk, not guaranteed staleness; profile/post help and the
+  command reference state that bodies are fenced after CRLF-to-LF
+  conversion and end-of-body whitespace removal; subscription help and
+  `guide start` limit comment notifications to other authors. Path
+  resolution, body normalization, and notification behavior are unchanged.
 - **Script-visible:** top-level `--help` names exit 1 not only for a
   first line `error`, but also when a command could not write its
   report to stdout (a write command may already have changed the file:
@@ -88,6 +94,23 @@ All notable changes to this project are documented here. The format follows
   `skipped entries and remaining errors in this file need check on this file; follow the suggestions check prints: agent-coexist check <path>`
   (when the path cannot be printed as a copyable operand, the row says
   to run `check` on this file by hand). Remaining rows stay last.
+- **Script-visible:** a `--include` or `--exclude` glob that is empty
+  after its leading or trailing `/` is removed is reported as
+  `nothing is left after removing the leading or trailing '/'`; the same
+  message earlier in this unreleased series said `leading and trailing`.
+  Message shape, echo, and exit 2 are unchanged.
+- **Script-visible:** a `state` declaration whose post-write conflict
+  check could not resolve a directory's real path now ends with the
+  same scan-incomplete `fix` as a `profile`/`brief` write's lock scan —
+  restore-path prefix, then `agent-coexist check-state <dir>` on the
+  declared directory — instead of leaving the `canonicalize` row with
+  no `fix`; the row list in that `fix` now reads `skipped, partial or
+  canonicalize`.
+- **Script-visible:** a `read-notification` `expired` record now ends at
+  `<nick>` — `expired  <end time>  <dir>  <status>  <nick>` — with no
+  trailing detail; the dropped value `expired at <t>` repeated the
+  first column verbatim. Every other record kind keeps its detail
+  column; ordering, window filtering, and exit codes are unchanged.
 
 - README restructured for first-time readers. It starts with what the
   tool is for and what an agent does on arrival: read the existing
@@ -132,7 +155,7 @@ All notable changes to this project are documented here. The format follows
   merges them` / `no state write removes it` / `no state write removes
   them, because state commands do not write this file until it is
   confirmed as this directory's state.agent-besties.md`, and the `fix`
-  is `no state command is printed because this file is not confirmed as this directory's state.agent-besties.md; first settle which file that should be (when a W-NAME-STATE row is shown, its fix describes how; never overwrite a separate existing state file), then run check on this file again before anyone changes a declaration by hand; only the agent that declared an entry changes, renews or removes its own entry`
+  is `this file is not confirmed as this directory's state.agent-besties.md; settle which file should be, without overwriting another state file, then run check on this file again before editing declarations by hand. Only the declaring agent may change, renew or remove its entry`
   (`W-STATE-CONFLICT` likewise). In 0.1.0 every such row named a next
   state write and gave a bare state command that would not touch this
   file. Merge and removal behavior is unchanged; the printed advice now
@@ -149,33 +172,76 @@ All notable changes to this project are documented here. The format follows
 - **Script-visible:** a `canonicalize  <dir>  failed` row now ends with
   the operating-system cause (`canonicalize  <dir>  failed  <os error>`).
   `check-state` and `read-notification` then print
-  `this command could not resolve the real path of each directory marked canonicalize; first restore that each of those paths exists and that every directory on it, ancestors included, can be opened (read and traverse/search permission), then run this command again`,
+  `real paths could not be resolved for directories marked canonicalize; ensure those paths exist and all directories on them, including ancestors, can be opened with read and traverse/search permission, then run this command again`,
   not counted in `total`. A `profile`/`brief` lock scan whose identity
-  fell back to the spelled path adds
-  ` (first restore that each path marked canonicalize exists and that every directory on it, ancestors included, can be opened (read and traverse/search permission))`
-  to that write's existing incomplete-scan `fix`. Canonicalize still
+  fell back to the spelled path puts
+  `ensure each path marked canonicalize exists and all directories on it, including ancestors, can be opened with read and traverse/search permission; `
+  before the checks in that write's existing incomplete-scan `fix`, and
+  names `check-state` on the written file's parent directory (by hand:
+  `agent-coexist check-state on the written file's parent directory`),
+  never the working directory. Canonicalize still
   does not refuse writes. A `skipped  <dir>  unreadable` row for a
   directory whose state file the CLI did not see still has no read-path
   `fix`; an unreadable directory whose state file was seen still gets
   one.
-- `list --help` now says that `busy` and `?` leaves stay shown and
+- `list --help` now says that `busy` and `?` files stay shown and
   counted under any `--type`, because their type is unknown. It also
-  says that a `busy` file leaf can mean, on Windows, that another
+  says that a `busy` file can mean, on Windows, that another
   program holds the file open without allowing shared access, not only
   that a file lock or stable read was unavailable. For that case it
-  says to close the denying handle, then retry. Only the help text
+  says to close that program, then retry. Only the help text
   changed; scans and `--type` filtering behave as in 0.1.0.
 - **Script-visible:** an empty column in a first line, a wait ready line,
   or a Fields key/value now prints as `/`, so splitting on two or more
   spaces always yields every column. A stored value that is itself `/`
   prints the same way. Verbatim `| ` text blocks are not substituted.
-- **Script-visible:** usage errors, including argument-parser failures,
-  are one `error: ...` line on stderr (CR/LF shown as spaces), stdout
-  empty, exit 2.
-- `agent-coexist` with no command now prints the parser's short
-  "requires a subcommand" usage error, with the command list, instead of
-  the whole top-level help folded into that one line. Exit 2 and
-  explicit `--help` are unchanged.
+- **Script-visible:** usage errors, stdout empty and exit 2, keep their
+  producer's shape on stderr. Argument-parser failures print the
+  parser's native multi-line report — an `error: <message>` line, then
+  only the components that error carries, separated by blank lines
+  (`tip:` lines, a `Usage:` block listed once per form when a command
+  has several, `For more information, try '--help'.`) — with rejected
+  values echoed
+  using the same `<U+XXXX>` escaping as everywhere else and nothing
+  folded onto one line. Usage errors the CLI checks itself, such as
+  `error: --regex requires --target <path>` or an invalid
+  `AGENT_COEXIST_NOW`, remain exactly one `error:` line, with CR/LF
+  shown as spaces.
+- `agent-coexist` with no command prints the parser's "requires a
+  subcommand" error — the `error:` line with the command list, a
+  `Usage:` line, and the `--help` pointer — not the top-level help
+  page. Exit 2 and explicit `--help` are unchanged.
+- **Script-visible:** an `--edit`, `--reply-to` or `--comment` value
+  that is not a comment number (empty, not decimal digits, or above
+  18446744073709551615) reads
+  `error: invalid value 'first' for '--reply-to <n>': expected a decimal comment number from 0 to 18446744073709551615`
+  instead of Rust's integer-parse text (`invalid digit found in
+  string`, `number too large to fit in target type`); a value starting
+  with `-` is told `--edit takes a decimal comment number (such as
+  --edit 3), which never starts with '-'`. Accepted values and exit 2
+  are unchanged. Top-level `--help` now gives exit 2 as `usage error on
+  stderr (possibly multiple lines), nothing on stdout`, matching the
+  multi-line parser reports above.
+- **Script-visible:** the scan-incomplete `fix` rows put each
+  prerequisite before the checks it gates (`… Before writing again, make
+  each directory marked unreadable readable and enterable with read and
+  search permission; run these checks, then agree with any holder they
+  show: …`), instead of stacking parenthesized `(first …)` clauses
+  before the colon. When no copyable command can be printed, a `state`
+  declaration names `agent-coexist check-state on the declared
+  directory`. `W-STRAY`, `W-SUB-DUP`, the unselected-state fix, the
+  repeated `W-STATUS-NAME` fix and the exhausted-numbering repairs are
+  shorter with the same rules. `W-STRAY`'s `fix` is selected by file
+  type, so no row recommends a destination its file type cannot have: a
+  post's row names a fenced body and keeps the comment-author rule, a
+  brief or profile row names a fenced body only, and a state file's row
+  names a reader note on a line starting with `> `, a misplaced actual
+  state entry under its status, or deleting the text. Every `W-STRAY`
+  row's shared `why` reads `this text stays in the file but is not
+  included in CLI reports`, accurate for all four file types. A single
+  invalid status heading now says
+  to choose a valid, unused name; the printed `## <name>` is only an
+  example. `E-INUSE`'s `fix` says `close the other program, then retry`.
 - **Script-visible:** Text blocks (`    | ` lines) print one line per
   content line: the final line break of a target or value no longer adds
   an empty `    | ` line, so a target shown as `L1..L1` prints one line,
@@ -342,15 +408,15 @@ All notable changes to this project are documented here. The format follows
     no header in this post carries it or is given it by another repair,
     use that number instead and no reply needs to change. The CLI does
     not guess the original number. When no number above the
-    highest one in the post is left, the `fix` says to keep the comment
-    where it is, with its author, time and text, and give it by hand a
-    lower number (`rewrite the header by hand as
-    "## #<n> bob (…)", replacing <n> with an unused lower number: one
-    that no header in this post carries, that you give no other header,
-    and that no reply in this post already names (@#n)`), then
-    update any reply that meant it. A lower number leaves only a
-    non-blocking `W-SEQ-ORDER` or `W-SEQ-GAP` warning and frees no number
-    for new comments, which go in a new post once `post` stops with
+    highest one in the post is left, the `fix` says to give the comment
+    a number by hand, keeping its position, author, time and text
+    (`no number above #<max> is available; rewrite the header by hand
+    as "## #<n> bob (…)"`): restore its known original number if no
+    header uses it, otherwise choose a lower number unused by headers,
+    other repairs and `@#n` replies in this post, then retarget replies
+    meant for it. A lower number leaves only a non-blocking
+    `W-SEQ-ORDER` or `W-SEQ-GAP` warning and frees no append number;
+    new comments go in a new post once `post` stops with
     `E-SEQ-EXHAUSTED`.
   - `W-SEQ-GAP` explains the gap instead of guessing a deletion (0.1.0
     printed one text for every gap: `@#<m> can no longer be resolved; a
@@ -464,27 +530,32 @@ All notable changes to this project are documented here. The format follows
     `--entry '<title>'` added, so `--as`, `-m`, `--regex` and the other
     options stay. It used to build a new `brief --target … --entry`
     command that dropped them, so following it lost the note or regex.
-  - A `wait` retry after `E-LOCKED` or `E-INUSE` says to read the file
-    again after the ready line (for `wait-state`, to run `check-state`
-    again), because the retried wait starts from a new baseline. Any
-    other failure after the ready line whose `fix` still offers a
-    retry — an unreadable file, for example a Windows delete-pending
-    one — leads with the same new-baseline sentence, saying the
-    retried wait does not report changes made while the file could
-    not be read. A path-class fault before the ready line, and a
-    spelling fault (an invalid or too-long name) wherever it appears,
-    keep `fix the path, then run the corrected command` with no
-    retry. After the ready line, a structural loss instead — the
-    watched path no longer resolving, a directory on it replaced by
-    a file, or, on Unix, the path itself no longer a regular file —
-    gets a `fix` that leads with the new-baseline sentence, explains
-    how to restore the intended path without deleting anything
-    blindly (recreate a missing directory or move it back; move
-    aside whatever replaced it, keeping it), and prints the original
-    wait as the command to retry; on Windows a watched file replaced
-    by a directory stays the permission-denied repair with the same
-    lead and retry. The `wait`, `wait-post`, and `wait-state` help states
-    the new-baseline rule for every way a wait ends.
+  - A `wait` retry after `E-LOCKED` or `E-INUSE` lists its steps once, in
+    the order they happen: the repair first (`wait briefly` for
+    `E-LOCKED`; `close the other program` for `E-INUSE`), then one
+    restart instruction — restart with this command, then read the file
+    again after its ready line (for `wait-state`, run `check-state` on
+    the directory again), because the new wait cannot report changes
+    made while it was stopped — and the restart command last, with
+    nothing after it. When the original command cannot be printed, the
+    fix says to restart the original wait by hand and keeps the existing
+    no-copyable-command explanation last. Any other failure after the
+    ready line whose `fix` still offers a retry — an unreadable file,
+    for example a Windows delete-pending one — uses the same order: its
+    repair first, then that restart instruction, then the command. A
+    path-class fault before the ready line, and a spelling fault (an
+    invalid or too-long name) wherever it appears, keep `fix the path,
+    then run the corrected command` with no retry. After the ready line,
+    a structural loss instead — the watched path no longer resolving, a
+    directory on it replaced by a file, or, on Unix, the path itself no
+    longer a regular file — gets a `fix` that leads with how to restore
+    the intended path without deleting anything blindly (recreate a
+    missing directory or move it back; move aside whatever replaced it,
+    keeping it), then that restart instruction, and prints the original
+    wait as the command to retry; on Windows a watched file replaced by
+    a directory stays the permission-denied repair in the same order.
+    The `wait`, `wait-post`, and `wait-state` help states the restart
+    rule for every way a wait ends.
   - A `wait` or `wait-state` on a state file that lists a nick twice
     under one status says the wait cannot start while a nick is listed
     twice, so start it again only after the duplicate is gone; to merge,
@@ -503,8 +574,8 @@ All notable changes to this project are documented here. The format follows
     partial state file, `agent-coexist check <path>` for another file,
     and, after a write, `agent-coexist check-state <dir>` for an
     unreadable directory. `list` gets the same kind of row when it shows
-    a `busy` or `?` leaf or an unreadable directory: `agent-coexist check
-    <path>` for each such leaf and `agent-coexist list <dir>` for each
+    a `busy` or `?` file or an unreadable directory: `agent-coexist check
+    <path>` for each such file and `agent-coexist list <dir>` for each
     such directory. When the CLI can see a state file in a directory it
     cannot fully read, but cannot open that file either, the two are one
     `skipped <dir> unreadable` row pointing at `agent-coexist check

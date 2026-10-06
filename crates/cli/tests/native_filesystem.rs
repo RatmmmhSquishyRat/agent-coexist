@@ -1634,11 +1634,12 @@ fn invalid_profile_section_body_repair_is_manual() {
     assert_eq!(fs::read_to_string(&file).unwrap(), before);
 }
 
-/// clap's invalid-value path must use the same one-line boundary as
-/// custom usage errors: no raw control character reaches stderr, while
-/// the operand's text, the option and the help hint stay visible.
+/// clap's grammar errors keep clap's own structured stderr report: the
+/// echoed operand is still escaped (no raw control reaches stderr), the
+/// `error: ` prefix stays on the first line, and the help hint and the
+/// Usage block are their own lines rather than flattened into one.
 #[test]
-fn parser_error_with_newline_is_one_stderr_line() {
+fn parser_errors_keep_clap_structured_stderr() {
     let dir = tempfile::tempdir().unwrap();
     let cwd = dir.path();
     let out = run(
@@ -1657,20 +1658,50 @@ fn parser_error_with_newline_is_one_stderr_line() {
     assert_eq!(out.status.code(), Some(2), "{}", describe(&out));
     assert!(out.stdout.is_empty(), "{}", describe(&out));
     let stderr = std::str::from_utf8(&out.stderr).unwrap();
-    assert_eq!(stderr.lines().count(), 1, "{stderr:?}");
-    assert!(
-        !stderr.trim_end_matches('\n').chars().any(char::is_control),
-        "{stderr:?}"
-    );
     assert!(stderr.starts_with("error: "), "{stderr:?}");
-    assert_eq!(stderr.matches("error:").count(), 1, "{stderr:?}");
-    assert!(
-        stderr.contains("bad") && stderr.contains("value"),
+    assert_eq!(
+        stderr
+            .lines()
+            .filter(|line| line.starts_with("error: "))
+            .count(),
+        1,
         "{stderr:?}"
     );
-    assert!(stderr.contains("--edit"), "{stderr:?}");
-    assert!(stderr.contains("--help"), "{stderr:?}");
+    assert!(
+        !stderr.chars().any(|c| c.is_control() && c != '\n'),
+        "{stderr:?}"
+    );
+    assert!(
+        stderr.contains("bad") && stderr.contains("value") && stderr.contains("--edit"),
+        "{stderr:?}"
+    );
+    assert!(
+        stderr
+            .lines()
+            .any(|line| line.starts_with("For more information, try")),
+        "the help hint must be its own line, not flattened into the error line:\n{stderr:?}"
+    );
     assert!(!cwd.join("standup.agent-besties.md").exists());
+
+    // A grammar error with a Usage block prints it as clap renders it:
+    // the missing argument and the synopsis are separate lines.
+    let out = run(cwd, &["post", "standup", "--as", "alice"]);
+    assert_eq!(out.status.code(), Some(2), "{}", describe(&out));
+    assert!(out.stdout.is_empty(), "{}", describe(&out));
+    let stderr = std::str::from_utf8(&out.stderr).unwrap();
+    assert!(stderr.starts_with("error: "), "{stderr:?}");
+    assert!(
+        stderr
+            .lines()
+            .any(|line| line.starts_with("  -m <content>")),
+        "the missing required argument must be listed on its own line:\n{stderr:?}"
+    );
+    assert!(
+        stderr
+            .lines()
+            .any(|line| line.starts_with("Usage: agent-coexist post ")),
+        "the Usage block must start its own line, not be flattened:\n{stderr:?}"
+    );
 }
 
 #[test]
@@ -1833,7 +1864,7 @@ fn emitted_section_heading_repairs_unicode_title() {
         "# role-card.agent-profile\n\n",
         "## notes\n",
         "```md\nkeep-notes-bytes\n```\n\n",
-        "## 角色!\n",
+        "## \u{89d2}\u{8272}!\n",
         "```md\nkeep this note\n```\n",
     );
     fs::write(&file, before).unwrap();
@@ -1847,7 +1878,7 @@ fn emitted_section_heading_repairs_unicode_title() {
         .unwrap_or_else(|| panic!("missing section heading suggestion:\n{stdout}"));
     fs::write(
         &file,
-        before.replace("## 角色!", copyable_heading(heading_fix)),
+        before.replace("## \u{89d2}\u{8272}!", copyable_heading(heading_fix)),
     )
     .unwrap();
 
@@ -1857,7 +1888,7 @@ fn emitted_section_heading_repairs_unicode_title() {
     assert!(
         stdout
             .lines()
-            .any(|line| columns(line) == ["section", "角色", "keep this note"]),
+            .any(|line| columns(line) == ["section", "\u{89d2}\u{8272}", "keep this note"]),
         "reparsed Unicode section must retain its content:\n{stdout}"
     );
     assert!(
@@ -1873,7 +1904,7 @@ fn emitted_section_heading_repairs_unicode_title() {
             "profile",
             "role-card",
             "--section",
-            "角色",
+            "\u{89d2}\u{8272}",
             "-m",
             "written-body",
         ],
@@ -3149,14 +3180,10 @@ fn removed_wait_state_recovery_does_not_recreate_or_retarget() {
     }
 }
 
-/// A path-class fault gets opposite recoveries depending on when it
-/// strikes, so the lifecycle boundary must stay observable: before the
-/// ready line the parent was never a directory and the wait keeps the
-/// corrected-path advice with no retry; after the ready line the same
-/// command, whose parent was proven to exist and whose baseline was
-/// admitted, is told to restore the intended path and still take the
-/// new baseline before retrying the original wait. Filesystem changes
-/// happen only after the real ready line.
+/// The ready line separates start-time path mistakes from loss of an
+/// admitted path. Only the latter offers the unchanged original wait as
+/// a copyable command. Filesystem changes happen after the real ready
+/// line; wording around the command is not this consumer's contract.
 #[test]
 fn wait_path_class_recovery_follows_the_ready_line() {
     // Pre-ready: the parent is a file from the start, so the wait can
@@ -3173,9 +3200,9 @@ fn wait_path_class_recovery_follows_the_ready_line() {
         1,
         "a start-time path mistake has exactly one fix row:\n{stdout}"
     );
-    assert_eq!(
-        fixes[0], "fix the path, then run the corrected command",
-        "no retry and no restore is offered before the ready line:\n{stdout}"
+    assert!(
+        !fixes[0].contains(BIN) && !fixes[0].contains("agent-coexist "),
+        "no retry command is offered before the ready line:\n{stdout}"
     );
 
     // Post-ready: the admitted wait loses the same directory.
@@ -3256,22 +3283,11 @@ fn wait_path_class_recovery_follows_the_ready_line() {
         "the post-ready fault has exactly one fix row:\n{stdout}"
     );
     let fix = fixes[0];
-    assert!(
-        fix.contains("new baseline"),
-        "the retried wait must take and state its new baseline:\n{fix}"
-    );
-    assert!(
-        fix.contains("recreate it"),
-        "the intended directory must be restored, not the path corrected:\n{fix}"
-    );
-    assert!(
-        fix.contains("then retry:") && fix.contains("wait-post room/standup"),
-        "the original wait must still be offered as the retry (the argv names \
-         the real program path here, not the agent-coexist token):\n{fix}"
-    );
-    assert_ne!(
-        fix, "fix the path, then run the corrected command",
-        "a path the wait already proved valid is not sent back for correction:\n{fix}"
+    assert_eq!(
+        shell_command_from_fix(fix),
+        coexist_core::diag::Context::argv_from_args([BIN, "wait-post", "room/standup"])
+            .expect("printable original command"),
+        "the whole original command must remain copyable with no prose suffix:\n{fix}"
     );
 }
 
@@ -3360,18 +3376,11 @@ fn wait_replaced_by_directory_recovery_restores_not_corrects() {
         "the replaced-path fault has exactly one fix row:\n{stdout}"
     );
     let fix = fixes[0];
-    assert!(
-        fix.contains("no longer names a regular file"),
-        "the occupied path must be named as occupied, not as a wrong path:\n{fix}"
-    );
-    assert!(
-        fix.contains("then retry:") && fix.contains("wait room/standup"),
-        "the original wait must still be offered as the retry (the argv names \
-         the real program path here, not the agent-coexist token):\n{fix}"
-    );
-    assert_ne!(
-        fix, "fix the path, then run the corrected command",
-        "a path the wait already proved valid is not sent back for correction:\n{fix}"
+    assert_eq!(
+        shell_command_from_fix(fix),
+        coexist_core::diag::Context::argv_from_args([BIN, "wait", "room/standup"])
+            .expect("printable original command"),
+        "the whole original command must remain copyable with no prose suffix:\n{fix}"
     );
 }
 

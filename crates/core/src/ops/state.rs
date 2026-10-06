@@ -208,18 +208,26 @@ fn declare(ctx: &mut Ctx, p: &super::StateDeclare) -> Result<Report, Fault> {
     if has_conflict {
         report.warn();
     }
-    // The declaration is committed; a skipped or partial state file (or an
-    // unlisted directory) may hold a conflicting lock this check did not
-    // see. Name what to open, never a second declaration (§10.5.6).
+    // The declaration is committed; a skipped or partial state file, an
+    // unlisted directory, or a directory whose identity fell back to
+    // lexical paths (`canonicalize` rows) may hold a conflicting lock
+    // this check did not see. Name what to open, never a second
+    // declaration (§10.5.6).
     let rows = shared::scan_rows(&scope.issues, &scope.unreadable_dirs);
-    if !rows.is_empty() {
+    // Identity fell back to lexical paths: the whole chain is re-checked
+    // from the declared directory itself, once the path exists and every
+    // ancestor has read and search permission (the write commands' lock
+    // scan names the written file's parent instead).
+    let declared =
+        (!scope.canonicalize_failed.is_empty()).then(|| shared::Follow::DeclaredDir(p.dir.clone()));
+    if !rows.is_empty() || declared.is_some() {
         for row in &rows {
             report.kv(row.key, row.values.clone());
         }
         report.kv(
             "fix",
             vec![shared::scan_fix(
-                rows.iter().map(|row| &row.follow),
+                rows.iter().map(|row| &row.follow).chain(declared.iter()),
                 diag::FIX_STATE_SCAN_INCOMPLETE,
                 diag::FIX_STATE_SCAN_INCOMPLETE_MANUAL,
             )],
@@ -642,7 +650,7 @@ fn plan_remove(
             .collect();
         line_spans.sort_by_key(|s| s.start);
 
-        // Whole-section deletion (§6.4.2's "变空") only when nothing but
+        // Whole-section deletion (§6.4.2's "becomes empty") only when nothing but
         // the H2 head and blank lines survives the entry splices: lines
         // that create no Declaration — pure-garbage fragments, dirty
         // entry lines, fenced lines — carry no clean-line span, so their

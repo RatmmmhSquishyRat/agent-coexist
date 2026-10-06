@@ -3,10 +3,12 @@
 //!
 //! Flow:
 //!
-//! 1. clap parses the grammar; errors pass through the one-line usage
-//!    emitter (after [`args::grammar_error_message`] corrects the advice
-//!    clap cannot give for a hyphen-leading value or non-Unicode value),
-//!    while explicit help/version retain clap's stdout and exit 0.
+//! 1. clap parses the grammar; errors print clap's own multi-line
+//!    stderr report (after [`args::grammar_error_message`] corrects the
+//!    advice clap cannot give for a hyphen-leading value, and replaces
+//!    the unusable rendering of a non-Unicode value with one custom
+//!    line), while explicit help/version retain clap's stdout and
+//!    exit 0.
 //! 2. `guide` is an information command: emit the embedded Markdown page and
 //!    return before argv recovery, progress, Ctx, environment validation, or
 //!    business resolution. Write/flush failure is exit 1 with no status line.
@@ -24,8 +26,10 @@
 //!
 //! Business reports write stdout only through [`render::render`]. Explicit
 //! help and version use clap's output; guide writes borrowed Markdown.
-//! Usage failures print exactly one stderr line and exit 2 with stdout
-//! untouched. Every other business failure is a rendered report: OS-level
+//! Usage failures exit 2 with stdout untouched: argument-parser failures
+//! print the parser's native multi-line stderr report; the CLI's own
+//! usage checks print exactly one escaped line. Every other business
+//! failure is a rendered report: OS-level
 //! I/O faults take the §8.3.5 reason/fix form, ignore/config source faults
 //! the same form with a repair matched to the cause, and a write that left
 //! its file changed or unconfirmed a form that never repeats the command;
@@ -57,7 +61,10 @@ fn main() -> ExitCode {
         Ok(cli) => cli,
         Err(error) if error.use_stderr() => {
             let words: Vec<OsString> = std::env::args_os().collect();
-            return usage_stderr(&args::grammar_error_message(error, &words));
+            // clap's own corrected report, multi-line as clap renders it;
+            // its text already ends with the one trailing newline.
+            eprint!("{}", args::grammar_error_message(error, &words));
+            return ExitCode::from(2);
         }
         Err(error) => error.exit(),
     };
@@ -169,22 +176,17 @@ fn main() -> ExitCode {
                     path: io_path,
                     source,
                 }) => {
-                    // A retry offered after a wait's ready line is a new
-                    // wait: its baseline already contains any change made
-                    // while the file could not be read (E-LOCKED/E-INUSE
-                    // say the same through their templates), so the
-                    // re-read comes before the repair and retry. A
-                    // path-class fault before the ready line is a
-                    // start-time mistake and keeps the corrected-path
-                    // advice with no retry. After the ready line the same
-                    // three kinds mean the path's surroundings changed
-                    // while it was watched — the parent existed and the
-                    // baseline was read when the wait started — so the
-                    // fix restores the intended path and still takes the
-                    // new baseline before the same retry. Spelling-class
-                    // faults (InvalidFilename, Windows raw 123/206)
-                    // cannot follow a successful open, so wherever they
-                    // appear they keep the start-time advice.
+                    // A restarted wait takes a baseline containing changes
+                    // made while it was stopped. Put the repair first, then
+                    // restart, then re-read after its ready line; E-LOCKED
+                    // and E-INUSE carry the same chronology. A path-class
+                    // fault before the ready line is a start-time mistake
+                    // and keeps corrected-path advice with no retry. After
+                    // the ready line the same three kinds mean the path's
+                    // surroundings changed while it was watched, so restore
+                    // the intended path before restarting. Spelling-class
+                    // faults (InvalidFilename, Windows raw 123/206) cannot
+                    // follow a successful open and keep start-time advice.
                     let restore = if ready_fired.get() {
                         match source.kind() {
                             ErrorKind::NotFound => Some(diag::FIX_WAIT_RESTORE_DIR_GONE),
@@ -209,12 +211,17 @@ fn main() -> ExitCode {
                     } else {
                         diag::REREAD_FILE
                     };
-                    let lead = diag::FIX_WAIT_IO_LEAD.replace("{reread}", reread);
+                    let restart = if ctx.argv.is_some() {
+                        diag::FIX_WAIT_RESTART
+                    } else {
+                        diag::FIX_WAIT_RESTART_MANUAL
+                    }
+                    .replace("{reread}", reread);
                     let recovery = WaitRecovery {
-                        lead: &lead,
+                        restart: &restart,
                         path_restore: restore,
                     };
-                    let report = io_report_with_retry_lead(
+                    let report = io_report_with_wait_recovery(
                         command,
                         &object,
                         action,
@@ -292,9 +299,12 @@ fn emit(report: &Report, dctx: &diag::Context) -> ExitCode {
     }
 }
 
-/// One stderr line and exit 2, stdout untouched (spec §7.1.7, §11).
-/// CR/LF in clap grammar errors and custom usage text become spaces;
-/// stored body text is not rewritten here.
+/// One stderr line and exit 2, stdout untouched (spec §7.1.7, §11), for
+/// the custom usage faults only: resolve and value-validation messages,
+/// `Ctx` environment faults and late `Fault::Usage` escapes. CR/LF in
+/// that custom usage text become spaces; stored body text is not
+/// rewritten here, and clap grammar errors print clap's structured
+/// report through their own emitter above.
 fn usage_stderr(msg: &str) -> ExitCode {
     let line = msg.replace(['\n', '\r'], " ");
     eprintln!("error: {line}");
@@ -302,16 +312,14 @@ fn usage_stderr(msg: &str) -> ExitCode {
 }
 
 /// The wait dispatch's recovery context for a fault report: the
-/// new-baseline re-read lead every wait retry carries (see
-/// [`diag::FIX_WAIT_IO_LEAD`], `{reread}` already substituted), plus the
-/// optional restore template for a structural path fault that struck after
-/// the wait's ready line — path-class, or the Unix regular-file rejection
-/// (a [`diag::FIX_WAIT_RESTORE_*`] constant,
-/// `{display}` still unsubstituted). The lead is required so a restore
-/// without its new-baseline lead cannot be expressed; base commands pass
-/// no context at all.
+/// restart/read instruction ([`diag::FIX_WAIT_RESTART`] or its manual
+/// variant, `{reread}` already substituted), plus an optional restore
+/// template for a structural path fault after the wait's ready line
+/// (a [`diag::FIX_WAIT_RESTORE_*`] constant, `{display}` still
+/// unsubstituted). Every restore carries the restart/read instruction;
+/// base commands pass no context.
 struct WaitRecovery<'a> {
-    lead: &'a str,
+    restart: &'a str,
     path_restore: Option<&'static str>,
 }
 
@@ -335,16 +343,16 @@ fn io_report(
     source: &std::io::Error,
     ctx: &Ctx,
 ) -> Report {
-    io_report_with_retry_lead(command, object, action, path, source, ctx, None)
+    io_report_with_wait_recovery(command, object, action, path, source, ctx, None)
 }
 
 /// [`io_report`] with the wait dispatch's optional [`WaitRecovery`]
-/// context: its lead sentence goes in front of the repair and retry, and
-/// its optional restore template takes the fix wholesale whenever present
-/// — a structural loss of a path the command had already proven valid,
-/// replacing both the corrected-path advice and the generic I/O repair.
-/// Base commands pass no context and get the plain [`io_report`] behavior.
-fn io_report_with_retry_lead(
+/// context: its restart/read instruction follows the repair and precedes
+/// the original command. An optional restore template replaces both the
+/// corrected-path advice and the generic I/O repair for a structural loss
+/// of a path the command had already proven valid. Base commands pass no
+/// context and get the plain [`io_report`] behavior.
+fn io_report_with_wait_recovery(
     command: &'static str,
     object: &str,
     action: &'static str,
@@ -368,7 +376,7 @@ fn io_report_with_retry_lead(
             "cannot {action} {display}: {source}"
         ))],
     );
-    let retry_lead = wait_recovery.map(|recovery| recovery.lead);
+    let restart = wait_recovery.map(|recovery| recovery.restart);
     let path_restore = wait_recovery.and_then(|recovery| recovery.path_restore);
     let path_class = matches!(
         source.kind(),
@@ -384,19 +392,19 @@ fn io_report_with_retry_lead(
     // `Unsupported` and therefore not in `path_class` below, yet is the
     // same structural loss of a path the wait had proven valid. The
     // POSIX-quoted argv retry, the manual by-hand form for an
-    // unrepresentable command line and the optional lead are shared.
-    let repair_and_retry = |repair: String| {
-        let retry = match &ctx.argv {
-            Some(argv) => format!("{repair}, then retry: {argv}"),
-            None => {
-                let manual = diag::FIX_NATIVE_OPERAND;
-                let why = manual.split_once("; ").map_or(manual, |(_, why)| why);
-                format!("{repair}, then retry the original command by hand; {why}")
+    // unrepresentable command line and the wait's restart step are shared.
+    let repair_and_retry = |repair: String| match &ctx.argv {
+        Some(argv) => match restart {
+            Some(restart) => format!("{repair}; {restart}: {argv}"),
+            None => format!("{repair}, then retry: {argv}"),
+        },
+        None => {
+            let manual = diag::FIX_NATIVE_OPERAND;
+            let why = manual.split_once("; ").map_or(manual, |(_, why)| why);
+            match restart {
+                Some(restart) => format!("{repair}; {restart}; {why}"),
+                None => format!("{repair}, then retry the original command by hand; {why}"),
             }
-        };
-        match retry_lead {
-            Some(lead) => format!("{lead}; {retry}"),
-            None => retry,
         }
     };
     let fix = match path_restore {

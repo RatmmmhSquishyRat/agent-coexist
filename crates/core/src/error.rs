@@ -1,5 +1,5 @@
 //! Fault and Diagnostic: the error currency of the whole core crate
-//! (spec §1 "阻断诊断", §8.3, §9).
+//! (spec §1 "blocking diagnostics", §8.3, §9).
 //!
 //! `Diagnostic` is one entry of the frozen §9 catalog, anchored at a 1-based
 //! line of the source file, carrying the substitution params for the catalog

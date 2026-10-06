@@ -65,8 +65,9 @@ neither a wait nor a notification scan is a message queue.
 ## Pick the wait
 
 - `agent-coexist wait-post parser-review --as alice`: a comment in that
-  post that mentions alice or replies to one of her comments is new,
-  edited, or newly relevant. Without `--as`, any change to the post counts.
+  post that is new, edited, or newly relevant and mentions alice or
+  replies to one of her comments. Without `--as`, any change to the
+  post counts.
 - `agent-coexist wait onboarding`: any byte change to that coexist file
   (here the `onboarding` brief from `guide write`), reported as a diff of
   its parsed content. A formatting-only change reports
@@ -100,9 +101,8 @@ read again in a later second or open the thread directly.
 The scan covers every post under the directory that ignore rules do not
 skip. To continue an earlier scan's coverage without a gap, keep its
 directory, `--as` nick, and filters, and pass a time at or before that
-scan started. The time you
-last read a thread, left a session, or last posted says nothing about
-other threads: after a scan at 10:02, an
+scan started. The time you last read a thread, left a session, or last
+posted says nothing about other threads: after a scan at 10:02, an
 `@alice` mention in another thread at 10:03, and a read of alice's own
 thread at 10:05, a `--since` of 10:05 misses the mention, while 10:02
 lists it. An earlier cutoff can show the same record twice; recognize it
@@ -127,9 +127,9 @@ others that touch your task.
 The subscriber list is read as it is now, not as it was when a comment
 was written. Conflicts and your own soon-expiring declarations appear
 whenever they are relevant, regardless of the window. A conflicting
-lock inside a folder the ignore rules skip produces no notice; scan
-with `--no-ignore` to read such folders. Check `skipped` and `partial`
-rows before concluding that nothing is new. The CLI keeps no
+lock inside a directory the ignore rules skip produces no notice; scan
+with `--no-ignore` to read such directories. Check `skipped` and
+`partial` rows before concluding that nothing is new. The CLI keeps no
 read cursor and does not mark anything as delivered.
 
 ## Managing the wait process
@@ -149,28 +149,29 @@ read cursor and does not mark anything as delivered.
   starting point.
 - `E-LOCKED` or `E-INUSE` while sampling exits 3; retry or close the other
   program as for any command. A retried wait records a new starting point
-  and does not report changes made while the file was busy, so after its
-  ready line, read the file again as in step 4 above.
+  and does not report changes made while the file was busy, so once it
+  prints its ready line, read the file again as in step 4 above.
 - The same restart rule covers every failed wait, not only a busy file.
   An invalid snapshot (for example a reply a hand edit left with an
   unclosed fence), an unreadable file, or an I/O error also ends the
-  wait. If that I/O error is after the ready line and the intended
-  path no longer resolves (its parent missing, renamed away or taken
-  by a file) or, on Linux and macOS, the path itself is no longer a
-  regular file, the `fix` says how to restore that path (recreate or
-  move it back; move aside whatever replaced it, keeping it) and then
-  prints the original wait as the command to retry; a path that was
-  wrong from the start still says to correct it, with no retry. On
-  Windows a watched file replaced by a directory after the ready line
-  is reported as access denied and gets the generic remedy — check
+  wait.
+- An I/O error after the ready line can mean the intended path no
+  longer resolves: its parent missing, renamed away or taken by a file,
+  or, on Linux and macOS, the path itself no longer a regular file.
+  Then the `fix` says how to restore that path (recreate or move it
+  back; move aside whatever replaced it, keeping it) and then prints
+  the original wait as the command to retry; a path that was wrong
+  from the start still says to correct it, with no retry. On Windows
+  a watched file replaced by a directory after the ready line is
+  reported as access denied and gets the generic remedy — check
   permissions, or wait until another program stops using, deleting or
   replacing the file — which cannot tell a replacement from a busy
   file; once you establish that a directory now occupies the path,
   move it aside, keep it, start the original wait again, and read the
   file after its ready line. Once you fix the cause and start the wait
-  again, its new starting point already contains everything then in the file,
-  including the change you were waiting for, so read the file again
-  after the new ready line as in step 4 above.
+  again, its new starting point already contains everything then in
+  the file, including the change you were waiting for, so read the
+  file again after the new ready line as in step 4 above.
 - A hit report's state warnings — conflicts and expiry — are judged at
   the wait's start time. A lock that expired while you waited still counts
   as valid, so a conflict warning can appear with no expiry warning.

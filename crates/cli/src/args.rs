@@ -4,9 +4,10 @@
 //!
 //! 1. clap parses the grammar (`-h` / `-V`, positional shapes, required
 //!    arguments, `u64` overflow for `--edit` / `--reply-to` / `--comment`)
-//!    and returns grammar errors to main for one-line stderr and exit 2;
-//!    explicit help/version keep clap's stdout and exit 0. `guide` is a
-//!    typed information command on [`TopCommand`], flattened away from the
+//!    and returns grammar errors to main, which prints clap's own
+//!    structured multi-line stderr report (exit 2); explicit
+//!    help/version keep clap's stdout and exit 0. `guide` is a typed
+//!    information command on [`TopCommand`], flattened away from the
 //!    fourteen business [`Commands`].
 //! 2. [`resolve`] validates every business value **before any file access**
 //!    (spec §7.1.5–§7.1.7): nick / status / section grammars, control
@@ -181,6 +182,23 @@ fn kind_of(kind: KindArg) -> doc::Kind {
     }
 }
 
+/// A comment number (`--edit` / `--reply-to` / `--comment`): `u64`'s own
+/// parse, so exactly the values clap accepted before stay accepted (an
+/// optional leading `+`, then decimal digits, `0` to `u64::MAX`) and only
+/// the rejection text differs: the expected form and range, not Rust's
+/// `ParseIntError` wording (`string`, `target type`). Clap's error line
+/// already quotes the rejected value and the flag, so the message names
+/// only the expectation; the edge-whitespace repair still names the
+/// value it fixes.
+fn parse_comment_number(raw: &str) -> Result<u64, String> {
+    raw.parse::<u64>().map_err(|_| {
+        format!(
+            "expected a decimal comment number from 0 to 18446744073709551615{}",
+            edge_fix(raw, |v| v.parse::<u64>().is_ok())
+        )
+    })
+}
+
 #[derive(Subcommand, Debug)]
 pub enum Commands {
     /// Recursively list collaboration files under DIR
@@ -211,7 +229,7 @@ pub enum Commands {
         /// the section to set or remove
         #[arg(long, value_name = "name")]
         section: Option<String>,
-        /// the section body, stored verbatim in a code fence
+        /// the section body, stored in a code fence
         #[arg(short = 'm', value_name = "content")]
         message: Option<String>,
         /// delete the whole --section
@@ -226,11 +244,11 @@ pub enum Commands {
         /// the author nick written in the comment heading
         #[arg(long = "as", value_name = "nick")]
         as_nick: String,
-        /// the comment body, stored verbatim in a code fence
+        /// the comment body, stored in a code fence
         #[arg(short = 'm', value_name = "content")]
         message: String,
         /// replace the whole body of your own comment #n (its author must be --as)
-        #[arg(long, value_name = "n")]
+        #[arg(long, value_name = "n", value_parser = parse_comment_number)]
         edit: Option<u64>,
     },
     /// Join or leave a post's subscriber list
@@ -319,10 +337,10 @@ pub enum Commands {
         #[arg(long, value_name = "nick")]
         mention: Option<String>,
         /// the body replies to comment n (@#n)
-        #[arg(long = "reply-to", value_name = "n")]
+        #[arg(long = "reply-to", value_name = "n", value_parser = parse_comment_number)]
         reply_to: Option<u64>,
         /// the comment numbered n
-        #[arg(long, value_name = "n")]
+        #[arg(long, value_name = "n", value_parser = parse_comment_number)]
         comment: Option<u64>,
     },
     /// Print a brief's description, notes and target text
@@ -925,17 +943,23 @@ pub fn usage_message(fault: Fault) -> String {
     }
 }
 
-/// The one-line text for a clap grammar error (without `error: `), with
-/// the advice clap cannot phrase for this grammar corrected from the
-/// error's structured context and the native command line `words`
-/// (program name first). For an unknown option on a business or guide
-/// command, clap's `-- <word>` tip turns the word into the PATH/DIR, which
-/// is almost never what was meant, so [`unknown_option_tip`] replaces it.
-/// A value that is not valid Unicode gets a message that names the
-/// argument holding it and how to repair it.
+/// The full stderr text for a clap grammar error: clap's own structured
+/// report, rendered verbatim once the advice clap cannot phrase for this
+/// grammar is corrected from the error's structured context and the
+/// native command line `words` (program name first) — the `error: `
+/// message line, indented `tip:` lines, the `Usage:` block and the help
+/// hint, each on its own line, ending with the one trailing newline clap
+/// writes. For an unknown option on a business or guide command, clap's
+/// `-- <word>` tip turns the word into the PATH/DIR, which is almost
+/// never what was meant, so [`unknown_option_tip`] replaces it. A value
+/// that is not valid Unicode has no usable clap rendering; it gets the
+/// one custom `error: <message>` line of [`invalid_unicode_message`]
+/// instead, like every custom usage fault.
 pub fn grammar_error_message(mut error: clap::Error, words: &[OsString]) -> String {
     match error.kind() {
-        ErrorKind::InvalidUtf8 => return invalid_unicode_message(words),
+        ErrorKind::InvalidUtf8 => {
+            return format!("error: {}\n", invalid_unicode_message(words));
+        }
         ErrorKind::UnknownArgument => {
             let reported = match error.get(ContextKind::InvalidArg) {
                 Some(ContextValue::String(reported)) => Some(reported.clone()),
@@ -968,11 +992,9 @@ pub fn grammar_error_message(mut error: clap::Error, words: &[OsString]) -> Stri
             }
         }
     }
-    let message = error.to_string();
-    match message.strip_prefix("error: ") {
-        Some(rest) => rest.to_string(),
-        None => message,
-    }
+    // Clap's own rendering carries the corrections above; its text ends
+    // with the one trailing newline, so the caller prints it as-is.
+    error.to_string()
 }
 
 /// Run `f` on the business (or guide) subcommand that `words[1]` names.
@@ -1152,9 +1174,7 @@ fn unknown_option_tip(words: &[OsString], reported: &str, has_similar: bool) -> 
 /// start with `-` when attached with `=`.
 fn dash_free_value(arg: &Arg, flag: &str) -> Option<String> {
     if arg.get_value_parser().type_id() == std::any::TypeId::of::<u64>() {
-        return Some(format!(
-            "a comment number made of digits only (such as {flag} 3)"
-        ));
+        return Some(format!("a decimal comment number (such as {flag} 3)"));
     }
     Some(match arg.get_long()? {
         "as" | "by" | "mention" | "remove" => format!("a nick: {NICK_RULE}"),
@@ -1279,10 +1299,10 @@ Which read command:
 Exit codes of the business commands (all except guide and help):
   0    first line 'ok' or 'warn'; 'warn' also exits 0, so read the first line and rows for conflicts and incomplete scans
   1    first line 'error'; also when a command could not write its report to stdout (a write command may already have changed the file: check it before retrying)
-  2    usage error: one 'error: ...' line on stderr, nothing on stdout
+  2    usage error on stderr (possibly multiple lines), nothing on stdout
   3    busy or locked (E-LOCKED, E-INUSE, E-FLOCKED); the report's 'fix' row says what to do next
   130  wait, wait-post or wait-state cancelled with Ctrl-C; no stdout
-guide, help, --help and --version print information with no ok/warn/error line and exit 0; usage errors still exit 2, and a failed guide write exits 1.
+guide, help, --help and --version print information with no ok/warn/error line and exit 0; usage errors still exit 2, and guide exits 1 if it cannot write or flush its page to stdout.
 
 Scan progress ('scanning dirs: N, files: M...') appears on stderr only when stderr is a terminal. No progress line does not mean success or failure; judge the result by the report and the exit code.
 Examples and 'fix' commands use POSIX shell quoting (Git Bash on Windows); adjust the quoting for cmd.exe or PowerShell."
@@ -1342,20 +1362,20 @@ Waits up to 1s for a shared lock; if the file stays busy: E-LOCKED, exit 3; retr
 Example: agent-coexist check docs/standup";
 
 const H_PROFILE: &str = "\
---section <name> -m <content> sets that section's body, stored verbatim in a code fence; --section <name> --remove deletes the section. Without --section, creates the file (heading only) or reports 'unchanged'. Content that starts with '-' must be attached: -m='- item'.
+--section <name> -m <content> sets that section's body, stored in a code fence. CRLF line endings become LF, and whitespace at the end of the body is removed. --section <name> --remove deletes the section. Without --section, creates the file (heading only) or reports 'unchanged'. Content that starts with '-' must be attached: -m='- item'.
 --as is your nick. It is not written; it only exempts your own 'locked' declarations. A valid 'locked' by another nick on the file's directory or an ancestor refuses the write with E-FLOCKED (exit 3); without --as, your own 'locked' refuses it too.
 If another write holds the file, fails after about 200ms with E-LOCKED (exit 3); retry shortly. On E-FLOCKED, retry after the time shown in 'reason' or ask the holder; do not retry in a loop.
 Example: agent-coexist profile agents/alice --section role -m 'Rust implementer. Owns crates/core.'";
 
 const H_POST: &str = "\
--m is the comment body, stored verbatim in a code fence. In it, @nick mentions someone and @#n replies to comment n. A body that starts with '-', such as a Markdown list, must be attached: -m='- item'. --as is the author nick written in the comment heading.
+-m is the comment body, stored in a code fence. CRLF line endings become LF, and whitespace at the end of the body is removed. In it, @nick mentions someone and @#n replies to comment n. A body that starts with '-', such as a Markdown list, must be attached: -m='- item'. --as is the author nick written in the comment heading.
 --edit <n> replaces the whole body of your own comment #n (its author must be --as), so resend everything you want to keep.
 The report's 'comment' row names the comment written.
 Waits up to 5s for the file lock (AGENT_COEXIST_LOCK_WAIT_MS overrides); if still busy: E-LOCKED, exit 3; retry the same command shortly.
 Example: agent-coexist post docs/standup --as bob -m '@#1 parser done, see src/parser/mod.rs'";
 
 const H_SUBSCRIBE: &str = "\
-Adds --as to the post's subscriber list, so read-notification --as <nick> lists every new comment in that post. Nothing is pushed to subscribers, and wait-post does not use the list.
+Adds --as to the post's subscriber list, so read-notification --as <nick> includes new comments by other authors in that post within the scan's time window. Nothing is pushed to subscribers, and wait-post does not use the list.
 --cancel removes --as from the list. Subscribing twice, or cancelling a nick that is not subscribed, changes nothing ('unchanged <nick>').
 Locking is as for post: waits up to 5s (AGENT_COEXIST_LOCK_WAIT_MS overrides), then E-LOCKED, exit 3.
 Example: agent-coexist subscribe docs/standup --as alice";
@@ -1382,7 +1402,7 @@ If another write holds the state file, fails after about 200ms with E-LOCKED (ex
 Example: agent-coexist state src --as alice --status locked --for 1h30m";
 
 const H_READ_NOTIFICATION: &str = "\
-Lists, oldest first, what happened since --since that concerns the --as nick: comments that mention it, reply to its comments, or appear in posts it subscribes to; state declarations by others; locks that overlap its own; its own declarations that end soon or have ended.
+Lists, oldest first, what happened since --since that concerns the --as nick: comments by other authors that mention it, reply to its comments, or appear in posts it subscribes to; state declarations by others; locks that overlap its own; its own declarations that end soon or have ended.
 Scans every post and state file under DIR that ignore rules do not skip (default: the current directory) and also reads ancestor state files. It never writes files and keeps no read cursor; for files inside ignored directories add --no-ignore.
 --since is an RFC 3339 time (e.g. 2026-09-17T09:12:00Z) or a duration back from now (e.g. 1h30m). The window ends before the current second, so a comment written this second shows up in a later scan.
 --include/--exclude are gitignore-style globs relative to DIR. --include does not reach into directories that ignore rules skip; add --no-ignore for that.

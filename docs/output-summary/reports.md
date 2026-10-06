@@ -34,7 +34,7 @@ warn  list  .
     empty                     ?
     noheading                 ?
     standup                   post
-  fix           some leaves above have no known type (? or busy) or some directories could not be read or entered (skipped rows), so types or files may be missing here; read each one again to see what it holds or why it cannot be read: agent-coexist check ./docs/binary; agent-coexist check ./docs/empty; agent-coexist check ./docs/noheading
+  fix           some files above have no known type (? or busy) or some directories could not be read or entered (skipped rows), so types or files may be missing here; read each one again to see what it holds or why it cannot be read: agent-coexist check ./docs/binary; agent-coexist check ./docs/empty; agent-coexist check ./docs/noheading
   total         4
 ```
 
@@ -166,7 +166,7 @@ warn  read-brief  docs/big
   entry         hash only  fresh  ../data/big.txt  target too large
 ```
 
-`agent-coexist read-brief docs/onboarding --entry parser` · exit code 1 · The title must match exactly.
+`agent-coexist read-brief docs/onboarding --entry parser` · exit code 1 · Use the full entry title, not a prefix.
 ```text
 error  read-brief  docs/onboarding
   reason        no entry titled "parser"
@@ -196,7 +196,7 @@ warn  read-notification  .
   as            alice
   since         2026-09-17T08:00:00Z
   state       2026-09-17T08:00:00Z  ./src/parser  observing  eve  until 2026-09-17T09:00:00Z  expired
-  expired     2026-09-17T09:30:00Z  .  observing  alice  expired at 2026-09-17T09:30:00Z
+  expired     2026-09-17T09:30:00Z  .  observing  alice
   state       2026-09-17T09:30:00Z  ./src/parser  locked  bob  until 2026-09-17T11:30:00Z
   conflict    2026-09-17T09:30:00Z  ./src/parser  locked  bob  overlaps your lock on .
   state       2026-09-17T09:45:00Z  ./src/parser/lexer  locked  carol  until 2026-09-17T12:00:00Z
@@ -205,7 +205,7 @@ warn  read-notification  .
   total         7
 ```
 
-`agent-coexist read-notification --as alice --since 2h` · skipped means the file was not read at all; partial means only part of it was.
+`agent-coexist read-notification --as alice --since 2h` · The `E-TYPE` row skips state declarations from `./w/state`; its post comment still produces the mention shown.
 ```text
 warn  read-notification  .
   as            alice
@@ -312,7 +312,7 @@ ok  post  parser-review
   mentions      bob
 ```
 
-`AGENT_COEXIST_NOW=2026-09-17T10:05:00Z agent-coexist post parser-review --as bob -m $'@#5 Mapping looks right.\nNext: cover the empty-input case.'` · AGENT_COEXIST_NOW fixes the time used in this example.
+`AGENT_COEXIST_NOW=2026-09-17T10:05:00Z agent-coexist post parser-review --as bob -m $'@#5 Mapping looks right.\nNext: cover the empty-input case.'` · Current time for this command: 2026-09-17T10:05:00Z.
 ```text
 warn  post  parser-review
   comment       #2  L10
@@ -406,7 +406,7 @@ warn  brief  onboarding
   entry         design notes  skipped  no path
   fix           skipped entries and remaining errors in this file need check on this file; follow the suggestions check prints: agent-coexist check onboarding.agent-besties.md
   skipped       .  E-H1
-  fix           any change reported above is already written, but the lock check could not read everything it needed (the rows above that start with skipped, partial or canonicalize), so a lock that applies here may have been missed; before writing again, look at what it could not read and agree with any holder named there: agent-coexist check state
+  fix           changes reported above are already written; rows starting with skipped, partial or canonicalize mean the lock check may have missed a holder. Before writing again, run these checks, then agree with any holder they show: agent-coexist check state
   remaining     E-ENTRY-PATH  L15
   remaining     E-ENTRY-HASH  L15
 ```
@@ -495,7 +495,7 @@ warn  profile  team/agents/alice
   created       team/agents/alice.agent-besties.md
   section       role  set
   partial       team  W-STATE-ENTRY  L5
-  fix           any change reported above is already written, but the lock check could not read everything it needed (the rows above that start with skipped, partial or canonicalize), so a lock that applies here may have been missed; before writing again, look at what it could not read and agree with any holder named there: agent-coexist check team/state
+  fix           changes reported above are already written; rows starting with skipped, partial or canonicalize mean the lock check may have missed a holder. Before writing again, run these checks, then agree with any holder they show: agent-coexist check team/state
 ```
 
 `AGENT_COEXIST_NOW=2026-09-17T13:00:00Z agent-coexist state team/agents --as dave --status observing`
@@ -504,7 +504,7 @@ warn  state  team/agents
   created       team/agents/state.agent-besties.md
   set           observing  dave  2026-09-17T13:00:00Z..2026-09-17T21:00:00Z
   skipped       team  E-H1
-  fix           the declaration above is written, but the conflict check could not read everything it needed (the rows above that start with skipped or partial), so a conflicting lock may have been missed; without declaring again, look at what it could not read and agree with any holder named there: agent-coexist check team/state
+  fix           the declaration is written; rows starting with skipped, partial or canonicalize mean the conflict check may have missed a lock. Without declaring again, run these checks, then agree with any holder they show: agent-coexist check team/state
 ```
 
 <a id="write-type-mismatch"></a>

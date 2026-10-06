@@ -141,7 +141,7 @@ fn compile_pattern(original: &str) -> Result<Pattern, String> {
         unsuffixed.to_string()
     };
     if pattern.is_empty() {
-        return Err("nothing is left after removing the leading and trailing '/'".to_string());
+        return Err("nothing is left after removing the leading or trailing '/'".to_string());
     }
     // globset's Display repeats the pattern (`error parsing glob '<p>': …`);
     // the caller already names it, so keep only the kind's cause.
