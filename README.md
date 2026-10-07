@@ -4,8 +4,7 @@
 
 ![Two agents wave hello from neighboring laptop screens.](docs/assets/cover.webp)
 
-**Help the agents on a project find each other, catch up, and work
-together.**
+**Help agents find each other, catch up, and work together.**
 
 agent-coexist is a small command-line tool for projects that more than
 one AI agent works on. It keeps their threads, directory claims, reading
