@@ -63,10 +63,26 @@ fn main() -> ExitCode {
             let words: Vec<OsString> = std::env::args_os().collect();
             // clap's own corrected report, multi-line as clap renders it;
             // its text already ends with the one trailing newline.
-            eprint!("{}", args::grammar_error_message(error, &words));
+            let _ = write!(
+                std::io::stderr(),
+                "{}",
+                args::grammar_error_message(error, &words)
+            );
             return ExitCode::from(2);
         }
-        Err(error) => error.exit(),
+        Err(error) => {
+            // clap's exit() discards output failures. Information output
+            // follows guide's delivery rule: an incomplete page is exit 1.
+            return if error
+                .print()
+                .and_then(|()| std::io::stdout().flush())
+                .is_ok()
+            {
+                ExitCode::from(0)
+            } else {
+                ExitCode::from(1)
+            };
+        }
     };
     let command = match cli.command {
         args::TopCommand::Guide { topic } => return guide::emit(topic),
@@ -283,20 +299,26 @@ fn object_and_dctx(
 
 /// Render a business report to stdout and finish with its exit code.
 /// Business reports write stdout only here (spec §8.1.1). Information
-/// commands (guide, help, version) write through their own path; guide
-/// checks write and flush, while this path still ignores flush failure.
+/// commands (guide, help, version) write through their own path. Each
+/// output path checks both writing and flushing before claiming delivery.
 fn emit(report: &Report, dctx: &diag::Context) -> ExitCode {
     let stdout = std::io::stdout();
     let mut out = stdout.lock();
-    match render::render(report, dctx, &mut out) {
-        Ok(()) => {
-            let _ = out.flush();
-            ExitCode::from(report.exit)
-        }
+    match write_report(report, dctx, &mut out) {
+        Ok(()) => ExitCode::from(report.exit),
         // stdout itself failed (e.g. closed pipe): the report cannot be
         // delivered and nothing further may be written to it.
         Err(_) => ExitCode::from(1),
     }
+}
+
+fn write_report(
+    report: &Report,
+    dctx: &diag::Context,
+    out: &mut impl Write,
+) -> std::io::Result<()> {
+    render::render(report, dctx, out)?;
+    out.flush()
 }
 
 /// One stderr line and exit 2, stdout untouched (spec §7.1.7, §11), for
@@ -307,7 +329,7 @@ fn emit(report: &Report, dctx: &diag::Context) -> ExitCode {
 /// report through their own emitter above.
 fn usage_stderr(msg: &str) -> ExitCode {
     let line = msg.replace(['\n', '\r'], " ");
-    eprintln!("error: {line}");
+    let _ = writeln!(std::io::stderr(), "error: {line}");
     ExitCode::from(2)
 }
 
@@ -590,12 +612,15 @@ fn cancelled_report(command: &'static str, object: &str) -> Report {
     report
 }
 
-#[cfg(all(test, windows))]
+#[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(windows)]
     use std::ffi::OsStr;
+    #[cfg(windows)]
     use std::os::windows::ffi::OsStringExt;
 
+    #[cfg(windows)]
     #[test]
     fn io_retry_with_unpaired_utf16_is_wholly_manual() {
         let native = OsString::from_wide(&[b'r' as u16, 0xd800]);
@@ -625,5 +650,27 @@ mod tests {
         assert!(!fix[0].contains("agent-coexist"), "{fix:?}");
         assert!(fix[0].contains("by hand"), "{fix:?}");
         assert!(fix[0].ends_with(manual), "{fix:?}");
+    }
+
+    struct FlushFailure(Vec<u8>);
+
+    impl Write for FlushFailure {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            self.0.extend_from_slice(bytes);
+            Ok(bytes.len())
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Err(std::io::Error::from(std::io::ErrorKind::BrokenPipe))
+        }
+    }
+
+    #[test]
+    fn a_written_report_is_not_delivered_when_flush_fails() {
+        let report = Report::new("check", "thread");
+        let mut out = FlushFailure(Vec::new());
+        let err = write_report(&report, &diag::Context::default(), &mut out).unwrap_err();
+        assert_eq!(err.kind(), std::io::ErrorKind::BrokenPipe);
+        assert_eq!(out.0, b"ok  check  thread\n");
     }
 }

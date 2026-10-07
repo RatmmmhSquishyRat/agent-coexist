@@ -52,15 +52,19 @@ fn step(
     bytes: &[u8],
     created: bool,
 ) -> Result<(Mutation, Step), Fault> {
+    // The exclusive lock is already held. Sampling before the queue could
+    // backdate this write behind an intervening successful shared read and
+    // hide it from that reader's next notification window.
+    let event_time = ctx.write_now();
     if created {
-        return create_step(p, &time::format(ctx.now));
+        return create_step(p, &time::format(event_time));
     }
-    let doc = match checked_doc(bytes, &p.path, ctx.now, doc::Kind::Post) {
+    let doc = match checked_doc(bytes, &p.path, event_time, doc::Kind::Post) {
         Ok(doc) => doc,
         Err(Early::Step(step)) => return Ok((Mutation::Unchanged, step)),
         Err(Early::Fault(fault)) => return Err(fault),
     };
-    let now = time::format(ctx.now);
+    let now = time::format(event_time);
     match p.edit {
         None => append_step(p, &doc, bytes, &now),
         Some(n) => edit_step(p, &doc, bytes, n, &now),

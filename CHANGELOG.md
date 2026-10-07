@@ -10,6 +10,32 @@ All notable changes to this project are documented here. The format follows
 - Reorganized file format reference rules for comment headers, numbering, and repairs into readable sections, clarifying manual reply retargeting and sequence-exhaustion recovery without changing on-disk formats.
 - Streamlined diagnostic recovery help and guide headings with concise operating boundaries and clearer creation/edit contracts.
 
+### Fixed
+
+Concurrency and output delivery
+
+- A queued post or state declaration now records its activity time while
+  holding the exclusive lock, before assembling the write. A notification
+  scan completed while the write was waiting can resume from its start
+  without losing that later event. A state declaration keeps its full
+  duration, and a fixed `AGENT_COEXIST_NOW` still stays fixed.
+- Brief target reads take bounded shared locks, including ordinary names
+  and file aliases. Verification and refresh no longer consume an
+  in-progress cooperating write. Self-references reuse the brief's locked
+  pre-write snapshot. Target buffering also avoids reallocating on every
+  read chunk while retaining the same memory cap and full-file hash.
+- Help, version, and business reports check stdout write and flush errors
+  and return exit 1 when delivery fails. A usage error remains exit 2
+  even if stderr fails; an already committed file change is retained.
+- Quoted `core.excludesFile` paths with spaces are loaded correctly. The
+  selected config value respects comments, escapes, continuation, and
+  last-value precedence within `[core]`; malformed values report their
+  source instead of silently dropping its ignore rules.
+- File-size-limit regression tests capture child output through pipes,
+  so writing the test log to a regular file cannot trigger the child
+  process's file-size limit. Commit recovery and final-sync failure now
+  have deterministic regression coverage.
+
 ## [0.2.0] - 2026-10-09
 
 ### Added

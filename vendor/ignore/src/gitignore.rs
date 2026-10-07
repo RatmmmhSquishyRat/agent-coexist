@@ -8,6 +8,7 @@ the `git` command line tool.
 */
 
 use std::{
+    ffi::OsStr,
     io::{BufRead, BufReader, Read},
     path::{Path, PathBuf},
     sync::Arc,
@@ -392,6 +393,9 @@ impl GitignoreBuilder {
         match gitconfig_excludes_path() {
             Err(err) => (Gitignore::empty(), Some(err)),
             Ok(None) => (Gitignore::empty(), None),
+            Ok(Some(path)) if path.as_os_str().is_empty() => {
+                (Gitignore::empty(), None)
+            }
             Ok(Some(path)) => {
                 let mut errs = PartialErrorBuilder::default();
                 errs.maybe_push_ignore_io(self.add(&path));
@@ -613,38 +617,30 @@ pub fn gitconfig_excludes_path() -> Result<Option<PathBuf>, Error> {
     // setting. The default ignore file is used only when no selected config
     // provides a setting.
     if gitconfig_global_env_path().is_some() {
-        if let Some(path) = gitconfig_global_env_contents()?
-            .and_then(|x| parse_excludes_file(&x))
-        {
+        if let Some(path) = gitconfig_global_env_excludes_path()? {
             return Ok(Some(path));
         }
     } else {
-        if let Some(path) =
-            gitconfig_home_contents()?.and_then(|x| parse_excludes_file(&x))
-        {
+        if let Some(path) = gitconfig_home_excludes_path()? {
             return Ok(Some(path));
         }
-        if let Some(path) =
-            gitconfig_xdg_contents()?.and_then(|x| parse_excludes_file(&x))
-        {
+        if let Some(path) = gitconfig_xdg_excludes_path()? {
             return Ok(Some(path));
         }
     }
     // System-level config has the lowest priority for core.excludesFile.
     // GIT_CONFIG_SYSTEM overrides the default /etc/gitconfig path.
-    if let Some(path) =
-        gitconfig_system_contents()?.and_then(|x| parse_excludes_file(&x))
-    {
+    if let Some(path) = gitconfig_system_excludes_path()? {
         return Ok(Some(path));
     }
     Ok(excludes_file_default())
 }
 
-/// Reads a git config file if present.
+/// Read the selected excludes path from a git config file if present.
 ///
 /// `NotFound` and `NotADirectory` are treated as absent. Every other open
 /// or read error is returned.
-fn read_optional_gitconfig(path: &Path) -> Result<Option<Vec<u8>>, Error> {
+fn read_optional_gitconfig(path: &Path) -> Result<Option<PathBuf>, Error> {
     let file = match open_regular_file(path) {
         Err(err)
             if err.kind() == std::io::ErrorKind::NotFound
@@ -657,7 +653,7 @@ fn read_optional_gitconfig(path: &Path) -> Result<Option<Vec<u8>>, Error> {
     };
     let mut contents = vec![];
     match BufReader::new(file).read_to_end(&mut contents) {
-        Ok(_) => Ok(Some(contents)),
+        Ok(_) => parse_excludes_file(&contents).map_err(|err| err.with_path(path)),
         Err(err) => Err(Error::Io(err).with_path(path)),
     }
 }
@@ -671,19 +667,19 @@ fn gitconfig_global_env_path() -> Option<PathBuf> {
     }
 }
 
-/// Returns the file contents of git's global config file from the path
-/// specified by the `GIT_CONFIG_GLOBAL` environment variable.
-fn gitconfig_global_env_contents() -> Result<Option<Vec<u8>>, Error> {
+/// Read the excludes setting in the global config file selected by
+/// `GIT_CONFIG_GLOBAL`.
+fn gitconfig_global_env_excludes_path() -> Result<Option<PathBuf>, Error> {
     let Some(path) = gitconfig_global_env_path() else {
         return Ok(None);
     };
     read_optional_gitconfig(&path)
 }
 
-/// Returns the file contents of git's system-level config file.
+/// Read the excludes setting in git's system-level config file.
 ///
 /// Checks `GIT_CONFIG_SYSTEM` first, then falls back to `/etc/gitconfig`.
-fn gitconfig_system_contents() -> Result<Option<Vec<u8>>, Error> {
+fn gitconfig_system_excludes_path() -> Result<Option<PathBuf>, Error> {
     let path = std::env::var_os("GIT_CONFIG_SYSTEM")
         .map(PathBuf::from)
         .filter(|x| !x.as_os_str().is_empty())
@@ -691,18 +687,16 @@ fn gitconfig_system_contents() -> Result<Option<Vec<u8>>, Error> {
     read_optional_gitconfig(&path)
 }
 
-/// Returns the file contents of git's global config file, if one exists, in
-/// the user's home directory.
-fn gitconfig_home_contents() -> Result<Option<Vec<u8>>, Error> {
+/// Read the excludes setting in the user's home git config, if present.
+fn gitconfig_home_excludes_path() -> Result<Option<PathBuf>, Error> {
     let Some(home) = home_dir() else {
         return Ok(None);
     };
     read_optional_gitconfig(&home.join(".gitconfig"))
 }
 
-/// Returns the file contents of git's global config file, if one exists, in
-/// the user's XDG_CONFIG_HOME directory.
-fn gitconfig_xdg_contents() -> Result<Option<Vec<u8>>, Error> {
+/// Read the excludes setting in the XDG git config, if present.
+fn gitconfig_xdg_excludes_path() -> Result<Option<PathBuf>, Error> {
     let Some(path) = std::env::var_os("XDG_CONFIG_HOME")
         .map(PathBuf::from)
         .filter(|x| !x.as_os_str().is_empty())
@@ -727,47 +721,163 @@ fn excludes_file_default() -> Option<PathBuf> {
 
 /// Extract git's `core.excludesfile` config setting from the raw file contents
 /// given.
-fn parse_excludes_file(data: &[u8]) -> Option<PathBuf> {
-    use std::sync::OnceLock;
+fn parse_excludes_file(data: &[u8]) -> Result<Option<PathBuf>, Error> {
+    // Extract only this setting; source selection and includes remain the
+    // caller's existing policy. Git values can contain quoted or unquoted
+    // spaces, comments, escaped characters and continued physical lines.
+    // Restrict the key to [core], and use its last value in this source.
+    let mut core = false;
+    let mut selected = None;
+    let mut logical = Vec::new();
+    let mut first_line = 1;
+    let data = data.strip_prefix(b"\xef\xbb\xbf").unwrap_or(data);
+    // Git also terminates the last logical value at EOF, even when the
+    // physical last line ended with a continuation backslash.
+    for (index, physical) in data
+        .split(|&b| b == b'\n')
+        .chain(std::iter::once(b"".as_slice()))
+        .enumerate()
+    {
+        if logical.is_empty() {
+            first_line = index + 1;
+        }
+        let physical = physical.strip_suffix(b"\r").unwrap_or(physical);
+        logical.extend_from_slice(physical);
+        if config_continues(&logical) {
+            logical.pop();
+            continue;
+        }
+        let mut line = logical.trim_ascii_start();
+        if let Some(section) = line.strip_prefix(b"[") {
+            if let Some(end) = section.iter().position(|&b| b == b']') {
+                core = section[..end].eq_ignore_ascii_case(b"core");
+                line = section[end + 1..].trim_ascii_start();
+            } else {
+                core = false;
+            }
+        }
+        if core && !matches!(line.first(), None | Some(b'#' | b';')) {
+            let at_line = |err| Error::WithLineNumber {
+                line: first_line as u64,
+                err: Box::new(Error::Io(err)),
+            };
+            let key_end = line
+                .iter()
+                .position(|&b| {
+                    b.is_ascii_whitespace() || matches!(b, b'=' | b'#' | b';')
+                })
+                .unwrap_or(line.len());
+            if line[..key_end].eq_ignore_ascii_case(b"excludesfile") {
+                let input = line[key_end..].trim_ascii_start();
+                let Some(input) = input.strip_prefix(b"=") else {
+                    return Err(at_line(std::io::Error::new(
+                        std::io::ErrorKind::InvalidData,
+                        "core.excludesFile requires a path value after '='",
+                    )));
+                };
+                let value = parse_config_value(input).map_err(|cause| {
+                    at_line(std::io::Error::new(
+                        std::io::ErrorKind::InvalidData,
+                        cause,
+                    ))
+                })?;
+                selected = Some(expand_tilde(&value).map_err(at_line)?);
+            }
+        }
+        logical.clear();
+    }
+    Ok(selected)
+}
 
-    use regex_automata::{meta::Regex, util::syntax};
+/// An unescaped final backslash continues a value, except inside an
+/// unquoted comment, whose newline always ends that comment.
+fn config_continues(line: &[u8]) -> bool {
+    let mut quoted = false;
+    let mut escaped = false;
+    for &byte in line {
+        if escaped {
+            escaped = false;
+        } else {
+            match byte {
+                b'\\' => escaped = true,
+                b'"' => quoted = !quoted,
+                b'#' | b';' if !quoted => return false,
+                _ => {}
+            }
+        }
+    }
+    escaped
+}
 
-    // N.B. This is the lazy approach, and isn't technically correct, but
-    // probably works in more circumstances. I guess we would ideally have
-    // a full INI parser. Yuck.
-    static RE: OnceLock<Regex> = OnceLock::new();
-    let re = RE.get_or_init(|| {
-        Regex::builder()
-            .configure(Regex::config().utf8_empty(false))
-            .syntax(syntax::Config::new().utf8(false))
-            .build(r#"(?im-u)^\s*excludesfile\s*=\s*"?\s*(\S+?)\s*"?\s*$"#)
-            .unwrap()
-    });
-    // We don't care about amortizing allocs here I think. This should only
-    // be called ~once per traversal or so? (Although it's not guaranteed...)
-    let mut caps = re.create_captures();
-    re.captures(data, &mut caps);
-    let span = caps.get_group(1)?;
-    let candidate = &data[span];
-    std::str::from_utf8(candidate).ok().map(expand_tilde)
+/// Decode one Git string value, preserving spaces inside quotes and
+/// trimming only unquoted edge whitespace. Never interpret a comment as
+/// part of the pathname or silently fall back after a malformed value.
+fn parse_config_value(input: &[u8]) -> Result<Vec<u8>, &'static str> {
+    let mut value = Vec::new();
+    let mut pending = Vec::new();
+    let mut quoted = false;
+    let mut input = input.trim_ascii_start().iter().copied();
+    while let Some(byte) = input.next() {
+        match byte {
+            b'\\' => {
+                let decoded = match input.next() {
+                    Some(b'n') => b'\n',
+                    Some(b't') => b'\t',
+                    Some(b'b') => b'\x08',
+                    Some(b'"') => b'"',
+                    Some(b'\\') => b'\\',
+                    _ => return Err("invalid escape in core.excludesFile"),
+                };
+                value.append(&mut pending);
+                value.push(decoded);
+            }
+            b'"' => {
+                value.append(&mut pending);
+                quoted = !quoted;
+            }
+            b'#' | b';' if !quoted => break,
+            byte if !quoted && byte.is_ascii_whitespace() => pending.push(byte),
+            byte => {
+                value.append(&mut pending);
+                value.push(byte);
+            }
+        }
+    }
+    if quoted {
+        return Err("unclosed quote in core.excludesFile");
+    }
+    Ok(value)
 }
 
 /// Expands a leading `~` path component to the native home directory.
 ///
 /// Later tildes and `~user` paths are left unchanged.
-fn expand_tilde(path: &str) -> PathBuf {
-    let Some(rest) = path.strip_prefix('~') else {
-        return PathBuf::from(path);
-    };
-    if !rest.is_empty() && !rest.starts_with(std::path::is_separator) {
-        return PathBuf::from(path);
+fn expand_tilde(bytes: &[u8]) -> std::io::Result<PathBuf> {
+    #[cfg(unix)]
+    use std::os::unix::ffi::OsStrExt;
+    #[cfg(unix)]
+    let path = OsStr::from_bytes(bytes);
+    #[cfg(not(unix))]
+    let path = OsStr::new(std::str::from_utf8(bytes).map_err(|err| {
+        std::io::Error::new(std::io::ErrorKind::InvalidData, err)
+    })?);
+    let leading_home = bytes.first() == Some(&b'~')
+        && (bytes.len() == 1
+            || bytes.get(1) == Some(&b'/')
+            || (cfg!(windows) && bytes.get(1) == Some(&b'\\')));
+    if !leading_home {
+        return Ok(PathBuf::from(path));
     }
     let Some(home) = home_dir() else {
-        return PathBuf::from(path);
+        return Ok(PathBuf::from(path));
     };
     let mut expanded = home.into_os_string();
+    #[cfg(unix)]
+    let rest = OsStr::from_bytes(&bytes[1..]);
+    #[cfg(not(unix))]
+    let rest = &path.to_str().expect("validated UTF-8 above")[1..];
     expanded.push(rest);
-    PathBuf::from(expanded)
+    Ok(PathBuf::from(expanded))
 }
 
 fn strip_prefix_at_component_boundary<'a>(
@@ -1044,14 +1154,14 @@ mod tests {
     #[test]
     fn parse_excludes_file1() {
         let data = bytes("[core]\nexcludesFile = /foo/bar");
-        let got = super::parse_excludes_file(&data).unwrap();
+        let got = super::parse_excludes_file(&data).unwrap().unwrap();
         assert_eq!(path_string(got), "/foo/bar");
     }
 
     #[test]
     fn parse_excludes_file2() {
         let data = bytes("[core]\nexcludesFile = ~/foo/bar");
-        let got = super::parse_excludes_file(&data).unwrap();
+        let got = super::parse_excludes_file(&data).unwrap().unwrap();
         let expected = super::home_dir()
             .map(|home| {
                 // Even an empty native home retains the literal suffix's slash.
@@ -1066,13 +1176,13 @@ mod tests {
     #[test]
     fn parse_excludes_file3() {
         let data = bytes("[core]\nexcludeFile = /foo/bar");
-        assert!(super::parse_excludes_file(&data).is_none());
+        assert!(super::parse_excludes_file(&data).unwrap().is_none());
     }
 
     #[test]
     fn parse_excludes_file4() {
         let data = bytes("[core]\nexcludesFile = \"~/foo/~/bar\"");
-        let got = super::parse_excludes_file(&data).unwrap();
+        let got = super::parse_excludes_file(&data).unwrap().unwrap();
         let expected = super::home_dir()
             .map(|home| {
                 let mut expected = home.into_os_string();
@@ -1086,7 +1196,89 @@ mod tests {
     #[test]
     fn parse_excludes_file5() {
         let data = bytes("[core]\nexcludesFile = \" \"~/foo/bar \" \"");
-        assert!(super::parse_excludes_file(&data).is_none());
+        let got = super::parse_excludes_file(&data).unwrap().unwrap();
+        assert_eq!(got, PathBuf::from(" ~/foo/bar  "));
+    }
+
+    #[test]
+    fn excludes_values_follow_git_quoting_and_comments() {
+        for (value, expected) in [
+            (r#""/path with spaces/ignore" # comment"#, "/path with spaces/ignore"),
+            ("relative rules/ignore ; comment", "relative rules/ignore"),
+            (r#""rules#local;project""#, "rules#local;project"),
+            (r#""C:\\Users\\First Last\\ignore""#, r"C:\Users\First Last\ignore"),
+            (r#""rules \"local\"""#, "rules \"local\""),
+            (r#"" leading and trailing ""#, " leading and trailing "),
+            (r#""a\tfile""#, "a\tfile"),
+            (r#""""#, ""),
+            ("foo\\\n  bar", "foo  bar"),
+        ] {
+            let config = format!("[core]\nexcludesFile = {value}\n");
+            let got = super::parse_excludes_file(config.as_bytes()).unwrap().unwrap();
+            assert_eq!(got, PathBuf::from(expected), "{value:?}");
+        }
+    }
+
+    #[test]
+    fn excludes_continuation_terminates_at_eof() {
+        for config in [
+            b"[core]\nexcludesFile = foo\\".as_slice(),
+            b"[core]\nexcludesFile = foo\\\n".as_slice(),
+        ] {
+            let got = super::parse_excludes_file(config).unwrap().unwrap();
+            assert_eq!(got, PathBuf::from("foo"));
+        }
+    }
+
+    #[test]
+    fn excludes_uses_the_last_core_setting_only() {
+        let config = b"[core]\nexcludesfile = first\n\
+                       [other]\nexcludesfile = unrelated\n\
+                       [CORE] ExcludesFile = last # comment\\\n\
+                       [core \"subsection\"]\nexcludesfile = unrelated-again\n";
+        let got = super::parse_excludes_file(config).unwrap().unwrap();
+        assert_eq!(got, PathBuf::from("last"));
+        assert!(super::parse_excludes_file(b"[other]\nexcludesfile = wrong\n")
+            .unwrap().is_none());
+    }
+
+    #[test]
+    fn malformed_selected_excludes_values_are_errors() {
+        for value in [r#""unclosed"#, r#""bad\qescape""#] {
+            let config = format!("[core]\nexcludesFile = {value}\n");
+            let err = super::parse_excludes_file(config.as_bytes()).unwrap_err();
+            assert_eq!(err.io_error().unwrap().kind(), std::io::ErrorKind::InvalidData);
+        }
+        for config in [
+            b"[core]\nexcludesFile".as_slice(),
+            b"[core]\nexcludesFile # comment".as_slice(),
+            b"[core]\nexcludesFile # note=path".as_slice(),
+            b"[core]\nexcludesFile ; note=path".as_slice(),
+            b"[core]\nexcludesFile extra=value".as_slice(),
+        ] {
+            let err = super::parse_excludes_file(config).unwrap_err();
+            assert_eq!(err.io_error().unwrap().kind(), std::io::ErrorKind::InvalidData);
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn excludes_path_preserves_native_non_utf8_bytes() {
+        use std::os::unix::ffi::OsStrExt;
+        let config = b"[core]\nexcludesFile = /tmp/rules-\xff\n";
+        let got = super::parse_excludes_file(config).unwrap().unwrap();
+        assert_eq!(got.as_os_str().as_bytes(), b"/tmp/rules-\xff");
+        let config = b"[core]\nexcludesFile = ~/rules-\xff\n";
+        let got = super::parse_excludes_file(config).unwrap().unwrap();
+        let expected = match super::home_dir() {
+            Some(home) => {
+                let mut bytes = home.as_os_str().as_bytes().to_vec();
+                bytes.extend_from_slice(b"/rules-\xff");
+                bytes
+            }
+            None => b"~/rules-\xff".to_vec(),
+        };
+        assert_eq!(got.as_os_str().as_bytes(), expected);
     }
 
     // See: https://github.com/BurntSushi/ripgrep/issues/106

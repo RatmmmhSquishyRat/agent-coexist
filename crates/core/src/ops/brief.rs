@@ -210,6 +210,10 @@ fn target_step(
     target: Option<&TargetInfo>,
 ) -> Result<(Mutation, Step), Fault> {
     let info = target.expect("the target form resolves its target before mutate");
+    let resolved = hash::resolve_target(&p.path, &t.target);
+    let self_sha = hash::self_target_sha(&resolved, &p.path, bytes)
+        .map_err(|err| Fault::io("read", resolved, err))?;
+    let sha = self_sha.as_deref().unwrap_or(&info.sha);
     let mut done = Done::empty();
     done.kv(
         "entry",
@@ -219,7 +223,7 @@ fn target_step(
             display_stored_path(&t.target),
         ],
     );
-    done.kv("hash", vec![info.sha.clone()]);
+    done.kv("hash", vec![sha.to_string()]);
     if t.note.is_some() {
         done.kv("note", vec!["set".to_string()]);
     }
@@ -230,7 +234,7 @@ fn target_step(
         }
         let mut content = skeleton(&stem);
         content.push('\n');
-        content.push_str(&entry_block(&info.title, t, &info.sha));
+        content.push_str(&entry_block(&info.title, t, sha));
         return Ok((Mutation::Write(content.into_bytes()), Step::Done(done)));
     }
     let doc = match checked_doc(bytes, &p.path, ctx.now, doc::Kind::Brief) {
@@ -241,7 +245,7 @@ fn target_step(
     match find_entry(&doc, &info.title) {
         None => {
             let gap = text::append_gap(&doc.source);
-            let tail = format!("{gap}{}", entry_block(&info.title, t, &info.sha));
+            let tail = format!("{gap}{}", entry_block(&info.title, t, sha));
             let splices = vec![Splice {
                 range: doc.source.len()..doc.source.len(),
                 replacement: tail.into_bytes(),
@@ -281,7 +285,7 @@ fn target_step(
             if stash_flock(stash, ctx, &p.path, p.as_nick.as_deref()) {
                 return flock_blocked();
             }
-            let splices = target_update_splices(&doc, entry, t, &info.sha);
+            let splices = target_update_splices(&doc, entry, t, sha);
             let mut done = Done::empty();
             done.kv(
                 "entry",
@@ -291,7 +295,7 @@ fn target_step(
                     display_stored_path(&t.target),
                 ],
             );
-            done.kv("hash", vec![info.sha.clone()]);
+            done.kv("hash", vec![sha.to_string()]);
             if t.note.is_some() {
                 done.kv("note", vec!["set".to_string()]);
             }
@@ -451,8 +455,8 @@ fn refresh_step(
             }
         };
         let resolved = hash::resolve_target(&p.path, &path_prop.value);
-        let sha = match hash::read_target(&resolved) {
-            Ok(read) => read.sha256,
+        let sha = match hash::refresh_sha(&resolved, &p.path, bytes) {
+            Ok(sha) => sha,
             Err(err) if err.kind() == ErrorKind::NotFound => {
                 done.kv(
                     "entry",
