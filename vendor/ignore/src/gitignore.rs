@@ -1151,6 +1151,23 @@ mod tests {
         path.as_ref().to_str().unwrap().to_string()
     }
 
+    fn excludes_config(path: &Path) -> String {
+        // Git interprets backslashes as escapes on every platform, so a
+        // native Windows pathname cannot be pasted into a config verbatim.
+        let value = path_string(path).replace('\\', "\\\\").replace('"', "\\\"");
+        format!("[core]\nexcludesFile = \"{value}\"\n")
+    }
+
+    #[test]
+    fn excludes_config_preserves_windows_path_backslashes() {
+        let native = r"C:\Users\RUNNER~1\AppData\Local\Temp\rust-ignore\36\native~literal with spaces\from-home";
+        let unescaped = format!("[core]\nexcludesFile = {native}\n");
+        assert!(super::parse_excludes_file(unescaped.as_bytes()).is_err());
+        let config = excludes_config(Path::new(native));
+        let got = super::parse_excludes_file(config.as_bytes()).unwrap();
+        assert_eq!(got, Some(PathBuf::from(native)));
+    }
+
     #[test]
     fn parse_excludes_file1() {
         let data = bytes("[core]\nexcludesFile = /foo/bar");
@@ -1440,18 +1457,12 @@ mod tests {
         std::fs::create_dir_all(xdg.join("git")).unwrap();
         std::fs::write(
             home.join(".gitconfig"),
-            format!(
-                "[core]\nexcludesFile = {}\n",
-                base.join("from-home").display()
-            ),
+            excludes_config(&base.join("from-home")),
         )
         .unwrap();
         std::fs::write(
             xdg.join("git").join("config"),
-            format!(
-                "[core]\nexcludesFile = {}\n",
-                base.join("from-xdg").display()
-            ),
+            excludes_config(&base.join("from-xdg")),
         )
         .unwrap();
 
