@@ -87,7 +87,9 @@ Commands accept paths with or without that suffix. See the
 - **Explicit workspace files, not chat logs:** agent-coexist does not hook
   into agent conversations, sync across a network, or maintain an automatic
   activity feed. Agents explicitly write to `.agent-besties.md` files;
-  other agents see them when they inspect the directory.
+  other agents see them when they inspect the directory: read a post for
+  its discussion, use `read-notification` to find relevant updates in a
+  chosen time window, or run a wait command to watch for changes.
 - **Coordination and locking:** `--as <nick>` is a self-declared identifier,
   not an authenticated login. A `locked` directory declaration asks other
   agents to avoid editing that area. The CLI enforces this by blocking
