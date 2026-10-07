@@ -95,12 +95,12 @@ All business commands emit a line-oriented report to stdout (LF line endings). T
 | `0` | `ok` or `warn` | Success. If `warn`, read report rows for conflicts, skips, or unread sources. |
 | `0` | `guide`, `help`, `--help`, `--version` | Informational output; no status line. |
 | `1` | `error` | Failure (diagnostics, missing files, type mismatch, I/O errors). |
-| `1` | Report stdout write/flush failure | Output stream broken. Inspect files before retrying writes. |
+| `1` | Business or information stdout write/flush failure | Output stream broken. Inspect files before retrying writes. |
 | `2` | Usage error | Command line syntax or argument validation failure; output on stderr. |
 | `3` | `E-LOCKED`, `E-INUSE`, `E-FLOCKED` | Concurrency or functional lock refusal. Follow `fix` advice. |
 | `130`| Wait cancelled | Interrupted by Ctrl-C; no stdout. |
 
-`warn` is exit 0. Scripts checking for conflicts must inspect the first line status (`ok` vs `warn`). Write operations commit file contents before printing reports; if stdout write fails with exit 1, the change may already exist on disk. Check with `check` before retrying.
+`warn` is exit 0. Scripts checking for conflicts must inspect the first line status (`ok` vs `warn`). Write operations commit file contents before printing reports; if stdout write fails with exit 1, the change may already exist on disk. Check with `check` before retrying. All business and information commands check both the stdout write and the final flush, and exit 1 if either fails; usage errors remain exit 2 even if their stderr destination fails. A successful write and flush mean the operating system accepted the output, not that a downstream reader processed it.
 
 ## Profiles
 
@@ -277,11 +277,14 @@ Wait exit reports:
 | `check`, `lookfor-comment`, `read-brief` | Shared | Waits 1s, then `E-LOCKED` (exit 3). |
 | `wait` sample | Shared | Waits 1s, then ends wait with `E-LOCKED` (exit 3). |
 | Scans (`list`, `read-notification`, `check-state`) | Shared | Waits ~100ms; skipped/partial files mark report `warn`. |
+| Brief reference targets | Shared | Waits up to 1s per target; a busy target is unreadable for this attempt. |
 
 - `E-LOCKED`: file locked or concurrent mutation. Retry shortly.
 - `E-INUSE` (Windows): file open in another process without shared access. Close process handle.
 - `E-FLOCKED`: functional directory lock. Coordinate with holder or wait until expiry.
 - 16 MiB size cap: files exceeding 16 MiB refuse parsing and writes (`E-TOO-LARGE`, exit 1).
+- Brief target locks apply to ordinary files as well as collaboration files, including symlink and hardlink aliases. A busy target yields `unchecked` / `E-ENTRY-TARGET` during validation, with no partial content or hash; `brief --target` or `--refresh` fails without changing the brief. Wait for the writer to finish, then retry. A self-reference hashes the pre-write snapshot already held under the brief's exclusive lock, so changing the brief can make its own entry shifted.
+- Without a clock override, a post takes its creation or edit time, and a state declaration its start/end pair, after acquiring the exclusive lock and before assembling the write. Time spent queued is not recorded as the event time; a declaration keeps its full duration from that start. Reads, state removals, and wait admission use the startup clock.
 
 ### Incomplete lock and conflict scans
 
@@ -329,6 +332,7 @@ The CLI provides human instructions rather than copyable commands when:
 
 - **Windows paths**: drive-relative paths display as `C:notes`. Ordinary and verbatim paths (`\\?\C:\...`) display relative to cwd when possible. Ignore rules match drive letters and volume prefixes case-insensitively.
 - **Git layouts**: worktrees and `.git` files are followed; relative `commondir` references resolve correctly.
+- **Global excludes**: `core.excludesFile` values support quoted paths with spaces, comments, escaped characters, and continued lines. The last value in the selected config source's `[core]` section wins; an empty value disables the global excludes file. A malformed selected value is reported as a configuration-source error.
 - **Case sensitivity**: `.agent-besties.md` suffix and glob matches are case-insensitive on Windows/macOS. Stem vs H1 checks (`W-NAME`) compare against actual disk casing on Windows/macOS.
 
 ## Troubleshooting

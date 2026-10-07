@@ -8,7 +8,7 @@
 //!   table strictly top to bottom; the state is derived from that order
 //!   alone.
 
-use std::fs::OpenOptions;
+use std::fs::{File, OpenOptions};
 use std::io::{self, Read};
 use std::path::{Path, PathBuf};
 
@@ -61,14 +61,48 @@ fn hex_encode(bytes: &[u8]) -> String {
 /// denial and Unix opens it as a non-regular file, and neither cause text
 /// says that the path names a directory.
 pub fn read_target(path: &Path) -> Result<Target, io::Error> {
-    let mut file =
-        crate::fsx::open_regular(path, OpenOptions::new().read(true)).map_err(|err| {
-            if std::fs::metadata(path).is_ok_and(|meta| meta.is_dir()) {
-                io::Error::new(io::ErrorKind::IsADirectory, "is a directory, not a file")
-            } else {
-                err
-            }
-        })?;
+    let file = open_target(path)?;
+    read_locked_target(file)
+}
+
+/// A refresh already owns the brief's exclusive lock. A reference to that
+/// same file, including an alias, hashes the snapshot read under that lock
+/// instead of opening a second, conflicting shared lock. Other targets
+/// are read exactly once under their own bounded shared lock.
+pub(crate) fn refresh_sha(target: &Path, brief: &Path, locked_bytes: &[u8]) -> io::Result<String> {
+    let file = open_target(target)?;
+    if crate::fsx::opened_file_matches(&file, brief)? {
+        Ok(hex_encode(&Sha256::digest(locked_bytes)))
+    } else {
+        Ok(read_locked_target(file)?.sha256)
+    }
+}
+
+/// The --target form reads its target before it can create a brief. Once
+/// the brief lock is held, replace a self-reference's earlier hash with
+/// the actual locked snapshot; unrelated targets keep their one read.
+pub(crate) fn self_target_sha(
+    target: &Path,
+    brief: &Path,
+    locked_bytes: &[u8],
+) -> io::Result<Option<String>> {
+    let file = open_target(target)?;
+    Ok(crate::fsx::opened_file_matches(&file, brief)?
+        .then(|| hex_encode(&Sha256::digest(locked_bytes))))
+}
+
+fn open_target(path: &Path) -> io::Result<File> {
+    crate::fsx::open_regular(path, OpenOptions::new().read(true)).map_err(|err| {
+        if std::fs::metadata(path).is_ok_and(|meta| meta.is_dir()) {
+            io::Error::new(io::ErrorKind::IsADirectory, "is a directory, not a file")
+        } else {
+            err
+        }
+    })
+}
+
+fn read_locked_target(mut file: File) -> io::Result<Target> {
+    crate::fsx::lock_target_shared(&file)?;
     let mut hasher = Sha256::new();
     let mut chunk = vec![0u8; HASH_CHUNK_SIZE];
     // In-memory cap: MAX_TARGET_BYTES + 1. Reading the extra byte is how
@@ -88,12 +122,14 @@ pub fn read_target(path: &Path) -> Result<Target, io::Error> {
             // Bounded reservation: grow by doubling steps capped at
             // 4 MiB — capacity never exceeds the data by more than one
             // step (no ~2x cap overshoot from geometric Vec growth, no
-            // 64 MiB preallocation for small targets), while keeping the
-            // realloc count logarithmic instead of one per chunk.
-            let reserve = next_reserve.min((cap - total) as usize).max(n);
-            data.reserve_exact(reserve);
+            // 64 MiB preallocation for small targets). Each reservation
+            // covers many chunks instead of reallocating on every chunk.
+            if data.capacity() - data.len() < n {
+                let reserve = next_reserve.min((cap - total) as usize).max(n);
+                data.reserve_exact(reserve);
+                next_reserve = (next_reserve * 2).min(RESERVE_STEP_CAP);
+            }
             data.extend_from_slice(&chunk[..n]);
-            next_reserve = (next_reserve * 2).min(RESERVE_STEP_CAP);
             total += n as u64;
         } else {
             // Over the limit: keep feeding the hasher to EOF, unbounded.
@@ -473,6 +509,161 @@ mod tests {
             "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
         );
         let _ = fs::remove_file(&full);
+    }
+
+    #[test]
+    fn arbitrary_target_names_obey_exclusive_locks() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("ordinary.txt");
+        fs::write(&path, b"completed bytes").unwrap();
+        let writer = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(&path)
+            .unwrap();
+        writer.try_lock().unwrap();
+        assert_eq!(
+            read_target(&path).unwrap_err().kind(),
+            io::ErrorKind::WouldBlock
+        );
+        writer.unlock().unwrap();
+        assert_eq!(
+            read_target(&path).unwrap().content.as_deref(),
+            Some("completed bytes")
+        );
+        // The successful read released its shared lock before returning.
+        writer.try_lock().unwrap();
+    }
+
+    #[test]
+    fn busy_target_verification_has_no_hash_or_content() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("post.agent-besties.md");
+        fs::write(&path, b"part of a write").unwrap();
+        let writer = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(&path)
+            .unwrap();
+        writer.try_lock().unwrap();
+        let entry = entry(Some("post.agent-besties.md"), Some(EMPTY_SHA), None);
+        let result = verify(&dir.path().join("brief.agent-besties.md"), &entry);
+        assert_eq!(result.state, "unchecked");
+        assert_eq!(result.reason, Some("target unreadable"));
+        assert!(result.target.is_none());
+        assert!(result.content_span.is_none());
+        assert_eq!(result.diagnostics[0].id, "E-ENTRY-TARGET");
+        assert!(result.diagnostics[0].params.iter().any(|(key, value)| {
+            *key == "err"
+                && value
+                    .to_string_lossy()
+                    .contains("locked by another process")
+        }));
+    }
+
+    #[test]
+    fn self_refresh_and_aliases_use_the_exclusive_lock_snapshot() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("brief.agent-besties.md");
+        let old = b"# brief.brief\n";
+        fs::write(&path, old).unwrap();
+        let alias = dir.path().join("alias.txt");
+        fs::hard_link(&path, &alias).unwrap();
+        let writer = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(&path)
+            .unwrap();
+        writer.try_lock().unwrap();
+        let expected = hex_encode(&Sha256::digest(old));
+        for target in [&path, &alias] {
+            assert_eq!(refresh_sha(target, &path, old).unwrap(), expected);
+            assert_eq!(
+                self_target_sha(target, &path, old).unwrap(),
+                Some(expected.clone())
+            );
+        }
+        #[cfg(unix)]
+        {
+            let symlink = dir.path().join("symlink.txt");
+            std::os::unix::fs::symlink(&path, &symlink).unwrap();
+            assert_eq!(refresh_sha(&symlink, &path, old).unwrap(), expected);
+        }
+        let other = dir.path().join("unrelated.txt");
+        fs::write(&other, b"other content").unwrap();
+        assert_eq!(self_target_sha(&other, &path, old).unwrap(), None);
+        assert_eq!(
+            refresh_sha(&other, &path, old).unwrap(),
+            hex_encode(&Sha256::digest(b"other content")),
+        );
+    }
+
+    #[test]
+    fn cross_references_finish_without_deadlock_or_partial_updates() {
+        use crate::fsx::{self, Mutation, WritePolicy};
+        use std::sync::mpsc;
+        use std::time::Duration;
+
+        let dir = tempfile::tempdir().unwrap();
+        let paths = [dir.path().join("a"), dir.path().join("b")];
+        for path in &paths {
+            fs::write(path, b"original").unwrap();
+        }
+        let (ready, receive_ready) = mpsc::channel();
+        let mut workers = Vec::new();
+        let mut starts = Vec::new();
+        for index in 0..2 {
+            let own = paths[index].clone();
+            let other = paths[1 - index].clone();
+            let ready = ready.clone();
+            let (start, receive_start) = mpsc::channel();
+            starts.push(start);
+            workers.push(std::thread::spawn(move || {
+                fsx::mutate(
+                    &own,
+                    WritePolicy {
+                        wait_ms: 1000,
+                        create: false,
+                        create_parents: false,
+                    },
+                    |bytes, _| {
+                        ready.send(()).unwrap();
+                        receive_start
+                            .recv_timeout(Duration::from_secs(5))
+                            .map_err(|err| {
+                                crate::error::Fault::io("read", own.clone(), io::Error::other(err))
+                            })?;
+                        let sha = refresh_sha(&other, &own, bytes)
+                            .map_err(|err| crate::error::Fault::io("read", other.clone(), err))?;
+                        Ok((Mutation::Write(sha.into_bytes()), ()))
+                    },
+                )
+            }));
+        }
+        // Both callbacks now hold their own exclusive locks; starting the
+        // target reads together deliberately creates the circular request.
+        for _ in 0..2 {
+            receive_ready.recv_timeout(Duration::from_secs(5)).unwrap();
+        }
+        for start in starts {
+            start.send(()).unwrap();
+        }
+        let mut rejected = 0;
+        for (path, worker) in paths.iter().zip(workers) {
+            match worker.join().unwrap() {
+                Err(crate::error::Fault::Io { source, .. }) => {
+                    assert_eq!(source.kind(), io::ErrorKind::WouldBlock);
+                    assert_eq!(fs::read(path).unwrap(), b"original");
+                    rejected += 1;
+                }
+                Ok(_) => assert_eq!(
+                    fs::read(path).unwrap(),
+                    hex_encode(&Sha256::digest(b"original")).as_bytes(),
+                ),
+                Err(other) => panic!("unexpected target fault: {other:?}"),
+            }
+        }
+        assert!(rejected >= 1);
     }
 
     /// A directory target must be named as such on every platform, so the

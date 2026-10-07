@@ -41,8 +41,15 @@ pub const DURATION_RULE: &str = duration_rule!();
 /// strict TIME — shape, separators and calendar values all validated
 /// here; invalid Unicode is an error, never silently unset.
 pub fn now() -> Result<Time, Fault> {
+    invocation_clock().map(|(now, _fixed)| now)
+}
+
+/// Capture and validate the invocation clock once. The fixed-clock flag
+/// lets queued writes retain an explicit test clock without reading
+/// the environment again after opening a file.
+pub(crate) fn invocation_clock() -> Result<(Time, bool), Fault> {
     match env::var_os(NOW_ENV) {
-        None => Ok(Utc::now().trunc_subsecs(0)),
+        None => Ok((system_now(), false)),
         Some(raw) => {
             let value = match raw.to_str() {
                 Some(value) => value,
@@ -53,7 +60,7 @@ pub fn now() -> Result<Time, Fault> {
                 }
             };
             match parse_strict_time(value) {
-                Some(time) => Ok(time),
+                Some(time) => Ok((time, true)),
                 None => {
                     // When only edge whitespace is wrong (a trailing CR from
                     // a CRLF env file, `set X=... ` in cmd.exe), removing it
@@ -79,6 +86,13 @@ pub fn now() -> Result<Time, Fault> {
             }
         }
     }
+}
+
+/// Live UTC clock at the same whole-second precision as stored times.
+/// Post and state declarations resample this only after acquiring their
+/// exclusive file lock; reads keep their invocation-start snapshot.
+pub(crate) fn system_now() -> Time {
+    Utc::now().trunc_subsecs(0)
 }
 
 /// Strict TIME (§2.8.3): exactly `YYYY-MM-DDTHH:MM:SSZ` — 20 characters,

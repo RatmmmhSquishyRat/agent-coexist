@@ -44,19 +44,19 @@ pub fn run(ctx: &mut Ctx, p: &StateParams) -> Result<Report, Fault> {
 // ---------------------------------------------------------------------------
 
 fn declare(ctx: &mut Ctx, p: &super::StateDeclare) -> Result<Report, Fault> {
-    if let Some(rep) = check_dir(ctx, &p.dir)? {
-        return Ok(rep);
-    }
-    let dctx = context::diag_context_for_dir(ctx, "state", &p.dir);
-    let object = context::object_of_dir(&p.dir);
-
     let for_secs = p.for_secs.unwrap_or(if p.status == "locked" {
         consts::DEFAULT_FOR_LOCKED
     } else {
         consts::DEFAULT_FOR_OTHER
     });
-    let now = ctx.now;
-    let until = time::until(now, for_secs)?;
+    // Reject an unrepresentable duration before accessing any file. The
+    // actual start and end are computed together under the write lock.
+    time::until(ctx.now, for_secs)?;
+    if let Some(rep) = check_dir(ctx, &p.dir)? {
+        return Ok(rep);
+    }
+    let dctx = context::diag_context_for_dir(ctx, "state", &p.dir);
+    let object = context::object_of_dir(&p.dir);
 
     let target = match fsx::walk::state_file(&p.dir)? {
         Some(f) => f,
@@ -74,6 +74,11 @@ fn declare(ctx: &mut Ctx, p: &super::StateDeclare) -> Result<Report, Fault> {
             create_parents: false,
         },
         |bytes: &[u8], _initial: bool| {
+            // A declaration queued across a whole-second boundary must
+            // remain visible after a successful intervening scan. Keep
+            // its full duration relative to this same event-time sample.
+            let now = ctx.write_now();
+            let until = time::until(now, for_secs)?;
             let plan = plan_declare(bytes, &file_for_parse, now, &nick, &status, until)?;
             Ok(match plan {
                 DeclarePlan::Write {
@@ -81,7 +86,11 @@ fn declare(ctx: &mut Ctx, p: &super::StateDeclare) -> Result<Report, Fault> {
                     cleaned,
                 } => (
                     fsx::Mutation::Write(new_bytes),
-                    DeclareOut::Written { cleaned },
+                    DeclareOut::Written {
+                        cleaned,
+                        now,
+                        until,
+                    },
                 ),
                 DeclarePlan::Refused(r) => (fsx::Mutation::Unchanged, DeclareOut::Refused(r)),
             })
@@ -98,14 +107,18 @@ fn declare(ctx: &mut Ctx, p: &super::StateDeclare) -> Result<Report, Fault> {
     };
 
     let mut report = Report::new("state", object.clone());
-    match result.value {
+    let now = match result.value {
         DeclareOut::Refused(r) => {
             if let Some(actual) = r.e_type {
                 return Ok(e_type_report(&dctx, &object, actual));
             }
             return Ok(refusal_report(&object, &target, r.kind, r.diagnostics));
         }
-        DeclareOut::Written { cleaned } => {
+        DeclareOut::Written {
+            cleaned,
+            now,
+            until,
+        } => {
             if result.created {
                 report.kv("created", vec![context::display_file(&target)]);
             }
@@ -127,8 +140,9 @@ fn declare(ctx: &mut Ctx, p: &super::StateDeclare) -> Result<Report, Fault> {
                     ],
                 );
             }
+            now
         }
-    }
+    };
 
     // Conflict scan strictly after write + flush + lock release (§6.4.1);
     // state writes are never functional-lock blocked (§6.4.3).
@@ -254,7 +268,11 @@ enum DeclarePlan {
 }
 
 enum DeclareOut {
-    Written { cleaned: Vec<CleanedEntry> },
+    Written {
+        cleaned: Vec<CleanedEntry>,
+        now: Time,
+        until: Time,
+    },
     Refused(Refusal),
 }
 

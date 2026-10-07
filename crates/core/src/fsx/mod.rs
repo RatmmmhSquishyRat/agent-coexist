@@ -1042,6 +1042,29 @@ fn lock_shared_until(
     }
 }
 
+/// Take the same bounded shared lock for a brief target. Targets may use
+/// any name, including a symlink or hardlink to a managed file, so suffix
+/// checks cannot decide whether a lock is needed. Keep the original I/O
+/// error currency used by target verification.
+pub(crate) fn lock_target_shared(file: &File) -> io::Result<()> {
+    let deadline = Deadline::new(consts::READ_WAIT_MS);
+    loop {
+        match file.try_lock_shared() {
+            Ok(()) => return Ok(()),
+            Err(TryLockError::WouldBlock) => {}
+            Err(TryLockError::Error(e)) if is_win_error(&e, WIN_ERROR_LOCK_VIOLATION) => {}
+            Err(TryLockError::Error(e)) => return Err(e),
+        }
+        if deadline.expired() {
+            return Err(io::Error::new(
+                io::ErrorKind::WouldBlock,
+                "target file is locked by another process",
+            ));
+        }
+        sleep_one_poll(&deadline);
+    }
+}
+
 /// Read the whole file from the start, at most `MAX_MANAGED_FILE_BYTES`
 /// bytes; exceeding the limit returns an `ErrorKind::FileTooLarge` marker
 /// that the callers translate via [`read_fault`] into the E-TOO-LARGE
@@ -1121,21 +1144,20 @@ fn is_win_error(e: &io::Error, code: i32) -> bool {
 /// `Ok(false)` means deleted/replaced (including Windows pending-delete at
 /// open); other errors propagate as real I/O failures.
 fn same_file_identity(file: &File, path: &Path) -> Result<bool, Fault> {
-    match open_identity(path) {
-        Ok(current) => {
-            let mine = file
-                .try_clone()
-                .map_err(|e| Fault::io("open", path.to_path_buf(), e))
-                .and_then(|f| {
-                    same_file::Handle::from_file(f)
-                        .map_err(|e| Fault::io("open", path.to_path_buf(), e))
-                })?;
-            Ok(mine == current)
-        }
+    match opened_file_matches(file, path) {
+        Ok(matches) => Ok(matches),
         Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(false),
         Err(e) if cfg!(windows) && is_win_error(&e, WIN_ERROR_ACCESS_DENIED) => Ok(false),
         Err(e) => Err(Fault::io("open", path.to_path_buf(), e)),
     }
+}
+
+/// Compare an already-open target with a path using native file identity.
+/// This reads metadata only and uses the nonblocking identity opener.
+pub(crate) fn opened_file_matches(file: &File, path: &Path) -> io::Result<bool> {
+    let current = open_identity(path)?;
+    let mine = same_file::Handle::from_file(file.try_clone()?)?;
+    Ok(mine == current)
 }
 
 /// Sleep one `LOCK_POLL_MS` interval, never past `deadline`.
@@ -1886,19 +1908,27 @@ mod tests {
         let target = dir.join("x.agent-besties.md");
         let original = b"# x.post\n\n## #1 alice (2026-09-17T09:12:00Z)\n\n```md\nhi\n```\n";
         std::fs::write(&target, original).unwrap();
-        let status = std::process::Command::new(std::env::current_exe().unwrap())
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
             .args([
                 "--exact",
                 "fsx::tests::file_size_limit_failure_keeps_previous_bytes_and_removes_creation",
                 "--nocapture",
             ])
             .env(CHILD_DIR, &dir)
-            .status()
+            // Keep the child's test-harness output on pipes: an inherited
+            // regular log file may already be beyond the child's file-size
+            // limit, making reporting fail before these assertions finish.
+            .output()
             .unwrap();
         let checked = dir.join("checked").is_file();
         let content = std::fs::read(&target).unwrap();
         std::fs::remove_dir_all(&dir).unwrap();
-        assert!(status.success(), "child write-failure checks failed");
+        assert!(
+            output.status.success(),
+            "child write-failure checks failed: {}\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
         assert!(checked, "child did not exercise the writes");
         assert_eq!(content, original);
     }

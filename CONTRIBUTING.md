@@ -184,7 +184,12 @@ crates.io, patched in-tree.
     platform (Unix `ENOTDIR` included). Gitfile and
     `commondir` descriptors are read in full, with only trailing CR/LF
     trimmed. An explicit global config replaces the default global files.
-  - `core.excludesFile`: only a recognized leading `~` home component
+  - `core.excludesFile`: the selected `[core]` value is decoded with Git
+    quoting, comments, escapes, and physical-line continuation; the last
+    value in that source wins, and an empty value disables global excludes.
+    Malformed selected values surface as source errors. This is a bounded
+    extractor for the scan setting, not a general Git config or include
+    engine. Only a recognized leading `~` home component
     expands, at a component boundary and using the home directory's
     native bytes; `~user` and later tildes (such as Windows short names
     like `RUNNER~1`) stay literal.

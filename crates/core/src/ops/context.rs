@@ -2,9 +2,11 @@
 //!
 //! The CLI builds exactly one [`Ctx`] after argument validation and before
 //! any file access; construction performs the two environment entry points
-//! (`time::now`, `time::post_wait_ms`) so every later use sees one clock and
-//! one lock budget (spec §1 `now`, §10.2.9). Ops code never reads
-//! environment variables itself.
+//! (`time::invocation_clock`, `time::post_wait_ms`) so every later use sees
+//! one validated clock setting and lock budget. Reads retain the startup
+//! instant; post and state declarations sample their event time after
+//! acquiring the exclusive lock.
+//! Ops code never reads environment variables itself.
 
 use std::path::Path;
 
@@ -24,6 +26,8 @@ pub type ProgressFn = Box<dyn FnMut(usize, usize) + Send>;
 pub struct Ctx {
     /// Resolved `now` (honors `AGENT_COEXIST_NOW`).
     pub now: Time,
+    /// An explicit clock override stays fixed even for queued writes.
+    fixed_now: bool,
     /// Exclusive-lock wait budget for post/subscribe writes (honors
     /// `AGENT_COEXIST_LOCK_WAIT_MS`), spec §10.2.
     pub post_wait_ms: u64,
@@ -39,16 +43,29 @@ pub struct Ctx {
 
 impl Ctx {
     pub fn new(argv: Option<String>, progress: Option<ProgressFn>) -> Result<Ctx, Fault> {
-        let now = time::now()?;
+        let (now, fixed_now) = time::invocation_clock()?;
         let post_wait_ms = time::post_wait_ms()?;
         Ok(Ctx {
             now,
+            fixed_now,
             post_wait_ms,
             argv,
             progress,
             dirs: 0,
             files: 0,
         })
+    }
+
+    /// Time to store on a post create, append or edit, or state declaration.
+    /// Called under the file's exclusive lock, so a queued write cannot
+    /// appear older than a
+    /// successful notification scan that completed while it was waiting.
+    pub(super) fn write_now(&self) -> Time {
+        if self.fixed_now {
+            self.now
+        } else {
+            time::system_now()
+        }
     }
 
     /// Publish the current progress counters. Used directly by callers
@@ -93,6 +110,7 @@ impl Ctx {
 pub(crate) fn test_ctx(now: Time) -> Ctx {
     Ctx {
         now,
+        fixed_now: true,
         post_wait_ms: 0,
         argv: Some(String::new()),
         progress: None,
@@ -241,6 +259,7 @@ mod tests {
         let (sink, seen) = recording();
         let mut ctx = Ctx {
             now: time::parse("2026-09-17T10:00:00Z").expect("fixed clock"),
+            fixed_now: true,
             post_wait_ms: 0,
             argv: Some(String::new()),
             progress: Some(sink),
