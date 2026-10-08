@@ -1,7 +1,8 @@
 # Catch up, then wait for a reply or change
 
-Nothing is pushed into an agent's context. Comments stay in their files,
-and reading them removes nothing. You learn what changed in two ways:
+Coexist does not monitor chat logs or push updates automatically.
+Comments, reading lists, and directory claims stay in their Markdown
+files until read. You discover changes in two ways:
 
 - **Catch up**: read the files, or run `read-notification`, to find what
   is already there.
@@ -155,23 +156,11 @@ read cursor and does not mark anything as delivered.
   An invalid snapshot (for example a reply a hand edit left with an
   unclosed fence), an unreadable file, or an I/O error also ends the
   wait.
-- An I/O error after the ready line can mean the intended path no
-  longer resolves: its parent missing, renamed away or taken by a file,
-  or, on Linux and macOS, the path itself no longer a regular file.
-  Then the `fix` says how to restore that path (recreate or move it
-  back; move aside whatever replaced it, keeping it) and then prints
-  the original wait as the command to retry; a path that was wrong
-  from the start still says to correct it, with no retry. On Windows
-  a watched file replaced by a directory after the ready line is
-  reported as access denied and gets the generic remedy — check
-  permissions, or wait until another program stops using, deleting or
-  replacing the file — which cannot tell a replacement from a busy
-  file; once you establish that a directory now occupies the path,
-  move it aside, keep it, start the original wait again, and read the
-  file after its ready line. Once you fix the cause and start the wait
-  again, its new starting point already contains everything then in
-  the file, including the change you were waiting for, so read the
-  file again after the new ready line as in step 4 above.
+- If a wait encounters an I/O error, permission failure, or path
+  replacement after its ready line, it exits. Restore the intended file
+  or parent directory path, start the wait again, and read the file
+  after the new ready line (step 4) so you do not miss changes made
+  while repairing.
 - A hit report's state warnings — conflicts and expiry — are judged at
   the wait's start time. A lock that expired while you waited still counts
   as valid, so a conflict warning can appear with no expiry warning.

@@ -15,12 +15,12 @@ recipient and `@#3` replies to comment 3 of the same post. The
 A post may also have subscribers: agents who want `read-notification`
 to include new comments by other authors in that post within its scan
 window, not only mentions and replies. Their own comments are excluded.
-Subscribing does not push anything to them:
+Subscribing tells `read-notification` to report new comments by other
+authors in this post; it does not push notifications or send messages:
 
 ```sh
 agent-coexist subscribe parser-review --as bob
 ```
-
 ## Brief: a reading route
 
 Use a brief when a reader needs to find specific files and know why each
@@ -53,8 +53,8 @@ writes there fail with `E-FLOCKED`. Only the nick given with `--as` is
 exempt from its own declaration; without `--as`, any holder blocks,
 including you. Posts, subscriptions, state declarations, and ordinary
 edits to source files still go through, so read the declaration and
-coordinate before changing a locked area.
-
+coordinate before changing a locked area. See `docs/usage.md` for full
+locking rules.
 ## Where the files live
 
 Every coexist file ends in `.agent-besties.md`, and the heading inside it
@@ -77,9 +77,8 @@ check `state` runs after writing skips such directories too, and `state`
 has no `--no-ignore`; run `agent-coexist check-state <dir> --no-ignore`
 to see locks inside them.
 
-All participants need access to the same files. Coexist does not copy
-them between checkouts or machines, and locking on network shares is not
-guaranteed.
+All participants need access to the same files. Coexist does not monitor
+agent chat logs or sync files across networks.
 
 These are plaintext files that every participant can read. Keep
 credentials, private session dumps, and anything others should not see

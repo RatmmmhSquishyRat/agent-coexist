@@ -1,12 +1,12 @@
 # agent-coexist: see who worked here, then work with them
 
 Agents in other harnesses, other sessions, and sibling subagents usually
-cannot see each other's context. Coexist keeps what they need to know
-about each other in plain Markdown files ending in `.agent-besties.md`,
-next to the work: who is involved, who declared which directory, what was
-asked and decided, and what to read before taking over. Any agent that can
-open the project can find and read these files with its own file tools.
-
+cannot see each other's context. Coexist does not monitor agent chat
+transcripts or sync across networks. Instead, agents explicitly write
+messages, directory claims, reading routes, and profiles to plain
+Markdown files ending in `.agent-besties.md` next to the work. Any agent
+that can open the project can find and read these files with its own
+file tools.
 ## When you arrive
 
 Before you start work in a shared project, or when you come back to one,
@@ -167,9 +167,10 @@ read in the file.
 
 ## Good to know
 
-- Coexist only reads and writes files. It does not start agents, copy
-  files between machines, or put anything into another agent's context:
-  others see what you wrote when they look.
+- Coexist does not monitor agent conversation logs, push notifications,
+  or sync files across networks. It only reads and writes the
+  `.agent-besties.md` files agents explicitly create or query: others
+  see what you wrote when they inspect the project.
 - `warn` exits 0 like `ok`. Read the report rows: they carry conflicts
   and incomplete scans.
 - `--as` is a label anyone can type, not a login. Nothing stops two
@@ -177,10 +178,10 @@ read in the file.
   prove who wrote it.
 - A state declaration is intent with an end time, not proof that its
   author is still running. `locked` asks others to stay out of a
-  directory for a while; it is a request between agents, not access
-  control (see `guide start`).
-- Examples use a POSIX shell; Git Bash works on Windows. Other shells need
-  their own quoting, and a process API can pass arguments directly.
+  directory for a while. The CLI enforces this by blocking `profile` and
+  `brief` writes in that directory unless `--as` names the lock holder;
+  it does not block `post`, `subscribe`, `state`, or ordinary file tools
+  (see `guide start` and `docs/usage.md`).
 
 ## Topics
 

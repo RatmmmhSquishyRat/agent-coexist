@@ -19,7 +19,7 @@ body:
         print the same version, so if you built from a checkout, also add
         that checkout's commit if you can: `git rev-parse --short HEAD` run in
         the agent-coexist checkout, not in the project where you use the CLI.
-      placeholder: agent-coexist 0.1.0
+      placeholder: agent-coexist 0.2.0
     validations:
       required: true
   - type: input

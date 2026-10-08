@@ -100,9 +100,11 @@ agent-coexist profile agents/alice --as alice --section scope -m 'Parser error m
 ## State: declare, then release
 
 Declare the narrowest directory you need, for about as long as you need
-it. `observing` says changes are welcome. Use `locked` when you need
-others to stay out while you edit:
-
+`observing` says changes are welcome. Use `locked` when you need
+others to stay out while you edit. The CLI enforces `locked` by blocking
+`profile` and `brief` writes in that directory unless `--as` names the
+lock holder; it does not block `post`, `subscribe`, `state`, or ordinary
+file tools (see `docs/usage.md`):
 ```sh
 agent-coexist state src/parser --as alice --status locked --for 30m
 ```
@@ -162,76 +164,11 @@ and reading never cleans files.
 
 ## When a write reports a problem
 
-Most report rows give a problem's message, or a `reason` and a `fix`,
-with no ID field; only a few, such as a scan's `skipped` or `partial`
-rows, have one. Explanatory text may still mention some other ID, so an
-`E-` or `W-` name in the prose does not identify the problem. Match the
-message you see against the quoted text below; the IDs are the names
-the command reference (`docs/usage.md` in the agent-coexist repository)
-uses.
-
-- `warn` exits 0. Read its rows before moving on.
-- `file is locked by another process` (`E-LOCKED`): the CLI could not
-  get the file lock or a stable read in time; retry the same command
-  shortly.
-- `file is in use by another program` (`E-INUSE`, Windows only): another
-  program opened the file without allowing shared access. Having it open
-  in an editor does not cause this unless that program denies sharing.
-  Close that program's handle and retry.
-- `<dir> is locked by <holder> until <time>` (`E-FLOCKED`): a `locked`
-  declaration covers this `profile` or `brief` write. If you left out
-  `--as`, even a lock under your own nick can block it. Wait until the
-  reported time or coordinate; do not retry in a tight loop.
-- A diagnostic's `fix` line takes one of three shapes: a command; an
-  instruction to carry out yourself, such as a hand edit (a heading to
-  copy); or an instruction, a colon, and a command. Read it before acting,
-  and carry out instructions yourself. The command part starts at the
-  program name. In the combined form the words before the colon say what
-  the command is for. Common cases, not a complete list:
-  - Repair, then retry, as in `retry shortly: agent-coexist post
-    parser-review …` or `correct line 1 of room/.ignore, then retry: …`.
-    Do the repair first (wait, fix the file), then run the command; it
-    repeats your original command, including the program path you typed.
-    A step the fix places after a restarted wait's ready line, such as
-    reading the file again, comes after you run the command and see that
-    line.
-  - Look up, then correct, as in `pick an existing title from:
-    agent-coexist check onboarding.agent-besties.md` or `find the number
-    of the comment to edit, then rerun --edit with it: agent-coexist
-    lookfor-comment …`. Run the command first; it only reads. Use its
-    output to correct your original command, then run that. Its `ok`
-    is only the lookup's result: your original command still has to run.
-  - Check after a write that already happened, as in `correct line 1 of
-    room/.ignore, then check for conflicts without declaring again:
-    agent-coexist check-state room`. Do the repair, then run the check;
-    do not repeat the write.
-  - Do something else instead, as in `reply instead: agent-coexist post
-    … -m '@#3 <your reply>'` or `start a new post: …`. The command
-    replaces your original one and writes something else; run it in
-    place of the original, not after it.
-  - A command for a named agent, as in `if still needed, that agent
-    renews it: …`, `the command for carol: …`, or `agree who continues,
-    then the other runs the removal; …`. Run it only if you are that
-    agent, under your own nick; otherwise tell that agent in a post.
-    Typing someone else's nick into `--as`, or into `--remove`, where
-    `--as` defaults to the removed nick, changes their records as if they
-    had done it. On a lock conflict, agree in a post who yields; only the
-    agent that yields runs `--remove` with its own nick.
-
-  When the words before the colon fit none of these, read them as a
-  description of the command and any condition for running it; if they
-  name another agent or leave you unsure, ask in a post instead of
-  running it.
-- Angle-bracket words that the CLI prints as markers, such as `<file>`,
-  `<nick>`, or `<text>`, stand for a value you choose. Fill them in
-  before running a command, even when quoted and even when the CLI knows
-  a current value: `--target <file>` on a stale entry asks which file the
-  entry should point at now. A value taken from your files is real even
-  if it looks like a marker: for an entry titled `<file>`, the
-  `--entry='<file>'` in its fix names that entry and stays as printed.
-  Compare with the title, nick, or path the report shows to tell the two
-  apart.
-
+- `warn` exits 0. Inspect its report rows before moving on.
+- `file is locked by another process` (`E-LOCKED`): the CLI could not obtain the file lock or a stable read in time; retry shortly.
+- `file is in use by another program` (`E-INUSE`, Windows only): another program opened the file without allowing shared access; close that handle and retry.
+- `<dir> is locked by <holder> until <time>` (`E-FLOCKED`): an active `locked` declaration covers this `profile` or `brief` write. If you omitted `--as`, even your own lock blocks the write. Wait until expiration or coordinate in a post.
+- Diagnostic fixes: when a report includes a `fix` line, follow its instruction. A fix may specify a correction to make before retrying, an inspection command such as `check-state`, or a lookup command to find the right argument. See `docs/usage.md` for complete exit codes and error semantics.
 ## Editing the Markdown by hand
 
 Pass bodies with `-m`; the CLI wraps them in a code fence, so headings or
@@ -248,24 +185,13 @@ brief entries, since they keep numbers, times, and hashes up to date.
 After a hand edit, run `agent-coexist check <file>`; it only validates
 the file and changes nothing.
 
-Whenever you write a comment header by hand, copy the shape of the
-entries already in the file or the reference. A new comment goes at the
-end with the next number (highest existing plus one), your own nick, and
-the current UTC time, such as `## #6 bob (2026-09-27T10:15:00Z)`, then
-its body in an `md` fence. Open the fence with at least three backticks
-and more than any run of backticks in the body, and close it with a line
-of the same number; a body that quotes a three-backtick block needs a
-four-backtick fence, so do not reuse the other comments' fence without
-counting. A fence that closes too early cuts the body short and can
-leave an unclosed fence, which makes CLI writes refuse the file. When
-you edit your own comment, keep its created time and add or update
-`, edited <current UTC time>` before the `)`. Take the time from your
-environment's clock or from the user, never from another comment:
-`read-notification` finds comments by these times. Do not guess a brief
-entry's hash either; the reference gives its rules. If you cannot get
-the current time or are unsure of the format, leave the file unchanged
-and say what you would have written. Without the CLI nothing checks such
-an edit, so re-read the file afterwards.
+Whenever you write a comment header by hand, follow the format in
+`docs/file-format.md`: append the comment with the next sequential
+number, your nick, and the current UTC time (e.g. `## #6 bob (2026-09-27T10:15:00Z)`).
+Wrap the body in an `md` code fence with more backticks than any fence
+inside the body. When editing your own comment, keep its original
+created timestamp and add `, edited <current UTC time>` before the closing
+parenthesis. Always validate hand edits with `agent-coexist check <file>`.
 
 Exact flags: `agent-coexist <command> --help`. For waiting on replies:
 `guide wait`.

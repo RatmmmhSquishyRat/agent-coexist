@@ -6,6 +6,8 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-10-09
+
 ### Added
 
 - Built-in offline guide: `agent-coexist guide [start|read|write|wait]`
@@ -68,6 +70,12 @@ All notable changes to this project are documented here. The format follows
   grant.
 
 ### Changed
+
+- Consolidate authored documentation by keeping README as a minimal entry
+  point, establishing the guide as the single canonical walkthrough,
+  streamlining task guides without repeating syntax catalogs, and focusing
+  output summaries on representative examples.
+
 - Corrected three text promises: the absolute-path warning describes a
   portability risk, not guaranteed staleness; profile/post help and the
   command reference state that bodies are fenced after CRLF-to-LF
@@ -894,5 +902,6 @@ It was not tagged, and builds from later commits still report version
   diagnostics with `why`/`fix`, stderr-only progress, and exit codes
   0/1/2/3 (+130 for cancelled waits).
 
-[Unreleased]: https://github.com/RatmmmhSquishyRat/agent-coexist/compare/8d98cc73a2714a9931172bf4ac6b9fbf417d7853...main
+[Unreleased]: https://github.com/RatmmmhSquishyRat/agent-coexist/compare/v0.2.0...main
+[0.2.0]: https://github.com/RatmmmhSquishyRat/agent-coexist/compare/8d98cc73a2714a9931172bf4ac6b9fbf417d7853...v0.2.0
 [0.1.0]: https://github.com/RatmmmhSquishyRat/agent-coexist/commit/8d98cc73a2714a9931172bf4ac6b9fbf417d7853

@@ -1340,120 +1340,170 @@ const U_WAIT: &str = "agent-coexist wait <PATH>";
 const U_WAIT_POST: &str = "agent-coexist wait-post <PATH> [--as <nick>]";
 const U_WAIT_STATE: &str = "agent-coexist wait-state [DIR] [--status <name>]";
 
+macro_rules! h_scan_filters {
+    () => {
+        "--include/--exclude are gitignore-style globs relative to DIR. --include does not reach into directories that ignore rules skip; add --no-ignore for that."
+    };
+}
+
+macro_rules! h_flock_rule {
+    () => {
+        "--as is your nick; it only exempts your own 'locked' declarations. A valid 'locked' by another nick on the file's directory or an ancestor refuses the write with E-FLOCKED (exit 3); without --as, your own 'locked' refuses it too."
+    };
+}
+
+macro_rules! h_fast_lock_retry {
+    () => {
+        "If another write holds the file, fails after about 200ms with E-LOCKED (exit 3); retry shortly. On E-FLOCKED, retry after the time shown in 'reason' or ask the holder; do not retry in a loop."
+    };
+}
+
+macro_rules! h_shared_lock {
+    () => {
+        "Waits up to 1s for a shared lock; if still busy: E-LOCKED, exit 3; retry shortly."
+    };
+}
+
+macro_rules! h_wait_common {
+    () => {
+        "Sampled about once a second; a missing file is a valid start. Each sample waits up to 1s for a shared lock (E-LOCKED or Windows E-INUSE, exit 3). On restart, read again after the ready line. No timeout; Ctrl-C cancels (exit 130)."
+    };
+}
+
 const H_GUIDE: &str = "\
-Prints one built-in Markdown page to stdout. Without a topic it prints the index page: what to do when you arrive in a project, and a first exchange between two agents.
-Topics: start (which file type to use and where), read (find and check what others left), write (posts, briefs, profiles and state others can act on), wait (catch up, then wait for a reply or change).
-Topics are exact lowercase words. Pages are static text; the command does not read your project.
+Prints one built-in Markdown tutorial page to stdout (topics: start, read, write, wait; omit for index). Pages are static text.
 Example: agent-coexist guide start";
 
-const H_LIST: &str = "\
-Lists the collaboration files under DIR as a tree with a type column.
---type keeps only the given types (repeatable: post, brief, agent-profile, state; 'profile' is an alias).
---include/--exclude are gitignore-style globs relative to DIR. --include does not reach into directories that ignore rules skip; add --no-ignore for that.
-Type column 'busy': the file lock or a stable read was not available within 100ms; retry. On Windows it can also mean another program holds the file open without sharing; close that program, then retry.
-Type column '?': unreadable (permissions, not UTF-8, invalid H1, or over 16 MiB).
-'busy' and '?' files still show under any --type and make the first line 'warn'; the command does not fail on them.
-Example: agent-coexist list docs --type post --type brief";
+const H_LIST: &str = concat!(
+    "\
+Lists collaboration files under DIR as a tree with a type column.
+--type keeps only given types (repeatable: post, brief, agent-profile, state; 'profile' is an alias).
+",
+    h_scan_filters!(),
+    "\n\
+Type 'busy': lock unavailable within 100ms (or Windows sharing violation); retry. Type '?': unreadable or invalid.
+'busy' and '?' files appear under any --type and mark the first line 'warn'.
+Example: agent-coexist list docs --type post --type brief",
+);
 
-const H_CHECK: &str = "\
-Reports one file: its 'file' and 'type' rows, diagnostics in line order, then a preview (topic and latest comment for posts, entry states for briefs, sections for profiles, declarations for state).
-Brief targets are checked but not printed; use read-brief for their text. For every declaration that applies to a directory, use check-state.
-Waits up to 1s for a shared lock; if the file stays busy: E-LOCKED, exit 3; retry the same command shortly.
-Example: agent-coexist check docs/standup";
+const H_CHECK: &str = concat!(
+    "\
+Reports one file: type, line diagnostics, and preview (topic/latest for posts, entry states for briefs, sections for profiles, declarations for state).
+Brief targets are verified but not printed (use read-brief). Directory-wide declarations: use check-state.
+",
+    h_shared_lock!(),
+    "\nExample: agent-coexist check docs/standup",
+);
 
-const H_PROFILE: &str = "\
---section <name> -m <content> sets that section's body, stored in a code fence. CRLF line endings become LF, and whitespace at the end of the body is removed. --section <name> --remove deletes the section. Without --section, creates the file (heading only) or reports 'unchanged'. Content that starts with '-' must be attached: -m='- item'.
---as is your nick. It is not written; it only exempts your own 'locked' declarations. A valid 'locked' by another nick on the file's directory or an ancestor refuses the write with E-FLOCKED (exit 3); without --as, your own 'locked' refuses it too.
-If another write holds the file, fails after about 200ms with E-LOCKED (exit 3); retry shortly. On E-FLOCKED, retry after the time shown in 'reason' or ask the holder; do not retry in a loop.
-Example: agent-coexist profile agents/alice --section role -m 'Rust implementer. Owns crates/core.'";
+const H_PROFILE: &str = concat!(
+    "\
+--section <name> -m <content> sets a section body (fenced code). --section <name> --remove deletes it. Without --section, creates the file or reports 'unchanged'.
+",
+    h_flock_rule!(),
+    "\n",
+    h_fast_lock_retry!(),
+    "\nExample: agent-coexist profile agents/alice --section role -m 'Rust implementer. Owns crates/core.'",
+);
 
 const H_POST: &str = "\
--m is the comment body, stored in a code fence. CRLF line endings become LF, and whitespace at the end of the body is removed. In it, @nick mentions someone and @#n replies to comment n. A body that starts with '-', such as a Markdown list, must be attached: -m='- item'. --as is the author nick written in the comment heading.
---edit <n> replaces the whole body of your own comment #n (its author must be --as), so resend everything you want to keep.
-The report's 'comment' row names the comment written.
-Waits up to 5s for the file lock (AGENT_COEXIST_LOCK_WAIT_MS overrides); if still busy: E-LOCKED, exit 3; retry the same command shortly.
+Appends a comment with author --as and body -m (stored in a code fence; @nick mentions, @#n replies).
+--edit <n> replaces the whole body of your own comment #n (author must match --as); include everything to keep.
+Waits up to 5s for the lock (AGENT_COEXIST_LOCK_WAIT_MS overrides); if busy: E-LOCKED (exit 3); retry shortly.
 Example: agent-coexist post docs/standup --as bob -m '@#1 parser done, see src/parser/mod.rs'";
 
 const H_SUBSCRIBE: &str = "\
-Adds --as to the post's subscriber list, so read-notification --as <nick> includes new comments by other authors in that post within the scan's time window. Nothing is pushed to subscribers, and wait-post does not use the list.
---cancel removes --as from the list. Subscribing twice, or cancelling a nick that is not subscribed, changes nothing ('unchanged <nick>').
-Locking is as for post: waits up to 5s (AGENT_COEXIST_LOCK_WAIT_MS overrides), then E-LOCKED, exit 3.
+Adds --as to subscriber list so read-notification includes new comments by others. --cancel removes --as.
+Subscribing twice or cancelling an unsubscribed nick reports 'unchanged <nick>'.
+Locking: waits up to 5s (AGENT_COEXIST_LOCK_WAIT_MS overrides); if busy: E-LOCKED (exit 3).
 Example: agent-coexist subscribe docs/standup --as alice";
 
-const H_BRIEF: &str = "\
-The usage forms, in order: create the brief (or report 'unchanged'); set the description; add or update an entry for a target; replace one entry's note; remove an entry; refresh hashes (every entry, or only --entry). Other combinations are rejected.
--m is the description without --target/--entry, and the entry's note with them. Text that starts with '-' must be attached: -m='- item', and likewise --regex='-x'.
---target is relative to the brief's directory, not the current directory. Without --entry, the title is the target's file name.
---regex: when the brief is checked or read, the target must still match it, or the entry is 'stale'; writing only checks that it compiles. --regex '' deletes the entry's regex lines. Use \\r or \\n in a pattern to match line breaks; --regex and --target cannot contain raw line breaks.
---refresh accepts the targets' current bytes: read what changed and update the note first.
---as is your nick. It is not written; it only exempts your own 'locked' declarations. A valid 'locked' by another nick on the file's directory or an ancestor refuses the write with E-FLOCKED (exit 3); without --as, your own 'locked' refuses it too.
-If another write holds the file, fails after about 200ms with E-LOCKED (exit 3); retry shortly. On E-FLOCKED, retry after the time shown in 'reason' or ask the holder; do not retry in a loop.
-Example: agent-coexist brief docs/onboarding --target ../src/parser/mod.rs --entry 'parser entry point'";
+const H_BRIEF: &str = concat!(
+    "\
+Forms: create bare / report unchanged; set description (-m); add/update entry (--target, optional --entry, --regex, -m); replace note (--entry, -m); remove entry (--entry --remove); refresh hashes (--refresh, optional --entry).
+--target is relative to brief's directory. Default title is target's filename.
+--regex: target must match pattern on read (otherwise 'stale'); --regex '' deletes regex lines. Use \\r or \\n for line breaks.
+--refresh recomputes hashes against current bytes; update outdated notes first.
+",
+    h_flock_rule!(),
+    "\n",
+    h_fast_lock_retry!(),
+    "\nExample: agent-coexist brief docs/onboarding --target ../src/parser/mod.rs --entry 'parser entry point'",
+);
 
 const H_STATE: &str = "\
-Declare: --as <nick> --status <name> records that <nick> holds <name> on DIR and everything below it until the end time. Declaring again replaces your entries under that status with one from now, except an entry on a line that also has unparseable fragments (W-STATE-ENTRY): that line is kept, and the latest end time still wins; check-state shows the result.
-Remove: --remove <nick> removes that nick's declarations in DIR. Add --status to remove only that status; without it every status goes, including a live 'locked'.
-Built-in statuses: 'locked' = please do not change this directory or its subdirectories until the end time; 'observing' = I am watching, changes are welcome. Other names are stored and shown but have no built-in meaning.
---for defaults to 2h for 'locked' and 8h otherwise. In the remove form --as defaults to the removed nick; removing another nick's declaration adds a 'removed-other' row and a 'warn' first line.
-DIR must already exist; it is never created.
-'locked' is a request between agents, not access control, and another nick's 'locked' never blocks a state write. Locks overlapping yours are listed as 'conflict' rows with a 'warn' first line (exit 0); talk to the holder in a post.
-The conflict check reads the state files of DIR and its ancestors and the state files below DIR that ignore rules do not skip; state has no --no-ignore, so to see locks inside ignored directories run check-state DIR --no-ignore.
-If another write holds the state file, fails after about 200ms with E-LOCKED (exit 3); retry shortly.
+Declare: --as <nick> --status <name> declares intent on DIR and its subtree until expiry (--for defaults to 2h for 'locked', 8h otherwise). Declaring again replaces your clean entries under that status.
+Remove: --remove <nick> removes declarations in DIR. Add --status to restrict removal; without it, all statuses for <nick> are removed.
+Built-in statuses: 'locked' (cooperative request not to edit) and 'observing' (watching). 'locked' is not OS access control and never blocks state writes. Overlapping locks produce 'conflict' rows (exit 0).
+DIR must already exist. Lock: fails after about 200ms with E-LOCKED (exit 3); retry shortly.
 Example: agent-coexist state src --as alice --status locked --for 1h30m";
 
-const H_READ_NOTIFICATION: &str = "\
-Lists, oldest first, what happened since --since that concerns the --as nick: comments by other authors that mention it, reply to its comments, or appear in posts it subscribes to; state declarations by others; locks that overlap its own; its own declarations that end soon or have ended.
-Scans every post and state file under DIR that ignore rules do not skip (default: the current directory) and also reads ancestor state files. It never writes files and keeps no read cursor; for files inside ignored directories add --no-ignore.
---since is an RFC 3339 time (e.g. 2026-09-17T09:12:00Z) or a duration back from now (e.g. 1h30m). The window ends before the current second, so a comment written this second shows up in a later scan.
---include/--exclude are gitignore-style globs relative to DIR. --include does not reach into directories that ignore rules skip; add --no-ignore for that.
-Each file waits at most 100ms for a shared lock. Busy or unparseable files become 'skipped' or 'partial' rows with a 'warn' first line; read them directly before concluding nothing is new.
-Example: agent-coexist read-notification --as alice --since 1h";
+const H_READ_NOTIFICATION: &str = concat!(
+    "\
+Lists events since --since concerning --as: mentions, replies, subscribed post comments, state changes by others, overlapping locks, and own expirations.
+Scans posts and state files under DIR (default .) plus ancestor state files. Keeps no read cursor; window ends before current second.
+--since accepts RFC 3339 timestamp or duration back from now (e.g. 1h30m).
+",
+    h_scan_filters!(),
+    "\n\
+Per-file shared lock wait is 100ms; busy or unreadable files produce 'skipped'/'partial' rows and mark report 'warn'.
+Example: agent-coexist read-notification --as alice --since 1h",
+);
 
-const H_LOOKFOR: &str = "\
-Lists matching comments with line, number, author, time and an excerpt. Without filters it lists every comment; with several, a comment must match all of them.
---keyword is a case-insensitive substring of the raw body or heading line, matched exactly as typed (spaces are not folded).
---by is the comment's author (check lists a post's 'authors'). --mention matches @nick in the body, --reply-to matches @#n in the body, and --comment selects comment #n.
-Waits up to 1s for a shared lock; if still busy: E-LOCKED, exit 3; retry shortly.
-Example: agent-coexist lookfor-comment docs/standup --by bob";
+const H_LOOKFOR: &str = concat!(
+    "\
+Lists comments matching all given filters: --keyword (case-insensitive substring of body/header), --by (author), --mention (@nick), --reply-to (@#n), or --comment (#n).
+",
+    h_shared_lock!(),
+    "\nExample: agent-coexist lookfor-comment docs/standup --by bob",
+);
 
-const H_READ_BRIEF: &str = "\
-Prints the description, then each entry's state, note and target text. With a regex, only the lines of its first match are printed; without one, the whole target.
-An entry with no path, a missing or unreadable target, a failing regex, or a target over 64 MiB prints no text; its row says why.
---entry prints only that entry. For entry states without target text, use check.
-Waits up to 1s for a shared lock; if still busy: E-LOCKED, exit 3; retry shortly.
-Example: agent-coexist read-brief docs/onboarding --entry 'parser entry point'";
+const H_READ_BRIEF: &str = concat!(
+    "\
+Prints brief description, entry states, notes, and target text (regex match lines, or whole target; max 64 MiB).
+--entry restricts output to one entry. For states without target text, use check.
+",
+    h_shared_lock!(),
+    "\nExample: agent-coexist read-brief docs/onboarding --entry 'parser entry point'",
+);
 
-const H_CHECK_STATE: &str = "\
-Shows the declarations that apply to DIR: 'inherited' rows from ancestor directories (valid ones only), DIR's own declarations, then one group per state file below DIR that ignore rules do not skip (add --no-ignore to see declarations in skipped directories).
-A row ends with 'conflict' when it is a valid 'locked' and another nick holds a valid 'locked' shown in this same report on an overlapping directory (the same, an ancestor or a descendant; both rows are marked), or with 'expired' when a declaration in DIR or below has ended. Either mark makes the first line 'warn' (exit 0). Only this report's declarations are compared: an inherited lock can still conflict with a lock in another branch below that ancestor; check-state on the ancestor shows it.
---include/--exclude are gitignore-style globs relative to DIR. --include does not reach into directories that ignore rules skip; add --no-ignore for that.
-Each state file waits at most 100ms for a shared lock. Busy or unparseable ones become 'skipped' or 'partial' rows with a 'warn' first line.
-For one state file with its diagnostics, use check <DIR>/state.
-Example: agent-coexist check-state src";
+const H_CHECK_STATE: &str = concat!(
+    "\
+Shows declarations applying to DIR: valid inherited entries from ancestors, DIR's own entries, and state files in the subtree.
+Overlapping valid 'locked' entries are marked 'conflict'; ended declarations are marked 'expired' (marks make first line 'warn', exit 0).
+",
+    h_scan_filters!(),
+    "\n\
+Per-file lock wait is 100ms; busy/unreadable files yield 'skipped'/'partial' rows. Diagnostics for one state file: use check.
+Example: agent-coexist check-state src",
+);
 
-const H_WAIT: &str = "\
-Waits for the next change to this collaboration file (any type), prints one report of what changed, and exits 0. It never writes.
-Once it has recorded its starting point, it writes one line 'waiting  wait  <object>' to stderr. A change made before that line is not reported, so read the file again after the line appears.
-The file is sampled about once a second. A missing file is a valid start: the wait reports its creation (its directory must exist), so a mistyped path waits forever.
-Each sample waits up to 1s for a shared lock. If the file stays busy, the wait ends with E-LOCKED (exit 3); on Windows, a program holding the file open without sharing ends it with E-INUSE (exit 3). However a wait ends — a busy file, an unreadable file, or an invalid sample — a restarted wait starts from a new baseline: read the file again after its ready line.
-There is no timeout. Ctrl-C cancels: exit 130, no stdout.
-Example: agent-coexist wait docs/onboarding";
+const H_WAIT: &str = concat!(
+    "\
+Waits for next change to a collaboration file, reports diff, and exits 0. Never writes.
+Writes 'waiting  wait  <object>' to stderr once baseline is recorded; re-read file after this line to catch changes made before baseline.
+",
+    h_wait_common!(),
+    "\nExample: agent-coexist wait docs/onboarding",
+);
 
-const H_WAIT_POST: &str = "\
-Waits for a comment in this post that mentions @<nick> or replies to a comment by <nick> and is new, edited or newly relevant; prints those comments and exits 0. With --as, subscriber changes and deleted comments do not count; without --as, any change to the post counts.
-Once it has recorded its starting point, it writes one line 'waiting  wait-post  <object>' to stderr. A comment written before that line is not reported, so read the post again after the line appears.
-The post is sampled about once a second; a missing post is a valid start. Each sample waits up to 1s for a shared lock. If the file stays busy, the wait ends with E-LOCKED (exit 3), or on Windows E-INUSE (exit 3). However a wait ends — a busy post, an unreadable post, or an invalid sample — a restarted wait starts from a new baseline: read the post again after its ready line.
-There is no timeout. Ctrl-C cancels: exit 130, no stdout.
-Example: agent-coexist wait-post docs/standup --as alice";
+const H_WAIT_POST: &str = concat!(
+    "\
+Waits for comments relevant to --as (mentions or replies) that are new, edited, or newly relevant. Without --as, waits for any post change.
+Writes 'waiting  wait-post  <object>' to stderr once baseline is recorded; re-read post after this line.
+",
+    h_wait_common!(),
+    "\nExample: agent-coexist wait-post docs/standup --as alice",
+);
 
-const H_WAIT_STATE: &str = "\
-Watches only DIR/state.agent-besties.md (DIR defaults to the current directory), not ancestors or subdirectories.
---status (locked, observing or another status name) waits for a declaration under that status to be added, removed or renewed; without it, any change to the file counts. A declaration that simply expires does not count; use check-state for current declarations.
-Once it has recorded its starting point, it writes one line 'waiting  wait-state  <object>' to stderr. A change made before that line is not reported, so run check-state again after the line appears.
-The file is sampled about once a second; a missing state file is a valid start. Each sample waits up to 1s for a shared lock. If the file stays busy, the wait ends with E-LOCKED (exit 3), or on Windows E-INUSE (exit 3). However a wait ends — a busy file, an unreadable file, or an invalid sample — a restarted wait starts from a new baseline: run check-state on the directory again after its ready line.
-There is no timeout. Ctrl-C cancels: exit 130, no stdout.
-Example: agent-coexist wait-state src --status locked";
-
+const H_WAIT_STATE: &str = concat!(
+    "\
+Watches DIR/state.agent-besties.md (defaults to .); does not watch ancestors or subtrees.
+--status waits for declaration add/remove/renewal under that status (clock expiry alone does not trigger). Without --status, any change triggers.
+Writes 'waiting  wait-state  <object>' to stderr once baseline is recorded; run check-state after this line.
+",
+    h_wait_common!(),
+    "\nExample: agent-coexist wait-state src --status locked",
+);
 #[cfg(test)]
 mod tests {
     use super::*;

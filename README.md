@@ -4,8 +4,7 @@
 
 ![Two agents wave hello from neighboring laptop screens.](docs/assets/cover.webp)
 
-**Help the agents on a project find each other, catch up, and work
-together.**
+**Help agents find each other, catch up, and work together.**
 
 agent-coexist is a small command-line tool for projects that more than
 one AI agent works on. It keeps their threads, directory claims, reading
@@ -14,18 +13,16 @@ agent with file access can find them.
 
 ## Why
 
-Agents on the same project usually cannot see each other. Most harnesses
-do not talk to one another. Even where they do, main sessions rarely have
-an obvious way to see each other, subagents rarely see their siblings, and
-a session that resumes or moves to another harness often has no easy way
-back to what came before. So each agent pieces the project together from
-whatever traces it happens to find, or starts work without that picture
-and repeats or undoes someone else's work, however capable the model is.
+Agents on the same project usually cannot see each other's context. Most
+harnesses do not talk to one another, main sessions rarely see each other,
+subagents rarely see their siblings, and a session that resumes or moves to
+another harness often has no record of what came before.
 
-Every agent can already list a directory and read a file. agent-coexist
-builds on that: no server, no plugin, and no need to know in advance who
-else is there. A newcomer looks around, reads what touches its task, and
-then joins the conversation.
+agent-coexist does not monitor harness chat transcripts, sync across
+networks, or automatically capture session histories. Instead, agents
+explicitly write messages, directory claims, and reading routes to
+Markdown files (`*.agent-besties.md`) in the workspace. Any agent with
+file access can inspect them with standard file tools or the CLI.
 
 ## Install
 
@@ -42,171 +39,81 @@ agent-coexist guide
 `agent-coexist guide` prints the built-in tutorial written for agents. It
 creates no files.
 
-## A quick look
+## Getting started
 
-The commands below use a POSIX shell; on Windows, Git Bash works as-is.
-They start in a fresh temporary directory, outside the agent-coexist
-checkout. In it, first play alice and bob, two agents who worked on this
-project earlier and never met. alice asks whoever comes next for a review,
-bob answers her, and alice then asks others to stay out of `src/parser`
-for a while (`locked` lasts two hours unless you pass `--for`):
+Run `agent-coexist guide` for the complete onboarding tutorial, or inspect
+existing records in your project:
 
 ```sh
-cd "$(mktemp -d)"
-mkdir -p src/parser
-agent-coexist post parser-review --as alice -m 'I changed the error mapping in src/parser/mod.rs. Whoever reviews the parser next: please review it and reply here.'
-agent-coexist post parser-review --as bob -m '@#1 The mapping looks right. Should an I/O error stay fatal, @alice?'
-agent-coexist state src/parser --as alice --status locked
-```
-
-Now arrive as carol, who knows neither of them. She could be an agent in
-another harness, a sibling subagent, or a session resumed without its
-earlier context. Before touching anything, she looks:
-
-```sh
+# Check for existing records
 agent-coexist list .
-agent-coexist check-state src/parser
+
+# Post a message or review request
+agent-coexist post parser-review --as alice -m 'Error mapping updated. Please review.'
 ```
 
-`list` finds the `parser-review` thread and the state file under
-`src/parser`. `check-state` shows alice's `locked` declaration and when
-it ends. The thread is ordinary Markdown, so carol opens
-`parser-review.agent-besties.md` with her own file tool (your timestamps
-will differ):
-
-````markdown
-# parser-review.post
-
-## #1 alice (2026-09-24T09:12:00Z)
-
-```md
-I changed the error mapping in src/parser/mod.rs. Whoever reviews the parser next: please review it and reply here.
-```
-
-## #2 bob (2026-09-24T09:40:00Z)
-
-```md
-@#1 The mapping looks right. Should an I/O error stay fatal, @alice?
-```
-````
-
-She now knows who was here, what they say they did, which question is
-open, and which directory to leave alone. She also sees that `alice` and
-`bob` are taken, so she writes as `carol` and joins the same thread. Her
-note answers no earlier comment, so it has no `@#n` reply marker; it
-mentions alice instead:
-
-```sh
-agent-coexist post parser-review --as carol -m 'I will pick up the parser integration next and leave src/parser alone while it is locked. @alice please post here when you release it.'
-```
-
-When alice comes back in a new session, she takes her nick from the
-summary she saved at the end of her earlier session, and asks what was
-addressed to her; here, bob's reply and carol's mention. Her summary
-records when she last read the thread, before bob replied. In this
-example that read was less than an hour ago, so `--since 1h` starts
-before it.
-The window leaves out the current second, so the block starts with a
-one-second pause to let carol's comment in:
-
-```sh
-sleep 1
-agent-coexist read-notification . --as alice --since 1h
-```
-
-That read may be longer ago, or its time may not be recorded, and a
-guessed `1h` then misses older comments without saying so. A thread's
-last-read time also covers only that thread, while `read-notification .`
-scans every post under the directory; it is enough here because
-`parser-review` is the only thread in this directory. Without a time she
-can rely on, she reads the threads she worked in, and any others that
-touch her task, directly. `agent-coexist guide wait` covers catching up
-in a directory with more threads.
-
-An agent that chooses a new nick, as carol did, has nothing addressed to
-it yet, so it starts by listing and reading, under a nick no one in the
-records uses. A nick you were given may already be addressed before you
-write anything, so also look for it in the threads you read;
-`lookfor-comment <post> --mention <nick>` searches one post. Keep your
-nick whenever you continue the same work. The
-[guide](crates/cli/guide/index.md#when-you-arrive) explains how to carry
-it into a later session through your handoff, and what to do when
-nothing records it. To wait for a reply instead of checking back, see
-`agent-coexist guide wait`.
+For the complete walkthrough covering multiple agents, mentions, replies,
+and notifications, see the [built-in guide](crates/cli/guide/index.md).
 
 ## Use it with your agents
 
-To run the CLI commands, an agent needs the `agent-coexist` binary on
-PATH (or its full path). Every agent also needs a reason to look before
-it starts.
+To run commands, an agent needs `agent-coexist` on PATH (or its full path).
 
-The bundled skill gives them that reason. Copy
-[`.agents/skills/agent-coexist/`](.agents/skills/agent-coexist/SKILL.md)
-into your project's `.agents/skills/`, or into `.claude/skills/` for
-Claude Code. It tells an agent to check for existing records when it
-arrives in or returns to a project, and to run `agent-coexist guide`.
-Whether and when a skill loads depends on the harness; you can also ask
-an agent directly to run `agent-coexist guide`.
-
-Reading records, or editing them by hand, needs only a file tool. The
-CLI keeps writes consistent and finds and checks records across a
-directory tree.
+To teach agents when and how to look for project records, copy the bundled
+skill in [`.agents/skills/agent-coexist/`](.agents/skills/agent-coexist/SKILL.md)
+into your project's `.agents/skills/` (or `.claude/skills/` for Claude Code).
+It instructs an agent to check for existing records upon arrival and run
+`agent-coexist guide`. Reading records or editing them by hand needs only
+standard file tools; the CLI keeps writes consistent and checks records
+across a directory tree.
 
 ## What gets recorded
 
-Each record type answers a question a newcomer has. Use only the ones
-your work needs.
+Each record type serves a specific coordination need:
 
 | Record | Answers | Holds |
 |---|---|---|
 | post | What was asked and decided? Is anyone asking me? | Numbered comments with `@nick` mentions and `@#n` replies |
-| state | Who declared this directory, and until when? | Expiring declarations such as `locked` or `observing` |
-| brief | What should I read before taking over, and has it changed? | Pointers to files, with notes and SHA-256 hashes |
-| agent-profile | Who is this agent, and what does it handle? | Optional sections such as role and scope |
+| state | Who declared intent for this directory, and until when? | Expiring declarations such as `locked` or `observing` |
+| brief | What should I read before taking over, and has it changed? | Target file paths with notes, hashes, and optional regex patterns |
+| agent-profile | Who is this agent, and what does it handle? | Optional role, scope, and contact notes |
 
-Every record is a file ending in `.agent-besties.md`, and commands accept
-the name without that suffix. The CLI changes only the part a command
-targets, so hand-written notes and formatting survive. The
-[file format reference](docs/file-format.md) shows each type on disk.
+Every record is stored as a Markdown file ending in `.agent-besties.md`.
+Commands accept paths with or without that suffix. See the
+[file format reference](docs/file-format.md) for disk layout.
 
 ## Good to know
 
-- **Nothing is pushed.** Agents see a record when they look for it.
-  `read-notification` filters by nick, subscription, and time; it is not
-  a full history.
-- **Records are what agents declared.** A state entry is stated intent
-  with an end time, not proof its author is still running. An unchanged
-  brief hash means the target file is unchanged, not that the note is
-  right. Check the code when your work depends on it.
-- **Cooperation, not security.** `--as <nick>` is a self-declared label,
-  not a login; any agent can write under any nick. `locked` asks other
-  agents to stay out of a directory. The CLI enforces it only by rejecting
-  `profile` and `brief` writes there until it expires, unless `--as` names
-  the holder; without `--as`, even the holder's own writes are rejected.
-  `post`, `subscribe`, `state`, and normal file tools are not blocked, so
-  nothing stops edits to the directory's files. See [SECURITY.md](SECURITY.md).
-- **Shared files only.** Agents must reach the same files, on one machine
-  or a share you arrange. agent-coexist does not sync or talk over a
-  network, and file locking on network filesystems is not guaranteed.
-- **`warn` exits 0, like `ok`.** Scripts should read the first line of
-  output, not just the exit code. See
-  [Exit codes](docs/usage.md#exit-codes).
+- **Explicit workspace files, not chat logs:** agent-coexist does not hook
+  into agent conversations, sync across a network, or maintain an automatic
+  activity feed. Agents explicitly write to `.agent-besties.md` files;
+  other agents see them when they inspect the directory.
+- **Coordination and locking:** `--as <nick>` is a self-declared identifier,
+  not an authenticated login. A `locked` directory declaration asks other
+  agents to avoid editing that area. The CLI enforces this by blocking
+  `profile` and `brief` writes in that directory unless `--as` names the lock
+  holder; it does not block `post`, `subscribe`, `state`, or ordinary file
+  tools. See [docs/usage.md](docs/usage.md) and [SECURITY.md](SECURITY.md).
+- **Shared filesystem:** Agents must share access to the same workspace
+  directory. File locking on network filesystems is not guaranteed.
+- **`warn` exits 0, like `ok`:** Scripts should inspect the output status
+  lines, not just the process exit code. See
+  [docs/usage.md#exit-codes](docs/usage.md#exit-codes).
 
 ## Documentation
 
 - Built-in guide: `agent-coexist guide`, with topics `start`, `read`,
   `write`, and `wait`. The same pages are in
   [crates/cli/guide/](crates/cli/guide/index.md).
-- [Command reference](docs/usage.md): every command, flag, exit code, and
-  output rule.
-- [Output summary](docs/output-summary.md): a catalog of actual
-  commands and their captured output (stdout/stderr/exit code) by
-  situation, including the full stdout of the five built-in `guide`
-  pages and every `--help`; topics are linked from the entry page.
-- [File format reference](docs/file-format.md): the four record types as
-  a human editor sees them.
-- [Project skill](.agents/skills/agent-coexist/SKILL.md): the short agent
-  entry described in [Use it with your agents](#use-it-with-your-agents).
+- [Command reference](docs/usage.md): complete reference for commands,
+  flags, exit codes, and output formats.
+- [Output summary](docs/output-summary.md): representative catalog of
+  actual commands and captured outputs, including the full stdout of the
+  five built-in `guide` pages.
+- [File format reference](docs/file-format.md): disk structure for each
+  record type.
+- [Project skill](.agents/skills/agent-coexist/SKILL.md): bundled agent
+  skill instructions.
 - [Contributing](CONTRIBUTING.md) · [Security policy](SECURITY.md) ·
   [Changelog](CHANGELOG.md) ·
   [CI workflow](https://github.com/RatmmmhSquishyRat/agent-coexist/actions/workflows/ci.yml)

@@ -41,13 +41,9 @@ The examples run from the directory of the `parser-review` thread in
    ```
 
    This scans every post under the directory that ignore rules do not
-   skip, not only the threads you read, and leaves out activity before
-   the window without warning. To continue an earlier directory-wide
-   notification scan without a gap, start the window at or before that
-   scan started, with the same directory, nick, and filters, such as the
-   scan time in your handoff; the time you last read a thread covers only
-   that thread. Without such a time, read the relevant threads directly
-   instead (see `guide wait`).
+   skip, reporting mentions, replies, subscribed post activity, and new
+   state declarations. It leaves out activity before the window. To
+   continue an earlier scan without gaps across handoffs, see `guide wait`.
 
 4. **One comment in a long thread.** `lookfor-comment` returns comment
    numbers, file lines, and excerpts. Filters combine, so use only the

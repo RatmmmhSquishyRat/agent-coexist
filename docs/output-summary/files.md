@@ -1,23 +1,35 @@
 # Text written to files
 
-<a id="brief-new-file"></a>
+<a id="brief-populated-file"></a>
 
-## brief: create a new, empty brief
+## brief: create a brief with an entry
 
-The directory holds no brief yet.
+`src/parser/mod.rs` is an existing example file; `onboarding` does not exist yet.
 
-`agent-coexist brief onboarding --as alice`
+`agent-coexist brief onboarding --as alice --target src/parser/mod.rs --entry 'parser entry point' -m 'Start at parse_document; check its error mapping before changing callers.'`
 ```text
 ok  brief  onboarding
   created       onboarding.agent-besties.md
+  entry         parser entry point  added  src/parser/mod.rs
+  hash          c399aff1248675b25447a94e5e2b618b8cba18985d5e5b2fe52ed174124cd367
+  note          set
 ```
 
 file onboarding.agent-besties.md:
-```text
+````text
 # onboarding.brief
 
 > paths below are relative to this file's directory; hashes are SHA-256 of the target's bytes.
+
+## parser entry point
+
+- path: src/parser/mod.rs
+- hash: c399aff1248675b25447a94e5e2b618b8cba18985d5e5b2fe52ed174124cd367
+
+```md
+Start at parse_document; check its error mapping before changing callers.
 ```
+````
 
 <a id="state-new-file"></a>
 
@@ -93,36 +105,5 @@ file team/agents/alice.agent-besties.md:
 
 ```md
 Parser error mapping. Send review requests to parser-review.
-```
-````
-
-<a id="brief-populated-file"></a>
-
-## brief: create a brief with an entry
-
-`src/parser/mod.rs` is an existing example file; `onboarding` does not exist yet.
-
-`agent-coexist brief onboarding --as alice --target src/parser/mod.rs --entry 'parser entry point' -m 'Start at parse_document; check its error mapping before changing callers.'`
-```text
-ok  brief  onboarding
-  created       onboarding.agent-besties.md
-  entry         parser entry point  added  src/parser/mod.rs
-  hash          c399aff1248675b25447a94e5e2b618b8cba18985d5e5b2fe52ed174124cd367
-  note          set
-```
-
-file onboarding.agent-besties.md:
-````text
-# onboarding.brief
-
-> paths below are relative to this file's directory; hashes are SHA-256 of the target's bytes.
-
-## parser entry point
-
-- path: src/parser/mod.rs
-- hash: c399aff1248675b25447a94e5e2b618b8cba18985d5e5b2fe52ed174124cd367
-
-```md
-Start at parse_document; check its error mapping before changing callers.
 ```
 ````

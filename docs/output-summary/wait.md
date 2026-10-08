@@ -29,9 +29,9 @@ stderr:
 waiting  wait-post  standup
 ```
 
-<a id="wait-file-created-removed"></a>
+<a id="wait-file-lifecycle"></a>
 
-## wait: a file created and a file removed
+## wait: file creation, removal, and semantic changes
 
 A wait may start while the file does not exist yet (the parent directory must exist).
 
@@ -81,6 +81,20 @@ ok  wait  notes
 stderr:
 ```text
 waiting  wait  notes
+```
+
+`agent-coexist wait docs/s` · Bytes change but content does not: semantic unchanged.
+
+stdout:
+```text
+ok  wait  docs/s
+  bytes         changed
+  semantic      unchanged
+```
+
+stderr:
+```text
+waiting  wait  docs/s
 ```
 
 <a id="wait-state-hit"></a>
@@ -138,80 +152,6 @@ stderr:
 waiting  wait-post  standup
 ```
 
-<a id="wait-brief-entry-added"></a>
-
-## wait: a brief gains an entry
-
-After the ready line, alice adds the `parser entry point` entry to `onboarding`, pointing to `src/parser/mod.rs` with a regex and note.
-
-`agent-coexist wait onboarding`
-
-stdout:
-```text
-ok  wait  onboarding
-  bytes         changed
-  semantic      changed
-  add     entry  parser entry point
-  path
-    | src/parser/mod.rs
-  hash
-    | c399aff1248675b25447a94e5e2b618b8cba18985d5e5b2fe52ed174124cd367
-  regex
-    | fn parse_document
-  note
-    | Start at parse_document.
-```
-
-stderr:
-```text
-waiting  wait  onboarding
-```
-
-<a id="wait-profile-section-updated"></a>
-
-## wait: a profile section changes
-
-After the ready line, alice updates the `role` section in `agents/alice` to include ownership of `crates/cli`.
-
-`agent-coexist wait agents/alice`
-
-stdout:
-```text
-ok  wait  agents/alice
-  bytes         changed
-  semantic      changed
-  update  section  role  body
-  before
-    | Rust implementer. Owns crates/core.
-  after
-    | Rust implementer. Owns crates/core and crates/cli.
-```
-
-stderr:
-```text
-waiting  wait  agents/alice
-```
-
-<a id="wait-byte-only"></a>
-
-## wait: bytes change, content does not
-
-After the ready line, a blank line is appended at the end of the file (a manual edit).
-
-`agent-coexist wait docs/s`
-
-stdout:
-```text
-ok  wait  docs/s
-  bytes         changed
-  semantic      unchanged
-```
-
-stderr:
-```text
-waiting  wait  docs/s
-```
-
 <a id="wait-cancel"></a>
 
 ## Cancel a wait with Ctrl-C in a real terminal
@@ -230,21 +170,13 @@ terminal frame (escaped view; no trailing newline):
 \x1b[?9001h\x1b[?1004h
 ```
 
-`agent-coexist wait standup` · exit code 130 · Linux terminal frame.
-
-terminal frame (stderr went straight to the terminal, not captured separately; escaped view; no trailing newline):
-```text
-waiting  wait  standup\r
-^C
-```
-
 <a id="wait-busy-windows"></a>
 
-## Windows: a lock or an exclusive open found at sampling time ends with exit 3
+## Windows: a conflicting exclusive lock found at sampling time ends with exit 3
 
-After the ready line, another process locks the file with the same kind of exclusive lock; or another program opens it without sharing.
+After the ready line, another process locks the file with a conflicting exclusive lock.
 
-`agent-coexist wait standup` · exit code 3 · E-LOCKED: another process holds the same kind of lock.
+`agent-coexist wait standup` · exit code 3 · E-LOCKED: another process holds a conflicting exclusive lock.
 
 stdout:
 ```text
@@ -258,37 +190,9 @@ stderr:
 waiting  wait  standup
 ```
 
-`agent-coexist wait standup` · exit code 3 · E-INUSE: another program has the file open without sharing.
-
-stdout:
-```text
-error  wait  standup
-  reason        file is in use by another program
-  fix           close the other program; restart with this command, then read the file again after its ready line (the new wait cannot report changes made while it was stopped): agent-coexist wait standup
-```
-
-stderr:
-```text
-waiting  wait  standup
-```
-
 <a id="wait-restore-after-ready"></a>
 
-## The path breaks after the ready line: three fix directives
-
-`agent-coexist wait-post room/standup --as alice` · exit code 1 · Windows: the parent junction is moved away after ready; the post remains in its backing directory.
-
-stdout:
-```text
-error  wait-post  room/standup
-  reason        cannot open room/standup.agent-besties.md: The system cannot find the path specified. (os error 3)
-  fix           restore the intended path of room/standup.agent-besties.md; if the directory on it is missing, recreate it, or move it back if it was renamed away; if a file now occupies the directory's place, move that file aside, keeping it; if room/standup.agent-besties.md is a dangling link, restore the file it points at; restart with this command, then read the file again after its ready line (the new wait cannot report changes made while it was stopped): agent-coexist wait-post room/standup --as alice
-```
-
-stderr:
-```text
-waiting  wait-post  room/standup
-```
+## The path breaks after the ready line: parent directory replaced by a file (Linux)
 
 `agent-coexist wait-post room/standup --as alice` · exit code 1 · A regular file now occupies the parent directory's place (Linux).
 
@@ -302,18 +206,4 @@ error  wait-post  room/standup
 stderr:
 ```text
 waiting  wait-post  room/standup
-```
-
-`agent-coexist wait standup` · exit code 1 · The watched file is now a directory of the same name (Linux).
-
-stdout:
-```text
-error  wait  standup
-  reason        cannot open standup.agent-besties.md: path does not name a regular file
-  fix           the path of standup.agent-besties.md itself no longer names a regular file; move whatever now occupies it aside, keeping it; the watch also accepts the file absent, so nothing needs to be created in its place; restart with this command, then read the file again after its ready line (the new wait cannot report changes made while it was stopped): agent-coexist wait standup
-```
-
-stderr:
-```text
-waiting  wait  standup
 ```

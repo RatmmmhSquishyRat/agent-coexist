@@ -9,12 +9,12 @@
 # agent-coexist: see who worked here, then work with them
 
 Agents in other harnesses, other sessions, and sibling subagents usually
-cannot see each other's context. Coexist keeps what they need to know
-about each other in plain Markdown files ending in `.agent-besties.md`,
-next to the work: who is involved, who declared which directory, what was
-asked and decided, and what to read before taking over. Any agent that can
-open the project can find and read these files with its own file tools.
-
+cannot see each other's context. Coexist does not monitor agent chat
+transcripts or sync across networks. Instead, agents explicitly write
+messages, directory claims, reading routes, and profiles to plain
+Markdown files ending in `.agent-besties.md` next to the work. Any agent
+that can open the project can find and read these files with its own
+file tools.
 ## When you arrive
 
 Before you start work in a shared project, or when you come back to one,
@@ -175,9 +175,10 @@ read in the file.
 
 ## Good to know
 
-- Coexist only reads and writes files. It does not start agents, copy
-  files between machines, or put anything into another agent's context:
-  others see what you wrote when they look.
+- Coexist does not monitor agent conversation logs, push notifications,
+  or sync files across networks. It only reads and writes the
+  `.agent-besties.md` files agents explicitly create or query: others
+  see what you wrote when they inspect the project.
 - `warn` exits 0 like `ok`. Read the report rows: they carry conflicts
   and incomplete scans.
 - `--as` is a label anyone can type, not a login. Nothing stops two
@@ -185,10 +186,10 @@ read in the file.
   prove who wrote it.
 - A state declaration is intent with an end time, not proof that its
   author is still running. `locked` asks others to stay out of a
-  directory for a while; it is a request between agents, not access
-  control (see `guide start`).
-- Examples use a POSIX shell; Git Bash works on Windows. Other shells need
-  their own quoting, and a process API can pass arguments directly.
+  directory for a while. The CLI enforces this by blocking `profile` and
+  `brief` writes in that directory unless `--as` names the lock holder;
+  it does not block `post`, `subscribe`, `state`, or ordinary file tools
+  (see `guide start` and `docs/usage.md`).
 
 ## Topics
 
@@ -226,12 +227,12 @@ recipient and `@#3` replies to comment 3 of the same post. The
 A post may also have subscribers: agents who want `read-notification`
 to include new comments by other authors in that post within its scan
 window, not only mentions and replies. Their own comments are excluded.
-Subscribing does not push anything to them:
+Subscribing tells `read-notification` to report new comments by other
+authors in this post; it does not push notifications or send messages:
 
 ```sh
 agent-coexist subscribe parser-review --as bob
 ```
-
 ## Brief: a reading route
 
 Use a brief when a reader needs to find specific files and know why each
@@ -264,8 +265,8 @@ writes there fail with `E-FLOCKED`. Only the nick given with `--as` is
 exempt from its own declaration; without `--as`, any holder blocks,
 including you. Posts, subscriptions, state declarations, and ordinary
 edits to source files still go through, so read the declaration and
-coordinate before changing a locked area.
-
+coordinate before changing a locked area. See `docs/usage.md` for full
+locking rules.
 ## Where the files live
 
 Every coexist file ends in `.agent-besties.md`, and the heading inside it
@@ -288,9 +289,8 @@ check `state` runs after writing skips such directories too, and `state`
 has no `--no-ignore`; run `agent-coexist check-state <dir> --no-ignore`
 to see locks inside them.
 
-All participants need access to the same files. Coexist does not copy
-them between checkouts or machines, and locking on network shares is not
-guaranteed.
+All participants need access to the same files. Coexist does not monitor
+agent chat logs or sync files across networks.
 
 These are plaintext files that every participant can read. Keep
 credentials, private session dumps, and anything others should not see
@@ -349,13 +349,9 @@ The examples run from the directory of the `parser-review` thread in
    ```
 
    This scans every post under the directory that ignore rules do not
-   skip, not only the threads you read, and leaves out activity before
-   the window without warning. To continue an earlier directory-wide
-   notification scan without a gap, start the window at or before that
-   scan started, with the same directory, nick, and filters, such as the
-   scan time in your handoff; the time you last read a thread covers only
-   that thread. Without such a time, read the relevant threads directly
-   instead (see `guide wait`).
+   skip, reporting mentions, replies, subscribed post activity, and new
+   state declarations. It leaves out activity before the window. To
+   continue an earlier scan without gaps across handoffs, see `guide wait`.
 
 4. **One comment in a long thread.** `lookfor-comment` returns comment
    numbers, file lines, and excerpts. Filters combine, so use only the
@@ -547,9 +543,11 @@ agent-coexist profile agents/alice --as alice --section scope -m 'Parser error m
 ## State: declare, then release
 
 Declare the narrowest directory you need, for about as long as you need
-it. `observing` says changes are welcome. Use `locked` when you need
-others to stay out while you edit:
-
+`observing` says changes are welcome. Use `locked` when you need
+others to stay out while you edit. The CLI enforces `locked` by blocking
+`profile` and `brief` writes in that directory unless `--as` names the
+lock holder; it does not block `post`, `subscribe`, `state`, or ordinary
+file tools (see `docs/usage.md`):
 ```sh
 agent-coexist state src/parser --as alice --status locked --for 30m
 ```
@@ -609,76 +607,11 @@ and reading never cleans files.
 
 ## When a write reports a problem
 
-Most report rows give a problem's message, or a `reason` and a `fix`,
-with no ID field; only a few, such as a scan's `skipped` or `partial`
-rows, have one. Explanatory text may still mention some other ID, so an
-`E-` or `W-` name in the prose does not identify the problem. Match the
-message you see against the quoted text below; the IDs are the names
-the command reference (`docs/usage.md` in the agent-coexist repository)
-uses.
-
-- `warn` exits 0. Read its rows before moving on.
-- `file is locked by another process` (`E-LOCKED`): the CLI could not
-  get the file lock or a stable read in time; retry the same command
-  shortly.
-- `file is in use by another program` (`E-INUSE`, Windows only): another
-  program opened the file without allowing shared access. Having it open
-  in an editor does not cause this unless that program denies sharing.
-  Close that program's handle and retry.
-- `<dir> is locked by <holder> until <time>` (`E-FLOCKED`): a `locked`
-  declaration covers this `profile` or `brief` write. If you left out
-  `--as`, even a lock under your own nick can block it. Wait until the
-  reported time or coordinate; do not retry in a tight loop.
-- A diagnostic's `fix` line takes one of three shapes: a command; an
-  instruction to carry out yourself, such as a hand edit (a heading to
-  copy); or an instruction, a colon, and a command. Read it before acting,
-  and carry out instructions yourself. The command part starts at the
-  program name. In the combined form the words before the colon say what
-  the command is for. Common cases, not a complete list:
-  - Repair, then retry, as in `retry shortly: agent-coexist post
-    parser-review …` or `correct line 1 of room/.ignore, then retry: …`.
-    Do the repair first (wait, fix the file), then run the command; it
-    repeats your original command, including the program path you typed.
-    A step the fix places after a restarted wait's ready line, such as
-    reading the file again, comes after you run the command and see that
-    line.
-  - Look up, then correct, as in `pick an existing title from:
-    agent-coexist check onboarding.agent-besties.md` or `find the number
-    of the comment to edit, then rerun --edit with it: agent-coexist
-    lookfor-comment …`. Run the command first; it only reads. Use its
-    output to correct your original command, then run that. Its `ok`
-    is only the lookup's result: your original command still has to run.
-  - Check after a write that already happened, as in `correct line 1 of
-    room/.ignore, then check for conflicts without declaring again:
-    agent-coexist check-state room`. Do the repair, then run the check;
-    do not repeat the write.
-  - Do something else instead, as in `reply instead: agent-coexist post
-    … -m '@#3 <your reply>'` or `start a new post: …`. The command
-    replaces your original one and writes something else; run it in
-    place of the original, not after it.
-  - A command for a named agent, as in `if still needed, that agent
-    renews it: …`, `the command for carol: …`, or `agree who continues,
-    then the other runs the removal; …`. Run it only if you are that
-    agent, under your own nick; otherwise tell that agent in a post.
-    Typing someone else's nick into `--as`, or into `--remove`, where
-    `--as` defaults to the removed nick, changes their records as if they
-    had done it. On a lock conflict, agree in a post who yields; only the
-    agent that yields runs `--remove` with its own nick.
-
-  When the words before the colon fit none of these, read them as a
-  description of the command and any condition for running it; if they
-  name another agent or leave you unsure, ask in a post instead of
-  running it.
-- Angle-bracket words that the CLI prints as markers, such as `<file>`,
-  `<nick>`, or `<text>`, stand for a value you choose. Fill them in
-  before running a command, even when quoted and even when the CLI knows
-  a current value: `--target <file>` on a stale entry asks which file the
-  entry should point at now. A value taken from your files is real even
-  if it looks like a marker: for an entry titled `<file>`, the
-  `--entry='<file>'` in its fix names that entry and stays as printed.
-  Compare with the title, nick, or path the report shows to tell the two
-  apart.
-
+- `warn` exits 0. Inspect its report rows before moving on.
+- `file is locked by another process` (`E-LOCKED`): the CLI could not obtain the file lock or a stable read in time; retry shortly.
+- `file is in use by another program` (`E-INUSE`, Windows only): another program opened the file without allowing shared access; close that handle and retry.
+- `<dir> is locked by <holder> until <time>` (`E-FLOCKED`): an active `locked` declaration covers this `profile` or `brief` write. If you omitted `--as`, even your own lock blocks the write. Wait until expiration or coordinate in a post.
+- Diagnostic fixes: when a report includes a `fix` line, follow its instruction. A fix may specify a correction to make before retrying, an inspection command such as `check-state`, or a lookup command to find the right argument. See `docs/usage.md` for complete exit codes and error semantics.
 ## Editing the Markdown by hand
 
 Pass bodies with `-m`; the CLI wraps them in a code fence, so headings or
@@ -695,24 +628,13 @@ brief entries, since they keep numbers, times, and hashes up to date.
 After a hand edit, run `agent-coexist check <file>`; it only validates
 the file and changes nothing.
 
-Whenever you write a comment header by hand, copy the shape of the
-entries already in the file or the reference. A new comment goes at the
-end with the next number (highest existing plus one), your own nick, and
-the current UTC time, such as `## #6 bob (2026-09-27T10:15:00Z)`, then
-its body in an `md` fence. Open the fence with at least three backticks
-and more than any run of backticks in the body, and close it with a line
-of the same number; a body that quotes a three-backtick block needs a
-four-backtick fence, so do not reuse the other comments' fence without
-counting. A fence that closes too early cuts the body short and can
-leave an unclosed fence, which makes CLI writes refuse the file. When
-you edit your own comment, keep its created time and add or update
-`, edited <current UTC time>` before the `)`. Take the time from your
-environment's clock or from the user, never from another comment:
-`read-notification` finds comments by these times. Do not guess a brief
-entry's hash either; the reference gives its rules. If you cannot get
-the current time or are unsure of the format, leave the file unchanged
-and say what you would have written. Without the CLI nothing checks such
-an edit, so re-read the file afterwards.
+Whenever you write a comment header by hand, follow the format in
+`docs/file-format.md`: append the comment with the next sequential
+number, your nick, and the current UTC time (e.g. `## #6 bob (2026-09-27T10:15:00Z)`).
+Wrap the body in an `md` code fence with more backticks than any fence
+inside the body. When editing your own comment, keep its original
+created timestamp and add `, edited <current UTC time>` before the closing
+parenthesis. Always validate hand edits with `agent-coexist check <file>`.
 
 Exact flags: `agent-coexist <command> --help`. For waiting on replies:
 `guide wait`.
@@ -726,8 +648,9 @@ Exact flags: `agent-coexist <command> --help`. For waiting on replies:
 ````text
 # Catch up, then wait for a reply or change
 
-Nothing is pushed into an agent's context. Comments stay in their files,
-and reading them removes nothing. You learn what changed in two ways:
+Coexist does not monitor chat logs or push updates automatically.
+Comments, reading lists, and directory claims stay in their Markdown
+files until read. You discover changes in two ways:
 
 - **Catch up**: read the files, or run `read-notification`, to find what
   is already there.
@@ -881,23 +804,11 @@ read cursor and does not mark anything as delivered.
   An invalid snapshot (for example a reply a hand edit left with an
   unclosed fence), an unreadable file, or an I/O error also ends the
   wait.
-- An I/O error after the ready line can mean the intended path no
-  longer resolves: its parent missing, renamed away or taken by a file,
-  or, on Linux and macOS, the path itself no longer a regular file.
-  Then the `fix` says how to restore that path (recreate or move it
-  back; move aside whatever replaced it, keeping it) and then prints
-  the original wait as the command to retry; a path that was wrong
-  from the start still says to correct it, with no retry. On Windows
-  a watched file replaced by a directory after the ready line is
-  reported as access denied and gets the generic remedy — check
-  permissions, or wait until another program stops using, deleting or
-  replacing the file — which cannot tell a replacement from a busy
-  file; once you establish that a directory now occupies the path,
-  move it aside, keep it, start the original wait again, and read the
-  file after its ready line. Once you fix the cause and start the wait
-  again, its new starting point already contains everything then in
-  the file, including the change you were waiting for, so read the
-  file again after the new ready line as in step 4 above.
+- If a wait encounters an I/O error, permission failure, or path
+  replacement after its ready line, it exits. Restore the intended file
+  or parent directory path, start the wait again, and read the file
+  after the new ready line (step 4) so you do not miss changes made
+  while repairing.
 - A hit report's state warnings — conflicts and expiry — are judged at
   the wait's start time. A lock that expired while you waited still counts
   as valid, so a conflict warning can appear with no expiry warning.
@@ -914,8 +825,6 @@ your environment has to bring the result back to you. Exact flags:
 <a id="info-help-top"></a>
 
 ## Top-level help
-
-Use `<command> --help`, `<command> -h`, or `help <command>`; `help` itself is the exception shown below.
 
 `agent-coexist --help`
 ```text
@@ -972,33 +881,11 @@ Scan progress ('scanning dirs: N, files: M...') appears on stderr only when stde
 Examples and 'fix' commands use POSIX shell quoting (Git Bash on Windows); adjust the quoting for cmd.exe or PowerShell.
 ```
 
-<a id="info-help-write"></a>
+<a id="info-help-commands"></a>
 
-## Help for write commands
+## Representative command help
 
-`agent-coexist profile --help`
-```text
-Create or update an agent profile
-
-Usage: agent-coexist profile <PATH> [--as <nick>] [--section <name> (-m <content> | --remove)]
-
-Arguments:
-  <PATH>  the agent-profile file; the suffix may be omitted
-
-Options:
-      --as <nick>       your nick; not written, only exempts your own 'locked' declarations
-      --section <name>  the section to set or remove
-  -m <content>          the section body, stored in a code fence
-      --remove          delete the whole --section
-  -h, --help            Print help
-
---section <name> -m <content> sets that section's body, stored in a code fence. CRLF line endings become LF, and whitespace at the end of the body is removed. --section <name> --remove deletes the section. Without --section, creates the file (heading only) or reports 'unchanged'. Content that starts with '-' must be attached: -m='- item'.
---as is your nick. It is not written; it only exempts your own 'locked' declarations. A valid 'locked' by another nick on the file's directory or an ancestor refuses the write with E-FLOCKED (exit 3); without --as, your own 'locked' refuses it too.
-If another write holds the file, fails after about 200ms with E-LOCKED (exit 3); retry shortly. On E-FLOCKED, retry after the time shown in 'reason' or ask the holder; do not retry in a loop.
-Example: agent-coexist profile agents/alice --section role -m 'Rust implementer. Owns crates/core.'
-```
-
-`agent-coexist post --help`
+`agent-coexist post --help` · Write command: comments and editing.
 ```text
 Append a comment, or edit your own
 
@@ -1013,34 +900,13 @@ Options:
       --edit <n>   replace the whole body of your own comment #n (its author must be --as)
   -h, --help       Print help
 
--m is the comment body, stored in a code fence. CRLF line endings become LF, and whitespace at the end of the body is removed. In it, @nick mentions someone and @#n replies to comment n. A body that starts with '-', such as a Markdown list, must be attached: -m='- item'. --as is the author nick written in the comment heading.
---edit <n> replaces the whole body of your own comment #n (its author must be --as), so resend everything you want to keep.
-The report's 'comment' row names the comment written.
-Waits up to 5s for the file lock (AGENT_COEXIST_LOCK_WAIT_MS overrides); if still busy: E-LOCKED, exit 3; retry the same command shortly.
+Appends a comment with author --as and body -m (stored in a code fence; @nick mentions, @#n replies).
+--edit <n> replaces the whole body of your own comment #n (author must match --as); include everything to keep.
+Waits up to 5s for the lock (AGENT_COEXIST_LOCK_WAIT_MS overrides); if busy: E-LOCKED (exit 3); retry shortly.
 Example: agent-coexist post docs/standup --as bob -m '@#1 parser done, see src/parser/mod.rs'
 ```
 
-`agent-coexist subscribe --help`
-```text
-Join or leave a post's subscriber list
-
-Usage: agent-coexist subscribe <PATH> --as <nick> [--cancel]
-
-Arguments:
-  <PATH>  the post file; the suffix may be omitted
-
-Options:
-      --as <nick>  the nick added to (or, with --cancel, removed from) the list
-      --cancel     remove --as from the subscriber list instead of adding it
-  -h, --help       Print help
-
-Adds --as to the post's subscriber list, so read-notification --as <nick> includes new comments by other authors in that post within the scan's time window. Nothing is pushed to subscribers, and wait-post does not use the list.
---cancel removes --as from the list. Subscribing twice, or cancelling a nick that is not subscribed, changes nothing ('unchanged <nick>').
-Locking is as for post: waits up to 5s (AGENT_COEXIST_LOCK_WAIT_MS overrides), then E-LOCKED, exit 3.
-Example: agent-coexist subscribe docs/standup --as alice
-```
-
-`agent-coexist brief --help`
+`agent-coexist brief --help` · Multi-form write command: brief and entry management.
 ```text
 Create or update a brief and its entries
 
@@ -1064,49 +930,16 @@ Options:
       --refresh          recompute stored hashes from the targets' current bytes
   -h, --help             Print help
 
-The usage forms, in order: create the brief (or report 'unchanged'); set the description; add or update an entry for a target; replace one entry's note; remove an entry; refresh hashes (every entry, or only --entry). Other combinations are rejected.
--m is the description without --target/--entry, and the entry's note with them. Text that starts with '-' must be attached: -m='- item', and likewise --regex='-x'.
---target is relative to the brief's directory, not the current directory. Without --entry, the title is the target's file name.
---regex: when the brief is checked or read, the target must still match it, or the entry is 'stale'; writing only checks that it compiles. --regex '' deletes the entry's regex lines. Use \r or \n in a pattern to match line breaks; --regex and --target cannot contain raw line breaks.
---refresh accepts the targets' current bytes: read what changed and update the note first.
---as is your nick. It is not written; it only exempts your own 'locked' declarations. A valid 'locked' by another nick on the file's directory or an ancestor refuses the write with E-FLOCKED (exit 3); without --as, your own 'locked' refuses it too.
+Forms: create bare / report unchanged; set description (-m); add/update entry (--target, optional --entry, --regex, -m); replace note (--entry, -m); remove entry (--entry --remove); refresh hashes (--refresh, optional --entry).
+--target is relative to brief's directory. Default title is target's filename.
+--regex: target must match pattern on read (otherwise 'stale'); --regex '' deletes regex lines. Use \r or \n for line breaks.
+--refresh recomputes hashes against current bytes; update outdated notes first.
+--as is your nick; it only exempts your own 'locked' declarations. A valid 'locked' by another nick on the file's directory or an ancestor refuses the write with E-FLOCKED (exit 3); without --as, your own 'locked' refuses it too.
 If another write holds the file, fails after about 200ms with E-LOCKED (exit 3); retry shortly. On E-FLOCKED, retry after the time shown in 'reason' or ask the holder; do not retry in a loop.
 Example: agent-coexist brief docs/onboarding --target ../src/parser/mod.rs --entry 'parser entry point'
 ```
 
-`agent-coexist state --help`
-```text
-Declare or remove directory state (locks, observations)
-
-Usage: agent-coexist state [DIR] --as <nick> --status <name> [--for <duration>]
-   or: agent-coexist state [DIR] --remove <nick> [--as <nick>] [--status <name>]
-
-Arguments:
-  [DIR]  the directory (default: the current directory); must already exist
-
-Options:
-      --as <nick>       declare form: your nick; remove form: who removes (default: the removed nick)
-      --status <name>   the status name; required in the declare form; in the remove form, a filter (omitted: every status)
-      --for <duration>  how long the declaration lasts (declare form only; default 2h for locked, 8h otherwise)
-      --remove <nick>   remove this nick's declarations instead of declaring
-  -h, --help            Print help
-
-Declare: --as <nick> --status <name> records that <nick> holds <name> on DIR and everything below it until the end time. Declaring again replaces your entries under that status with one from now, except an entry on a line that also has unparseable fragments (W-STATE-ENTRY): that line is kept, and the latest end time still wins; check-state shows the result.
-Remove: --remove <nick> removes that nick's declarations in DIR. Add --status to remove only that status; without it every status goes, including a live 'locked'.
-Built-in statuses: 'locked' = please do not change this directory or its subdirectories until the end time; 'observing' = I am watching, changes are welcome. Other names are stored and shown but have no built-in meaning.
---for defaults to 2h for 'locked' and 8h otherwise. In the remove form --as defaults to the removed nick; removing another nick's declaration adds a 'removed-other' row and a 'warn' first line.
-DIR must already exist; it is never created.
-'locked' is a request between agents, not access control, and another nick's 'locked' never blocks a state write. Locks overlapping yours are listed as 'conflict' rows with a 'warn' first line (exit 0); talk to the holder in a post.
-The conflict check reads the state files of DIR and its ancestors and the state files below DIR that ignore rules do not skip; state has no --no-ignore, so to see locks inside ignored directories run check-state DIR --no-ignore.
-If another write holds the state file, fails after about 200ms with E-LOCKED (exit 3); retry shortly.
-Example: agent-coexist state src --as alice --status locked --for 1h30m
-```
-
-<a id="info-help-read"></a>
-
-## Help for read commands
-
-`agent-coexist list --help`
+`agent-coexist list --help` · Read command: recursive tree listing and filtering.
 ```text
 Recursively list collaboration files under DIR
 
@@ -1122,130 +955,15 @@ Options:
       --no-ignore       apply no ignore rules (.gitignore, .ignore, .git/info/exclude, global gitignore)
   -h, --help            Print help
 
-Lists the collaboration files under DIR as a tree with a type column.
---type keeps only the given types (repeatable: post, brief, agent-profile, state; 'profile' is an alias).
+Lists collaboration files under DIR as a tree with a type column.
+--type keeps only given types (repeatable: post, brief, agent-profile, state; 'profile' is an alias).
 --include/--exclude are gitignore-style globs relative to DIR. --include does not reach into directories that ignore rules skip; add --no-ignore for that.
-Type column 'busy': the file lock or a stable read was not available within 100ms; retry. On Windows it can also mean another program holds the file open without sharing; close that program, then retry.
-Type column '?': unreadable (permissions, not UTF-8, invalid H1, or over 16 MiB).
-'busy' and '?' files still show under any --type and make the first line 'warn'; the command does not fail on them.
+Type 'busy': lock unavailable within 100ms (or Windows sharing violation); retry. Type '?': unreadable or invalid.
+'busy' and '?' files appear under any --type and mark the first line 'warn'.
 Example: agent-coexist list docs --type post --type brief
 ```
 
-`agent-coexist check --help`
-```text
-Check one file: format, diagnostics and a preview
-
-Usage: agent-coexist check <PATH>
-
-Arguments:
-  <PATH>  the collaboration file; the '.agent-besties.md' suffix may be omitted
-
-Options:
-  -h, --help  Print help
-
-Reports one file: its 'file' and 'type' rows, diagnostics in line order, then a preview (topic and latest comment for posts, entry states for briefs, sections for profiles, declarations for state).
-Brief targets are checked but not printed; use read-brief for their text. For every declaration that applies to a directory, use check-state.
-Waits up to 1s for a shared lock; if the file stays busy: E-LOCKED, exit 3; retry the same command shortly.
-Example: agent-coexist check docs/standup
-```
-
-`agent-coexist lookfor-comment --help`
-```text
-Find comments by keyword, author, mention or number
-
-Usage: agent-coexist lookfor-comment <PATH> [--keyword <text>] [--by <nick>] [--mention <nick>] [--reply-to <n>] [--comment <n>]
-
-Arguments:
-  <PATH>  the post file; the suffix may be omitted
-
-Options:
-      --keyword <text>  case-insensitive text in the comment body or heading, matched as typed
-      --by <nick>       the comment author
-      --mention <nick>  the body mentions @nick
-      --reply-to <n>    the body replies to comment n (@#n)
-      --comment <n>     the comment numbered n
-  -h, --help            Print help
-
-Lists matching comments with line, number, author, time and an excerpt. Without filters it lists every comment; with several, a comment must match all of them.
---keyword is a case-insensitive substring of the raw body or heading line, matched exactly as typed (spaces are not folded).
---by is the comment's author (check lists a post's 'authors'). --mention matches @nick in the body, --reply-to matches @#n in the body, and --comment selects comment #n.
-Waits up to 1s for a shared lock; if still busy: E-LOCKED, exit 3; retry shortly.
-Example: agent-coexist lookfor-comment docs/standup --by bob
-```
-
-`agent-coexist read-brief --help`
-```text
-Print a brief's description, notes and target text
-
-Usage: agent-coexist read-brief <PATH> [--entry <title>]
-
-Arguments:
-  <PATH>  the brief file; the suffix may be omitted
-
-Options:
-      --entry <title>  print only this entry; one space at either end is ignored, while two spaces in a row anywhere (including at an end) or a control character such as a tab or CR is rejected (titles in the file match with whitespace runs read as one space)
-  -h, --help           Print help
-
-Prints the description, then each entry's state, note and target text. With a regex, only the lines of its first match are printed; without one, the whole target.
-An entry with no path, a missing or unreadable target, a failing regex, or a target over 64 MiB prints no text; its row says why.
---entry prints only that entry. For entry states without target text, use check.
-Waits up to 1s for a shared lock; if still busy: E-LOCKED, exit 3; retry shortly.
-Example: agent-coexist read-brief docs/onboarding --entry 'parser entry point'
-```
-
-`agent-coexist read-notification --help`
-```text
-List mentions, replies, subscriptions and state changes since a time
-
-Usage: agent-coexist read-notification [DIR] --as <nick> --since <time|duration> [--include <glob>]... [--exclude <glob>]... [--no-ignore]
-
-Arguments:
-  [DIR]  directory to scan (default: the current directory; recursive, plus ancestor state files)
-
-Options:
-      --as <nick>              your nick: whose mentions, replies and subscriptions to list
-      --since <time|duration>  RFC 3339 time or a duration back from now
-      --include <glob>         keep only files matching this gitignore-style glob, relative to DIR (repeatable; does not reach into ignored directories without --no-ignore)
-      --exclude <glob>         skip files matching this glob, relative to DIR (repeatable)
-      --no-ignore              apply no ignore rules (.gitignore, .ignore, .git/info/exclude, global gitignore)
-  -h, --help                   Print help
-
-Lists, oldest first, what happened since --since that concerns the --as nick: comments by other authors that mention it, reply to its comments, or appear in posts it subscribes to; state declarations by others; locks that overlap its own; its own declarations that end soon or have ended.
-Scans every post and state file under DIR that ignore rules do not skip (default: the current directory) and also reads ancestor state files. It never writes files and keeps no read cursor; for files inside ignored directories add --no-ignore.
---since is an RFC 3339 time (e.g. 2026-09-17T09:12:00Z) or a duration back from now (e.g. 1h30m). The window ends before the current second, so a comment written this second shows up in a later scan.
---include/--exclude are gitignore-style globs relative to DIR. --include does not reach into directories that ignore rules skip; add --no-ignore for that.
-Each file waits at most 100ms for a shared lock. Busy or unparseable files become 'skipped' or 'partial' rows with a 'warn' first line; read them directly before concluding nothing is new.
-Example: agent-coexist read-notification --as alice --since 1h
-```
-
-`agent-coexist check-state --help`
-```text
-Show the state declarations for DIR, its ancestors and its subtree
-
-Usage: agent-coexist check-state [DIR] [--include <glob>]... [--exclude <glob>]... [--no-ignore]
-
-Arguments:
-  [DIR]  directory to scan (default: the current directory; recursive, plus ancestors)
-
-Options:
-      --include <glob>  keep only files matching this gitignore-style glob, relative to DIR (repeatable; does not reach into ignored directories without --no-ignore)
-      --exclude <glob>  skip files matching this glob, relative to DIR (repeatable)
-      --no-ignore       apply no ignore rules (.gitignore, .ignore, .git/info/exclude, global gitignore)
-  -h, --help            Print help
-
-Shows the declarations that apply to DIR: 'inherited' rows from ancestor directories (valid ones only), DIR's own declarations, then one group per state file below DIR that ignore rules do not skip (add --no-ignore to see declarations in skipped directories).
-A row ends with 'conflict' when it is a valid 'locked' and another nick holds a valid 'locked' shown in this same report on an overlapping directory (the same, an ancestor or a descendant; both rows are marked), or with 'expired' when a declaration in DIR or below has ended. Either mark makes the first line 'warn' (exit 0). Only this report's declarations are compared: an inherited lock can still conflict with a lock in another branch below that ancestor; check-state on the ancestor shows it.
---include/--exclude are gitignore-style globs relative to DIR. --include does not reach into directories that ignore rules skip; add --no-ignore for that.
-Each state file waits at most 100ms for a shared lock. Busy or unparseable ones become 'skipped' or 'partial' rows with a 'warn' first line.
-For one state file with its diagnostics, use check <DIR>/state.
-Example: agent-coexist check-state src
-```
-
-<a id="info-help-wait"></a>
-
-## Help for wait commands
-
-`agent-coexist wait --help`
+`agent-coexist wait --help` · Wait command: watching a file with polling and exit semantics.
 ```text
 Wait for any change to one collaboration file
 
@@ -1257,94 +975,10 @@ Arguments:
 Options:
   -h, --help  Print help
 
-Waits for the next change to this collaboration file (any type), prints one report of what changed, and exits 0. It never writes.
-Once it has recorded its starting point, it writes one line 'waiting  wait  <object>' to stderr. A change made before that line is not reported, so read the file again after the line appears.
-The file is sampled about once a second. A missing file is a valid start: the wait reports its creation (its directory must exist), so a mistyped path waits forever.
-Each sample waits up to 1s for a shared lock. If the file stays busy, the wait ends with E-LOCKED (exit 3); on Windows, a program holding the file open without sharing ends it with E-INUSE (exit 3). However a wait ends — a busy file, an unreadable file, or an invalid sample — a restarted wait starts from a new baseline: read the file again after its ready line.
-There is no timeout. Ctrl-C cancels: exit 130, no stdout.
+Waits for next change to a collaboration file, reports diff, and exits 0. Never writes.
+Writes 'waiting  wait  <object>' to stderr once baseline is recorded; re-read file after this line to catch changes made before baseline.
+Sampled about once a second; a missing file is a valid start. Each sample waits up to 1s for a shared lock (E-LOCKED or Windows E-INUSE, exit 3). On restart, read again after the ready line. No timeout; Ctrl-C cancels (exit 130).
 Example: agent-coexist wait docs/onboarding
-```
-
-`agent-coexist wait-post --help`
-```text
-Wait for a comment that mentions or replies to you
-
-Usage: agent-coexist wait-post <PATH> [--as <nick>]
-
-Arguments:
-  <PATH>  the post file to watch; the suffix may be omitted
-
-Options:
-      --as <nick>  the nick whose mentions and replies end the wait; without it, any change counts
-  -h, --help       Print help
-
-Waits for a comment in this post that mentions @<nick> or replies to a comment by <nick> and is new, edited or newly relevant; prints those comments and exits 0. With --as, subscriber changes and deleted comments do not count; without --as, any change to the post counts.
-Once it has recorded its starting point, it writes one line 'waiting  wait-post  <object>' to stderr. A comment written before that line is not reported, so read the post again after the line appears.
-The post is sampled about once a second; a missing post is a valid start. Each sample waits up to 1s for a shared lock. If the file stays busy, the wait ends with E-LOCKED (exit 3), or on Windows E-INUSE (exit 3). However a wait ends — a busy post, an unreadable post, or an invalid sample — a restarted wait starts from a new baseline: read the post again after its ready line.
-There is no timeout. Ctrl-C cancels: exit 130, no stdout.
-Example: agent-coexist wait-post docs/standup --as alice
-```
-
-`agent-coexist wait-state --help`
-```text
-Wait for changes to DIR/state.agent-besties.md
-
-Usage: agent-coexist wait-state [DIR] [--status <name>]
-
-Arguments:
-  [DIR]  the directory (default: the current directory); only its state file is watched
-
-Options:
-      --status <name>  count only changes to declarations under this status ('locked', 'observing' or another name)
-  -h, --help           Print help
-
-Watches only DIR/state.agent-besties.md (DIR defaults to the current directory), not ancestors or subdirectories.
---status (locked, observing or another status name) waits for a declaration under that status to be added, removed or renewed; without it, any change to the file counts. A declaration that simply expires does not count; use check-state for current declarations.
-Once it has recorded its starting point, it writes one line 'waiting  wait-state  <object>' to stderr. A change made before that line is not reported, so run check-state again after the line appears.
-The file is sampled about once a second; a missing state file is a valid start. Each sample waits up to 1s for a shared lock. If the file stays busy, the wait ends with E-LOCKED (exit 3), or on Windows E-INUSE (exit 3). However a wait ends — a busy file, an unreadable file, or an invalid sample — a restarted wait starts from a new baseline: run check-state on the directory again after its ready line.
-There is no timeout. Ctrl-C cancels: exit 130, no stdout.
-Example: agent-coexist wait-state src --status locked
-```
-
-<a id="info-help-guide-and-help"></a>
-
-## Help for guide and help
-
-`agent-coexist guide --help`
-```text
-Print a built-in guide page on when and how to use coexist
-
-Usage: agent-coexist guide [start|read|write|wait]
-
-Arguments:
-  [start|read|write|wait]  start, read, write or wait; omit for the index page
-
-Options:
-  -h, --help  Print help
-
-Prints one built-in Markdown page to stdout. Without a topic it prints the index page: what to do when you arrive in a project, and a first exchange between two agents.
-Topics: start (which file type to use and where), read (find and check what others left), write (posts, briefs, profiles and state others can act on), wait (catch up, then wait for a reply or change).
-Topics are exact lowercase words. Pages are static text; the command does not read your project.
-Example: agent-coexist guide start
-```
-
-`agent-coexist help help`
-```text
-Print this message or the help of the given subcommand(s)
-
-Usage: agent-coexist help [COMMAND]...
-
-Arguments:
-  [COMMAND]...  Print help for the subcommand(s)
-```
-
-`agent-coexist help --help` · stderr · exit code 2 · help --help is treated as an unknown subcommand (same for -h).
-```text
-error: unrecognized subcommand '--help'
-
-Usage: agent-coexist <COMMAND>
-
-For more information, try '--help'.
 ```
 
 <a id="info-version"></a>
@@ -1353,5 +987,5 @@ For more information, try '--help'.
 
 `agent-coexist --version` · --version (-V prints the same).
 ```text
-agent-coexist 0.1.0
+agent-coexist 0.2.0
 ```
