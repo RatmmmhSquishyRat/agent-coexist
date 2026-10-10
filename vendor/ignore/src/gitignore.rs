@@ -744,17 +744,21 @@ fn parse_excludes_file(data: &[u8]) -> Result<Option<PathBuf>, Error> {
         let physical = physical.strip_suffix(b"\r").unwrap_or(physical);
         logical.extend_from_slice(physical);
         if config_continues(&logical) {
-            logical.pop();
+            // Keep the backslash and mark the physical-line boundary so
+            // the value decoder sees where each continued line began.
+            logical.push(b'\n');
             continue;
         }
         let mut line = logical.trim_ascii_start();
-        if let Some(section) = line.strip_prefix(b"[") {
-            if let Some(end) = section.iter().position(|&b| b == b']') {
-                core = section[..end].eq_ignore_ascii_case(b"core");
-                line = section[end + 1..].trim_ascii_start();
-            } else {
+        // Git allows several section headers on one physical line; each
+        // `[name]` resets the section for whatever follows it.
+        while let Some(section) = line.strip_prefix(b"[") {
+            let Some(end) = section.iter().position(|&b| b == b']') else {
                 core = false;
-            }
+                break;
+            };
+            core = section[..end].eq_ignore_ascii_case(b"core");
+            line = section[end + 1..].trim_ascii_start();
         }
         if core && !matches!(line.first(), None | Some(b'#' | b';')) {
             let at_line = |err| Error::WithLineNumber {
@@ -810,8 +814,11 @@ fn config_continues(line: &[u8]) -> bool {
 }
 
 /// Decode one Git string value, preserving spaces inside quotes and
-/// trimming only unquoted edge whitespace. Never interpret a comment as
-/// part of the pathname or silently fall back after a malformed value.
+/// trimming only unquoted edge whitespace: unquoted whitespace is dropped
+/// while the decoded value is still empty, and the whitespace before a
+/// backslash-newline continuation is interior, not edge. Never interpret
+/// a comment as part of the pathname or silently fall back after a
+/// malformed value.
 fn parse_config_value(input: &[u8]) -> Result<Vec<u8>, &'static str> {
     let mut value = Vec::new();
     let mut pending = Vec::new();
@@ -821,6 +828,12 @@ fn parse_config_value(input: &[u8]) -> Result<Vec<u8>, &'static str> {
         match byte {
             b'\\' => {
                 let decoded = match input.next() {
+                    // A backslash-newline joins continued physical lines;
+                    // it decodes to nothing and keeps the pending run.
+                    Some(b'\n') => {
+                        value.append(&mut pending);
+                        continue;
+                    }
                     Some(b'n') => b'\n',
                     Some(b't') => b'\t',
                     Some(b'b') => b'\x08',
@@ -836,7 +849,13 @@ fn parse_config_value(input: &[u8]) -> Result<Vec<u8>, &'static str> {
                 quoted = !quoted;
             }
             b'#' | b';' if !quoted => break,
-            byte if !quoted && byte.is_ascii_whitespace() => pending.push(byte),
+            // Git drops unquoted whitespace while the decoded value is
+            // still empty, so an empty quoted string adds no blank.
+            byte if !quoted && byte.is_ascii_whitespace() => {
+                if !value.is_empty() {
+                    pending.push(byte);
+                }
+            }
             byte => {
                 value.append(&mut pending);
                 value.push(byte);
@@ -1296,6 +1315,29 @@ mod tests {
             None => b"~/rules-\xff".to_vec(),
         };
         assert_eq!(got.as_os_str().as_bytes(), expected);
+    }
+
+    #[test]
+    fn excludes_git_empty_quote_then_token() {
+        let got = super::parse_excludes_file(b"[core]\nexcludesFile=\"\" /tmp/rules\n")
+            .unwrap()
+            .unwrap();
+        assert_eq!(got, PathBuf::from("/tmp/rules"));
+    }
+
+    #[test]
+    fn excludes_git_space_before_continuation_kept() {
+        let got = super::parse_excludes_file(b"[core]\nexcludesFile=/tmp/rules \\\n# comment\n")
+            .unwrap()
+            .unwrap();
+        assert_eq!(got, PathBuf::from("/tmp/rules "));
+    }
+
+    #[test]
+    fn excludes_git_second_header_takes_over() {
+        assert!(super::parse_excludes_file(b"[core][other]\nexcludesFile=/tmp/unrelated\n")
+            .unwrap()
+            .is_none());
     }
 
     // See: https://github.com/BurntSushi/ripgrep/issues/106
