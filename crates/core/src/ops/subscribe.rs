@@ -98,10 +98,9 @@ fn cancel_step(
         }];
         match guarded_apply(bytes, splices, doc.kind.as_ref().map(doc::Kind::as_str))? {
             Applied::Bytes(new_bytes) => {
-                let after = match doc::parse(new_bytes.clone(), &p.path, now) {
-                    Ok(parsed) => parsed.post.subscribers,
-                    Err(_) => Vec::new(),
-                };
+                let after = doc::parse(new_bytes.clone(), &p.path, now)?
+                    .post
+                    .subscribers;
                 done.kv("subscribers", subs_value(&after));
                 Ok((
                     Mutation::Write(new_bytes),

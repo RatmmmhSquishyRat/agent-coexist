@@ -12,6 +12,10 @@ All notable changes to this project are documented here. The format follows
 
 ### Fixed
 
+- Canceling the last subscription now aborts the write when the
+  post-splice re-parse fails, instead of writing the file while
+  reporting a fabricated empty subscriber list.
+
 Concurrency and output delivery
 
 - A queued post or state declaration now records its activity time while
