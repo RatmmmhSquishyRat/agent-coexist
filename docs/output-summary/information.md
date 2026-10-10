@@ -987,5 +987,5 @@ Example: agent-coexist wait docs/onboarding
 
 `agent-coexist --version` · --version (-V prints the same).
 ```text
-agent-coexist 0.2.0
+agent-coexist 0.3.0
 ```

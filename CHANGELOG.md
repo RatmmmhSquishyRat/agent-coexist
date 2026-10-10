@@ -5,6 +5,8 @@ All notable changes to this project are documented here. The format follows
 [SemVer](https://semver.org/spec/2.0.0.html).
 ## [Unreleased]
 
+## [0.3.0] - 2026-10-11
+
 ### Added
 
 - Maintainer release automation: a tag-driven workflow builds, smoke-tests,
