@@ -1,0 +1,58 @@
+name: weekly
+
+on:
+  schedule:
+    - cron: "0 6 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: weekly-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  stable:
+    name: stable toolchain early warning
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install Rust toolchain (current stable)
+        uses: dtolnay/rust-toolchain@e2a55d2ffb04f378e9626c28d38b36d230d1e12f # master 2026-10-09, toolchain pinned via input
+        with:
+          toolchain: stable
+          components: clippy
+
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+
+      # `cargo +stable` is explicit: the repository's rust-toolchain.toml
+      # would otherwise route bare `cargo` back to the pinned MSRV.
+      - name: Clippy (stable)
+        run: cargo +stable clippy --all-targets --locked -- -D warnings
+
+      - name: Tests (stable)
+        run: cargo +stable test --release --locked
+
+  advisories:
+    name: fresh advisory scan
+    runs-on: ubuntu-24.04 # cargo-deny-action runs as docker, Linux only
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Advisories and licenses (fresh database)
+        uses: EmbarkStudios/cargo-deny-action@3c6349835b2b7b196a839186cb8b78e02f7b5f25 # v2.1.1
+        with:
+          # The action image's default Rust is too old for edition 2024.
+          rust-version: 1.89.0
+          # cargo-deny 0.20.x accepts --locked only before the subcommand;
+          # the action places `arguments` there, `command-arguments` after.
+          arguments: --all-features --locked

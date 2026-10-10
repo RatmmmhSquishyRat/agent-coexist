@@ -55,8 +55,10 @@ Unit tests sit next to the code they cover; integration tests live in
 3. **Update docs and the changelog** in the same change when a user or
    script will notice a difference; see
    [Documentation and changelog](#documentation-and-changelog).
-4. **Run these checks locally.** CI runs the same on Linux, Windows, and
-   macOS:
+4. **Run these checks locally.** CI runs the same checks on
+   `ubuntu-24.04`, `windows-latest`, and `macos-15` with the pinned
+   1.89.0 toolchain, then installs the binary into an isolated prefix
+   and exercises the real CLI end to end:
 
    ```console
    cargo fmt --check
@@ -68,6 +70,18 @@ Unit tests sit next to the code they cover; integration tests live in
    cover the single package, including the vendored `ignore` module's
    tests; its scoped lint and format isolation keeps upstream style (see
    [Vendored `ignore` crate](#vendored-ignore-crate)).
+
+   CI adds two repository-wide jobs beside the per-OS matrix: `package`
+   proves the crate packs and passes registry verification
+   (`cargo publish --dry-run --locked`), and `supply-chain` runs
+   `cargo deny --all-features --locked check` against
+   [`deny.toml`](deny.toml) (RustSec advisories, yanked crates, and the
+   license allowlist). A separate scheduled `weekly` workflow repeats
+   Clippy and the tests on the current stable toolchain and re-runs the
+   advisory scan with a fresh database. With
+   [cargo-deny](https://github.com/EmbarkStudios/cargo-deny) installed,
+   `cargo deny --all-features --locked check` runs the same policy
+   checks locally.
 
 ## Writing tests
 

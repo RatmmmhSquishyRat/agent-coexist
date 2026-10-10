@@ -4,6 +4,18 @@ on:
   push:
     branches: [main]
   pull_request:
+  workflow_call:
+
+permissions:
+  contents: read
+
+# The "ci-" prefix keeps the reusable form distinct: when release.yml calls
+# this workflow, github.workflow is the caller's name, so the nested run
+# joins "ci-release-<ref>" and can never cancel or block the caller's own
+# "release-<ref>" group.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 env:
   CARGO_TERM_COLOR: always
@@ -14,15 +26,20 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest, macos-latest]
+        os: [ubuntu-24.04, windows-latest, macos-15]
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       - name: Install Rust toolchain (MSRV, per rust-toolchain.toml)
-        uses: dtolnay/rust-toolchain@1.89.0
+        uses: dtolnay/rust-toolchain@e2a55d2ffb04f378e9626c28d38b36d230d1e12f # master 2026-10-09, toolchain pinned via input
         with:
+          toolchain: 1.89.0
           components: rustfmt, clippy
+
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
 
       - name: Format check
         run: cargo fmt --check
@@ -32,9 +49,6 @@ jobs:
 
       - name: Tests
         run: cargo test --release --locked
-
-      - name: Release build
-        run: cargo build --release --locked
 
       - name: Install into an isolated prefix
         shell: bash
@@ -166,3 +180,38 @@ jobs:
           test "$first" = "ok  wait-post  docs/standup"
           grep -F 'waiting  wait-post  docs/standup' wait.err
           echo "wait smoke OK on ${{ matrix.os }}"
+
+  package:
+    name: package (publish dry-run)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install Rust toolchain (MSRV, per rust-toolchain.toml)
+        uses: dtolnay/rust-toolchain@e2a55d2ffb04f378e9626c28d38b36d230d1e12f # master 2026-10-09, toolchain pinned via input
+        with:
+          toolchain: 1.89.0
+
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+
+      - name: Packaging dry-run against the locked graph
+        run: cargo publish --dry-run --locked
+
+  supply-chain:
+    name: supply-chain (cargo-deny)
+    runs-on: ubuntu-24.04 # cargo-deny-action runs as docker, Linux only
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Advisories and licenses (deny.toml)
+        uses: EmbarkStudios/cargo-deny-action@3c6349835b2b7b196a839186cb8b78e02f7b5f25 # v2.1.1
+        with:
+          # The action image's default Rust is too old for edition 2024.
+          rust-version: 1.89.0
+          # cargo-deny 0.20.x accepts --locked only before the subcommand;
+          # the action places `arguments` there, `command-arguments` after.
+          arguments: --all-features --locked
