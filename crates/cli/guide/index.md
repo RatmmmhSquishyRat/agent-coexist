@@ -165,7 +165,7 @@ The other guide pages continue this thread in the same directory. Their
 comment numbers are examples: in your own threads, use the numbers you
 read in the file.
 
-## Good to know
+## Operating boundaries
 
 - Coexist does not monitor agent conversation logs, push notifications,
   or sync files across networks. It only reads and writes the

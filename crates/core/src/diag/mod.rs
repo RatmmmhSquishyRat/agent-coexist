@@ -1194,13 +1194,11 @@ mod tests {
             ),
             "{body}"
         );
-        assert!(!body.contains("retry the original command"), "{body}");
 
-        // Explicit params override an otherwise representable context; the
-        // cause-specific advice survives, only the operand is a marker.
+        // Explicit params override an otherwise representable context; only
+        // the operand is a marker.
         let missing = Diagnostic::new("E-DIR-MISSING", 0).with("parent_arg", &native);
         let fix = render(&missing, &ctx()).fix;
-        assert!(fix.starts_with("correct the directory and rerun"), "{fix}");
         assert!(
             fix.ends_with(": agent-coexist list <path of the parent directory>"),
             "{fix}"
@@ -1210,10 +1208,7 @@ mod tests {
         c.argv = Context::argv_from_args([OsStr::new("agent-coexist"), native.as_os_str()]);
         assert!(c.argv.is_none());
         let dirty = render(&Diagnostic::new("E-STATE-DIRTY", 0).with("line", "4"), &c).fix;
-        assert!(
-            dirty.contains("then re-run by hand; no copyable command"),
-            "{dirty}"
-        );
+        assert!(!dirty.contains("agent-coexist"), "{dirty}");
     }
 
     #[test]

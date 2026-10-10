@@ -277,7 +277,7 @@ pub enum Commands {
         /// the file this entry points to, relative to the brief's directory
         #[arg(long, value_name = "path")]
         target: Option<String>,
-        /// the entry title; one space at either end is ignored, while two spaces in a row anywhere (including at an end) or a control character such as a tab or CR is rejected (titles in the file match with whitespace runs read as one space)
+        /// entry title; one space at either end is ignored, while repeated spaces anywhere and control characters are rejected (titles match with whitespace runs read as one space)
         #[arg(long, value_name = "title")]
         entry: Option<String>,
         /// a regex the target must still match when the brief is read ('' deletes it; needs --target)
@@ -348,7 +348,7 @@ pub enum Commands {
     ReadBrief {
         /// the brief file; the suffix may be omitted
         path: PathBuf,
-        /// print only this entry; one space at either end is ignored, while two spaces in a row anywhere (including at an end) or a control character such as a tab or CR is rejected (titles in the file match with whitespace runs read as one space)
+        /// print only this entry; one space at either end is ignored, while repeated spaces anywhere and control characters are rejected (titles match with whitespace runs read as one space)
         #[arg(long, value_name = "title")]
         entry: Option<String>,
     },
@@ -1406,8 +1406,8 @@ const H_PROFILE: &str = concat!(
 );
 
 const H_POST: &str = "\
-Appends a comment with author --as and body -m (stored in a code fence; @nick mentions, @#n replies).
---edit <n> replaces the whole body of your own comment #n (author must match --as); include everything to keep.
+Appends a comment with author --as and body -m (creates a missing file and parents; stored in a code fence; @nick mentions, @#n replies).
+--edit <n> replaces the whole body of your own comment #n (author must match --as; never creates a file); include everything to keep.
 Waits up to 5s for the lock (AGENT_COEXIST_LOCK_WAIT_MS overrides); if busy: E-LOCKED (exit 3); retry shortly.
 Example: agent-coexist post docs/standup --as bob -m '@#1 parser done, see src/parser/mod.rs'";
 

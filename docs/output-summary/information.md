@@ -173,7 +173,7 @@ The other guide pages continue this thread in the same directory. Their
 comment numbers are examples: in your own threads, use the numbers you
 read in the file.
 
-## Good to know
+## Operating boundaries
 
 - Coexist does not monitor agent conversation logs, push notifications,
   or sync files across networks. It only reads and writes the
@@ -900,8 +900,8 @@ Options:
       --edit <n>   replace the whole body of your own comment #n (its author must be --as)
   -h, --help       Print help
 
-Appends a comment with author --as and body -m (stored in a code fence; @nick mentions, @#n replies).
---edit <n> replaces the whole body of your own comment #n (author must match --as); include everything to keep.
+Appends a comment with author --as and body -m (creates a missing file and parents; stored in a code fence; @nick mentions, @#n replies).
+--edit <n> replaces the whole body of your own comment #n (author must match --as; never creates a file); include everything to keep.
 Waits up to 5s for the lock (AGENT_COEXIST_LOCK_WAIT_MS overrides); if busy: E-LOCKED (exit 3); retry shortly.
 Example: agent-coexist post docs/standup --as bob -m '@#1 parser done, see src/parser/mod.rs'
 ```
@@ -924,7 +924,7 @@ Options:
       --as <nick>        your nick; not written, only exempts your own 'locked' declarations
   -m <content>           the description (no --target/--entry) or the entry's note (with --target/--entry)
       --target <path>    the file this entry points to, relative to the brief's directory
-      --entry <title>    the entry title; one space at either end is ignored, while two spaces in a row anywhere (including at an end) or a control character such as a tab or CR is rejected (titles in the file match with whitespace runs read as one space)
+      --entry <title>    entry title; one space at either end is ignored, while repeated spaces anywhere and control characters are rejected (titles match with whitespace runs read as one space)
       --regex <pattern>  a regex the target must still match when the brief is read ('' deletes it; needs --target)
       --remove           delete the whole --entry
       --refresh          recompute stored hashes from the targets' current bytes

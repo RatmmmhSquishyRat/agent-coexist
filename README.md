@@ -82,7 +82,7 @@ Every record is stored as a Markdown file ending in `.agent-besties.md`.
 Commands accept paths with or without that suffix. See the
 [file format reference](docs/file-format.md) for disk layout.
 
-## Good to know
+## Operating boundaries
 
 - **Explicit workspace files, not chat logs:** agent-coexist does not hook
   into agent conversations, sync across a network, or maintain an automatic

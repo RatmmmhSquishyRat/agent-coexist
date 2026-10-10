@@ -100,7 +100,7 @@ warn  read-notification  .
   skipped     ./notes/broken  E-FENCE
   skipped     ./notes/empty  E-H1
   skipped     ./w  E-TYPE
-  fix           some files were not read in full (skipped or partial rows above), so records in them may be missing here; check shows each file's type, when its first line gives one, and any problem left in it; an E-TYPE row, if any, means that directory's state file has another type, so no state declarations were read from it even when check reports no problem; before concluding nothing is new, check each one: agent-coexist check ./d3/state; agent-coexist check ./d4/state; agent-coexist check ./notes/broken; agent-coexist check ./notes/empty; agent-coexist check ./w/state
+  fix           some files were not read in full (skipped or partial rows above), so records in them may be missing here. check shows each file's type if recognized, and remaining problems; an E-TYPE row means that directory's state file has another type and no declarations were read from it. Before concluding nothing is new, check each one: agent-coexist check ./d3/state; agent-coexist check ./d4/state; agent-coexist check ./notes/broken; agent-coexist check ./notes/empty; agent-coexist check ./w/state
   total         8
 ```
 
@@ -160,7 +160,7 @@ warn  brief  onboarding
   entry         parser entry point  refreshed  src/parser/mod.rs
   entry         renderer  skipped  target missing
   entry         design notes  skipped  no path
-  fix           skipped entries and remaining errors in this file need check on this file; follow the suggestions check prints: agent-coexist check onboarding.agent-besties.md
+  fix           skipped entries and remaining errors in this file need check on this file. Follow the suggestions check prints: agent-coexist check onboarding.agent-besties.md
   skipped       .  E-H1
   fix           changes reported above are already written; rows starting with skipped, partial or canonicalize mean the lock check may have missed a holder. Before writing again, run these checks, then agree with any holder they show: agent-coexist check state
   remaining     E-ENTRY-PATH  L15

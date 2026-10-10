@@ -117,12 +117,12 @@ Posts provide sequential discussions with numbered comments (and optional editin
 
 ### Comments, mentions, and replies
 
-- `post <PATH> --as <nick> -m <content>` appends comment `#n`. Comments are numbered `#1`, `#2`, ... sequentially. Missing numbers produce non-blocking warnings; the CLI never renumbers comments.
+- `post <PATH> --as <nick> -m <content>` appends a new comment with sequence number `max(existing seq) + 1` (starting at `#1` in a new post). Comment numbers are persistent identifiers, not array positions; missing numbers produce non-blocking warnings, and the CLI never renumbers comments.
 - Mentions (`@nick`) and replies (`@#n`) are parsed from comment bodies.
 - Output rows: `comment #<n> L<line> [edited]`, followed by `mentions <list>` and `reply-to #<m>` rows in first-occurrence order.
 - Dangling replies: if `@#m` refers to a nonexistent comment, the report emits `reply-to #<m> (not found)` and marks the first line `warn`. The comment is still written. The `fix` provides a copyable `post --edit` command.
 - `check` lists all comment authors in first-occurrence order.
-- `post <PATH> --as <nick> -m <content> --edit <n>`: replaces the entire body of comment `#n`. Comment `#n` author must match `--as` (`E-EDIT-AUTHOR`, exit 1). It never creates files.
+- `post <PATH> --as <nick> -m <content> --edit <n>`: replaces the entire body of comment `#n` (where `<n>` is its recorded sequence number). Comment `#n` author must match `--as` (`E-EDIT-AUTHOR`, exit 1). It never creates files.
 - `subscribe <PATH> --as <nick>`: adds `--as` to subscribers. Does not push notifications; read-notification uses the list. Subscribing twice reports `unchanged <nick>`.
 - `subscribe <PATH> --as <nick> --cancel`: removes `--as` from the first subscriber property. Cancelling an unsubscribed nick reports `unchanged <nick>`. Missing file: `E-FILE-MISSING` (exit 1).
 - `post` and `subscribe` wait up to 5s for an exclusive file lock (`AGENT_COEXIST_LOCK_WAIT_MS` overrides).

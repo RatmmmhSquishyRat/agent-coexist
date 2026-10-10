@@ -3,8 +3,12 @@
 All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning is
 [SemVer](https://semver.org/spec/2.0.0.html).
-
 ## [Unreleased]
+
+### Changed
+
+- Reorganized file format reference rules for comment headers, numbering, and repairs into readable sections, clarifying manual reply retargeting and sequence-exhaustion recovery without changing on-disk formats.
+- Streamlined diagnostic recovery help and guide headings with concise operating boundaries and clearer creation/edit contracts.
 
 ## [0.2.0] - 2026-10-09
 

@@ -36,7 +36,7 @@ error  check  standup
          fix  rewrite the header as "## #2 bob (2026-09-17T09:05:00Z)"
   error  L15  "## #02 carol (2026-09-17T09:10:00Z)" looks like a comment header but is malformed
          why  comment headers must be "## #<n> <nick> (<time>)"; a malformed one makes numbering and @#n references ambiguous
-         fix  rewrite the header as "## #5 carol (2026-09-17T09:10:00Z)"; its number changes from #2 to #5 if no reply in this post already names @#5, otherwise to another number that no header in this post carries, that no other repair in this report gives a header, and that no reply in this post already names; change any @#2 that meant this comment to that number
+         fix  rewrite the header as "## #5 carol (2026-09-17T09:10:00Z)"; its number changes from #2 to #5 if no reply in this post already names @#5, otherwise to another number that no header in this post carries, that no other repair in this report gives a header, and that no reply in this post already names. Change any @#2 that meant this comment to that number
   warn   L21  comment numbers jump from #1 to #3
          why  no comment in this post has number #2, so @#2 cannot be resolved; a malformed comment header before this one may be that comment
          fix  repair the malformed header first; if the gap remains, leave the numbering as is, because other files may already reference #3
@@ -64,7 +64,7 @@ warn  check  seq
   type          post
   warn   L3  text outside any fence at L3 is not part of the record
          why  this text stays in the file but is not included in CLI reports
-         fix  the writer may move this text into a fenced body or delete it; others must ask the writer, not infer who wrote it from a nearby heading; only a comment's author edits that comment
+         fix  the writer may move this text into a fenced body or delete it. Others must ask the writer, not infer who wrote it from a nearby heading; only a comment's author edits that comment
   warn   L11  comment numbers jump from #1 to #4
          why  no comment in this post has number #3, so @#3 cannot be resolved; that comment may have been deleted or renumbered by hand, or a new comment was written with the highest number plus one after numbers were already out of order
          fix  leave the numbering as is; other files may already reference #4
@@ -76,10 +76,10 @@ warn  check  seq
          fix  move the section so numbers increase, or leave it if the order is intentional
   warn   L23  text outside any fence at L23 is not part of the record
          why  this text stays in the file but is not included in CLI reports
-         fix  the writer may move this text into a fenced body or delete it; others must ask the writer, not infer who wrote it from a nearby heading; only a comment's author edits that comment
+         fix  the writer may move this text into a fenced body or delete it. Others must ask the writer, not infer who wrote it from a nearby heading; only a comment's author edits that comment
   warn   L25  text outside any fence at L25 is not part of the record
          why  this text stays in the file but is not included in CLI reports
-         fix  the writer may move this text into a fenced body or delete it; others must ask the writer, not infer who wrote it from a nearby heading; only a comment's author edits that comment
+         fix  the writer may move this text into a fenced body or delete it. Others must ask the writer, not infer who wrote it from a nearby heading; only a comment's author edits that comment
   comments      3
   authors       alice, bob, carol
   topic         #1  alice  Parser plan.
@@ -101,7 +101,7 @@ warn  check  handoff
          fix  review the target and the note, update the note if it no longer describes the target, then refresh the entry's hash; this command records the target's current hash: agent-coexist brief handoff.agent-besties.md --entry=parser --refresh
   warn   L12  entry "lexer" is stale: target missing
          why  the note points at something that is gone or no longer matches its regex
-         fix  choose a file you know is the right target, review that file and the note, update the note if it no longer describes it, then point the entry at it; if it no longer exists, remove or rewrite the entry; this command also records the target's current hash: agent-coexist brief handoff.agent-besties.md --target <file> --entry=lexer
+         fix  choose a file you know is the right target, review that file and the note, update the note if needed, then point the entry at it; if it no longer exists, remove or rewrite the entry. This command also records the target's current hash: agent-coexist brief handoff.agent-besties.md --target <file> --entry=lexer
   warn   L22  entry "errors" is stale: regex not found
          why  the note points at something that is gone or no longer matches its regex
          fix  review the target and the note, update the note if it no longer describes the target, then give the entry a regex that matches it; this command also records the target's current hash: agent-coexist brief handoff.agent-besties.md --target=src/errors.rs --entry=errors --regex '<pattern>'
@@ -133,7 +133,7 @@ error  state  .
 ```text
 error  brief  docs/agents/handoff
   reason        . is locked by carol until 2026-09-17T12:00:00Z
-  fix           if the lock is yours and the --as in this command names someone else, rerun it with --as=carol in place of that --as; otherwise wait for it to expire or ask its holder to release it, then retry: agent-coexist brief docs/agents/handoff --as bob -m 'Parser handoff notes.'
+  fix           if the lock is yours and the --as in this command names someone else, rerun it with --as=carol in place of that --as. Otherwise wait for it to expire or ask its holder to release it, then retry: agent-coexist brief docs/agents/handoff --as bob -m 'Parser handoff notes.'
   also-locked   alice  until 2026-09-17T11:00:00Z
   partial       .  W-STATE-ENTRY  L7
 ```
