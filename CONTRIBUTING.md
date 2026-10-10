@@ -166,6 +166,62 @@ user or script will notice.
 Keep one tutorial source: the guide pages own the operational walkthrough,
 and `docs/usage.md` stays a lookup reference rather than a second copy.
 
+## Release workflow
+
+Releases run from [`release.yml`](.github/workflows/release.yml) when a
+`vX.Y.Z` tag is pushed. Before tagging, make `[package].version` in
+`Cargo.toml` equal `X.Y.Z` and give `CHANGELOG.md` a matching
+`## [X.Y.Z] - <date>` heading; the workflow also requires the tagged
+commit to be an ancestor of `origin/main`, so cut releases from merged
+history only. Anything else fails before a build starts.
+
+Exercise the release build path without publishing anything by
+dispatching the default dry run on `main`:
+
+```console
+gh workflow run release.yml --ref main -f dry_run=true
+```
+
+A dry run runs the reusable CI, builds and smoke-tests the six native
+targets, records build provenance, and uploads the six archives plus the
+`SHA256SUMS` manifest as Actions artifacts. Staging, registry
+publication, and release publication are all skipped: it never creates
+or edits a GitHub Release and never touches crates.io.
+
+A tag release produces one archive per target —
+`x86_64-unknown-linux-musl` and `aarch64-unknown-linux-musl` (`.tar.gz`),
+`x86_64-apple-darwin` and `aarch64-apple-darwin` (`.tar.gz`), and
+`x86_64-pc-windows-msvc` and `aarch64-pc-windows-msvc` (`.zip`) — each
+holding the executable, `LICENSE`, and `README.md` at the archive root.
+`SHA256SUMS` covers all six, and every archive and its binary carry a
+build-provenance attestation checkable with `gh attestation verify`. The
+assets are staged on a draft GitHub Release; the crate is then published
+to crates.io, the registry package is verified (registry checksum,
+byte-for-byte comparison with the tagged package, an isolated install,
+and a real command), and the release's own downloads are re-verified —
+checksums, attestations, and a smoke of the extracted binary — before
+the draft becomes public. The same checks then run on fresh,
+unauthenticated downloads of the published assets.
+
+When a job fails, re-run the failed jobs of the original run, or
+dispatch the same tag again. Tags are never moved and published assets
+are never overwritten: version tags are protected against deletion and
+rewriting, and the repository's Immutable Releases setting keeps
+published assets fixed, without affecting branch rules. A same-tag
+rerun reuses a complete, verified asset cohort that is already
+published, and an interrupted draft resumes only by confirming
+already-uploaded files byte-for-byte and adding the missing ones.
+Release runs are serialized per tag and never cancel one another.
+
+Publishing to crates.io uses the `CARGO_REGISTRY_TOKEN` repository
+secret when configured; otherwise the publish job authenticates through
+crates.io Trusted Publishing, matching the `release` environment it
+runs in. The initial publication of a never-registered name needs the
+API token; after that first publish, optional Trusted Publishing (this
+repository, `release.yml`, environment `release`) can take over and the
+secret can be deleted, with no workflow changes
+([crates.io docs](https://crates.io/docs/trusted-publishing)).
+
 ## Vendored `ignore` crate
 
 You need this section only when changing scan behavior or refreshing the

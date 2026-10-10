@@ -5,6 +5,15 @@ All notable changes to this project are documented here. The format follows
 [SemVer](https://semver.org/spec/2.0.0.html).
 ## [Unreleased]
 
+### Added
+
+- Maintainer release automation: a tag-driven workflow builds, smoke-tests,
+  and attests six native archives (Linux musl x64/ARM64, macOS Intel and
+  Apple Silicon, Windows x64/ARM64) with a `SHA256SUMS` manifest, stages
+  a draft GitHub Release, publishes the crate to crates.io, verifies the
+  registry package and installed binary, then publishes the release; a
+  nonpublishing dry run rehearses the build path on `main`.
+
 ### Changed
 
 - The CLI and its internal implementation now form one installable Cargo
@@ -13,6 +22,10 @@ All notable changes to this project are documented here. The format follows
   of that package.
 - Reorganized file format reference rules for comment headers, numbering, and repairs into readable sections, clarifying manual reply retargeting and sequence-exhaustion recovery without changing on-disk formats.
 - Streamlined diagnostic recovery help and guide headings with concise operating boundaries and clearer creation/edit contracts.
+- CI hardened: locked checks on the pinned toolchain across Linux,
+  Windows, and macOS, plus a packaging dry run (`cargo publish
+  --dry-run`), a supply-chain scan (`cargo deny`), and a weekly re-run
+  on the current stable toolchain.
 
 ### Fixed
 

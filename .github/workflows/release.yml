@@ -1,0 +1,428 @@
+# Tag-driven release pipeline for agent-coexist.
+#
+# DAG:
+#   guard -> reusable CI -> six native builds (+ attestations)
+#         -> assemble/verify -> stage draft -> publish to crates.io
+#         -> finalize (verify downloaded release, publish the draft)
+#
+# A dry run (workflow_dispatch with dry_run=true, the default) executes the
+# reusable CI, all six builds and native smoke tests, all six attestations,
+# and checksum assembly/verification, then uploads the six archives plus
+# SHA256SUMS as Actions artifacts. Dry runs never create or edit a GitHub
+# Release and never touch crates.io.
+#
+# Security posture:
+# - Default permission is contents:read. attestations:write + id-token:write
+#   are granted only inside the build jobs; contents:write only in staging
+#   and finalization; crates.io publishing uses the `release` environment
+#   and id-token:write (OIDC).
+# - Release assets are never overwritten. Same-tag reruns reuse only a
+#   complete, verified seven-asset cohort and otherwise fail closed.
+# - Uncontrolled values (tag, version, shas) reach helpers through
+#   environment variables and argv, never shell interpolation; helpers
+#   re-validate everything guard emitted.
+
+name: release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Dry run (no GitHub Release, no crates.io publish)'
+        type: boolean
+        default: true
+
+# Per-ref serialization; never cancel an in-flight release for the same ref.
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+run-name: >-
+  release ${{ github.ref_name }}${{ (github.event_name == 'workflow_dispatch' && inputs.dry_run) && ' (dry run)' || '' }}
+
+jobs:
+  guard:
+    name: Guard (source, version, changelog, reuse)
+    runs-on: ubuntu-24.04
+    outputs:
+      version: ${{ steps.guard.outputs.version }}
+      tag: ${{ steps.guard.outputs.tag }}
+      source_sha: ${{ steps.guard.outputs.source_sha }}
+      source_ref: ${{ steps.guard.outputs.source_ref }}
+      epoch: ${{ steps.guard.outputs.epoch }}
+      dry_run: ${{ steps.guard.outputs.dry_run }}
+      reusable: ${{ steps.guard.outputs.reusable }}
+    steps:
+      - name: Checkout triggering source (full history for ancestry)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Validate source and decide the run path
+        id: guard
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GITHUB_REF: ${{ github.ref }}
+          GITHUB_REF_NAME: ${{ github.ref_name }}
+          GITHUB_SHA: ${{ github.sha }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          GITHUB_API_URL: ${{ github.api_url }}
+          # Named public gate: release work requires a public repository.
+          RELEASE_REPOSITORY_PRIVATE: ${{ github.event.repository.private }}
+          # Tag pushes are never dry runs; dispatches honor the input.
+          RELEASE_DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run }}
+        run: python3 .github/scripts/release_guard.py
+
+  # Release builds start only after every CI job passes.
+  ci:
+    name: Reusable CI
+    needs: guard
+    uses: ./.github/workflows/ci.yml
+
+  build:
+    name: Build ${{ matrix.target }}
+    needs: [guard, ci]
+    # Skipped only for verified same-tag reuse; assemble stays reachable.
+    if: ${{ needs.guard.result == 'success' && needs.ci.result == 'success' && needs.guard.outputs.reusable != 'true' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-musl
+            runner: ubuntu-24.04
+            python: python3
+            musl: true
+          - target: aarch64-unknown-linux-musl
+            runner: ubuntu-24.04-arm
+            python: python3
+            musl: true
+          - target: x86_64-apple-darwin
+            runner: macos-15-intel
+            python: python3
+            musl: false
+          - target: aarch64-apple-darwin
+            runner: macos-15
+            python: python3
+            musl: false
+          - target: x86_64-pc-windows-msvc
+            runner: windows-latest
+            python: python
+            musl: false
+          - target: aarch64-pc-windows-msvc
+            runner: windows-11-arm
+            python: python
+            musl: false
+    runs-on: ${{ matrix.runner }}
+    permissions:
+      contents: read
+      attestations: write
+      id-token: write
+    steps:
+      - name: Checkout triggering source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.guard.outputs.source_sha }}
+          persist-credentials: false
+
+      - name: Install Rust 1.89.0
+        uses: dtolnay/rust-toolchain@e2a55d2ffb04f378e9626c28d38b36d230d1e12f # master head (README pin rule)
+        with:
+          toolchain: 1.89.0
+          targets: ${{ matrix.target }}
+
+      - name: Cache cargo (per target)
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          key: ${{ matrix.target }}
+
+      - name: Install musl tools
+        if: matrix.musl
+        run: sudo apt-get update && sudo apt-get install -y musl-tools
+
+      - name: Build release binary
+        shell: bash
+        env:
+          TARGET: ${{ matrix.target }}
+          MUSL_STATIC: ${{ matrix.musl }}
+        run: |
+          set -euo pipefail
+          # Only musl gets RUSTFLAGS here: an (empty) env RUSTFLAGS would
+          # override the .cargo/config.toml crt-static setting on Windows.
+          if [ "$MUSL_STATIC" = "true" ]; then
+            export RUSTFLAGS="-C target-feature=+crt-static"
+          fi
+          cargo build --release --locked --target "$TARGET"
+
+      - name: Pack archive and native smoke test
+        id: pack
+        shell: bash
+        env:
+          PY: ${{ matrix.python }}
+          TARGET: ${{ matrix.target }}
+          VERSION: ${{ needs.guard.outputs.version }}
+          SOURCE_DATE_EPOCH: ${{ needs.guard.outputs.epoch }}
+        run: |
+          set -euo pipefail
+          command -v "$PY" >/dev/null 2>&1 || PY="$(command -v python3 || command -v python)"
+          "$PY" .github/scripts/release_artifacts.py pack "$TARGET" "$VERSION"
+
+      # Both subjects in one attestation: the distributed archive is what
+      # users verify before unpacking; the raw binary is what it contains.
+      - name: Attest build provenance (archive + binary)
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-path: |
+            ${{ steps.pack.outputs.archive }}
+            ${{ steps.pack.outputs.binary }}
+
+      - name: Upload archive artifact
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: dist-${{ matrix.target }}
+          path: ${{ steps.pack.outputs.archive }}
+          if-no-files-found: error
+          overwrite: true
+
+  assemble:
+    name: Assemble and verify cohort
+    needs: [guard, ci, build]
+    # Reachable after successful builds and when builds were skipped for
+    # verified same-tag reuse; unreachable after any real failure.
+    if: >-
+      ${{ !cancelled() && needs.guard.result == 'success' && needs.ci.result == 'success'
+      && needs.build.result != 'failure' && needs.build.result != 'cancelled' }}
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      attestations: read
+    steps:
+      - name: Checkout triggering source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.guard.outputs.source_sha }}
+          persist-credentials: false
+
+      - name: Download fresh build artifacts
+        if: needs.guard.outputs.reusable != 'true'
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: dist-*
+          path: dist
+          merge-multiple: true
+
+      - name: Download existing release cohort (verified reuse)
+        if: needs.guard.outputs.reusable == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.guard.outputs.tag }}
+        run: python3 .github/scripts/release_state.py download --tag "$TAG" --dir dist
+
+      - name: Verify cohort (archives, checksum manifest, architectures, provenance)
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.guard.outputs.version }}
+          SOURCE_SHA: ${{ needs.guard.outputs.source_sha }}
+          SOURCE_REF: ${{ needs.guard.outputs.source_ref }}
+          REUSABLE: ${{ needs.guard.outputs.reusable }}
+        run: |
+          set -euo pipefail
+          if [ "$REUSABLE" = "true" ]; then
+            python3 .github/scripts/release_artifacts.py verify dist "$VERSION" "$SOURCE_SHA" "$SOURCE_REF"
+          else
+            python3 .github/scripts/release_artifacts.py verify dist "$VERSION" "$SOURCE_SHA" "$SOURCE_REF" --write-checksums
+          fi
+
+      - name: Upload checksum manifest artifact
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: dist-SHA256SUMS
+          path: dist/SHA256SUMS
+          if-no-files-found: error
+          overwrite: true
+
+      # Internal hand-off for the staging job; overwrite keeps job re-runs
+      # from mixing stale attempts (Actions artifacts only, never release
+      # assets).
+      - name: Upload assembled cohort artifact (internal)
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: release-cohort
+          path: dist
+          if-no-files-found: error
+          overwrite: true
+
+  stage:
+    name: Stage draft release
+    needs: [guard, assemble]
+    if: ${{ !cancelled() && needs.guard.result == 'success' && needs.assemble.result == 'success' && needs.guard.outputs.dry_run != 'true' }}
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    outputs:
+      release_id: ${{ steps.stage.outputs.release_id }}
+    steps:
+      - name: Checkout triggering source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.guard.outputs.source_sha }}
+          # The stage helper proves refs/tags/<tag> exists locally before
+          # creating the draft, so the tag ref must be fetched.
+          fetch-tags: true
+          persist-credentials: false
+
+      - name: Download assembled cohort
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: release-cohort
+          path: dist
+
+      - name: Stage draft release and assets
+        id: stage
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.guard.outputs.tag }}
+          VERSION: ${{ needs.guard.outputs.version }}
+          SOURCE_SHA: ${{ needs.guard.outputs.source_sha }}
+        run: python3 .github/scripts/release_state.py stage --tag "$TAG" --version "$VERSION" --sha "$SOURCE_SHA" --dir dist
+
+  publish:
+    name: Publish to crates.io
+    needs: [guard, stage]
+    if: ${{ !cancelled() && needs.stage.result == 'success' }}
+    runs-on: ubuntu-24.04
+    # Optional user-side reviewer gate; also scopes registry secrets.
+    environment: release
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      CRATE: agent-coexist
+      VERSION: ${{ needs.guard.outputs.version }}
+      # Job-level so both the OIDC step's `if` and the publish step's env
+      # expression see it (sibling step-env keys cannot reference each other).
+      HAS_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN != '' }}
+      # Keep the source tree pristine for cargo package/publish.
+      PYTHONDONTWRITEBYTECODE: '1'
+    steps:
+      - name: Checkout triggering source (clean tree)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.guard.outputs.source_sha }}
+          persist-credentials: false
+
+      - name: Install Rust 1.89.0
+        uses: dtolnay/rust-toolchain@e2a55d2ffb04f378e9626c28d38b36d230d1e12f # master head (README pin rule)
+        with:
+          toolchain: 1.89.0
+
+      - name: Check registry state
+        id: regcheck
+        run: python3 .github/scripts/registry_publish.py check --name "$CRATE" --version "$VERSION"
+
+      # First publication REQUIRES the registry API token: crates.io
+      # trusted publishing only authenticates crates that already exist
+      # (https://crates.io/docs/trusted-publishing). Later versions may use
+      # either the token or this job's OIDC exchange.
+      - name: Require registry token for first publication
+        if: steps.regcheck.outputs.published != 'true' && steps.regcheck.outputs.first_publish == 'true' && env.HAS_TOKEN != 'true'
+        run: |
+          echo "::error::first publication of $CRATE requires the CARGO_REGISTRY_TOKEN repository secret; crates.io trusted publishing only authenticates existing crates (https://crates.io/docs/trusted-publishing)"
+          exit 1
+
+      - name: Authenticate to crates.io (OIDC trusted publishing)
+        id: oidc
+        if: steps.regcheck.outputs.published != 'true' && env.HAS_TOKEN != 'true'
+        uses: rust-lang/crates-io-auth-action@c6f97d42243bad5fab37ca0427f495c86d5b1a18 # v1.0.5
+
+      - name: Publish crate
+        if: steps.regcheck.outputs.published != 'true'
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ env.HAS_TOKEN == 'true' && secrets.CARGO_REGISTRY_TOKEN || steps.oidc.outputs.token }}
+        run: python3 .github/scripts/registry_publish.py publish --name "$CRATE" --version "$VERSION"
+
+      # Always runs (fresh or already-published): compares the registry
+      # package byte-for-byte with the tagged package, then installs that
+      # exact version into an isolated prefix and exercises the binary.
+      - name: Verify registry package and installed binary
+        run: python3 .github/scripts/registry_publish.py verify --name "$CRATE" --version "$VERSION"
+
+  finalize:
+    name: Verify and publish release
+    needs: [guard, stage, publish]
+    if: ${{ !cancelled() && needs.guard.result == 'success' && needs.stage.result == 'success' && needs.publish.result == 'success' && needs.guard.outputs.dry_run != 'true' }}
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+      attestations: read
+    steps:
+      - name: Checkout triggering source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.guard.outputs.source_sha }}
+          persist-credentials: false
+
+      # Verify the draft's assets while it is still a draft: fail closed
+      # before anything becomes public. Drafts are only reachable by release
+      # id (the by-tag endpoint is published-only).
+      - name: Download draft release assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.guard.outputs.tag }}
+          RELEASE_ID: ${{ needs.stage.outputs.release_id }}
+        run: python3 .github/scripts/release_state.py download --release-id "$RELEASE_ID" --tag "$TAG" --dir dist-draft
+
+      - name: Verify draft cohort (checksums, architectures, provenance)
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.guard.outputs.version }}
+          SOURCE_SHA: ${{ needs.guard.outputs.source_sha }}
+          SOURCE_REF: ${{ needs.guard.outputs.source_ref }}
+        run: python3 .github/scripts/release_artifacts.py verify dist-draft "$VERSION" "$SOURCE_SHA" "$SOURCE_REF"
+
+      - name: Smoke draft x86_64 Linux archive
+        env:
+          VERSION: ${{ needs.guard.outputs.version }}
+        run: >-
+          python3 .github/scripts/release_artifacts.py smoke
+          dist-draft/agent-coexist-x86_64-unknown-linux-musl.tar.gz
+          x86_64-unknown-linux-musl "$VERSION"
+
+      # Publishes the draft; an already-published release is verified only,
+      # never edited or re-uploaded.
+      - name: Publish draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.guard.outputs.tag }}
+          RELEASE_ID: ${{ needs.stage.outputs.release_id }}
+        run: python3 .github/scripts/release_state.py finalize --release-id "$RELEASE_ID" --tag "$TAG"
+
+      # Post-publication check of exactly what is served: the published
+      # cohort is fetched unauthenticated, as any anonymous user would.
+      - name: Download published release (public, unauthenticated)
+        env:
+          TAG: ${{ needs.guard.outputs.tag }}
+        run: python3 .github/scripts/release_state.py download-public --tag "$TAG" --dir dist-public
+
+
+      - name: Verify published cohort (checksums, architectures, provenance)
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.guard.outputs.version }}
+          SOURCE_SHA: ${{ needs.guard.outputs.source_sha }}
+          SOURCE_REF: ${{ needs.guard.outputs.source_ref }}
+        run: python3 .github/scripts/release_artifacts.py verify dist-public "$VERSION" "$SOURCE_SHA" "$SOURCE_REF"
+
+      - name: Smoke published x86_64 Linux archive
+        env:
+          VERSION: ${{ needs.guard.outputs.version }}
+        run: >-
+          python3 .github/scripts/release_artifacts.py smoke
+          dist-public/agent-coexist-x86_64-unknown-linux-musl.tar.gz
+          x86_64-unknown-linux-musl "$VERSION"
