@@ -251,6 +251,10 @@ fn fix_text(
         "E-HEAD" => return ehead_fix(t, params, ctx),
         "E-ENTRY-TITLE-TAKEN" => return title_taken_fix(t, params, ctx),
         "E-ENTRY-HASH" if get(params, "no_path").is_some() => catalog::FIX_EENTRYHASH_NO_PATH,
+        // A target another process holds locked is contention, not
+        // damage: the entry stays as written and the same read is
+        // retried once the holder releases.
+        "E-ENTRY-TARGET" if get(params, "is_locked").is_some() => catalog::FIX_EENTRYTARGET_LOCKED,
         "E-ENTRY-TARGET" if get(params, "is_dir").is_some() => catalog::FIX_EENTRYTARGET_DIR,
         "E-STATE-NOTFOUND" if get(params, "status").is_some() => {
             catalog::FIX_ESTATE_NOTFOUND_STATUS

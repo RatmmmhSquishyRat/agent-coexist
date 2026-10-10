@@ -661,6 +661,14 @@ pub(crate) const FIX_EENTRYHASH_NO_PATH: &str = r#"this entry has no path, so --
 /// directory has no reviewable bytes.
 pub(crate) const FIX_EENTRYTARGET_DIR: &str = r#"the path names a directory, not a file. Choose a file you know is the right target, review that file and the note, and update the note if needed. Then point the entry at it; this command also records the target's current hash: agent-coexist brief {path_arg} --target <file> --entry={title}"#;
 
+/// E-ENTRY-TARGET when another process holds the target locked (the
+/// WouldBlock marker from `fsx`'s bounded shared lock): the entry and its
+/// permissions are fine and the bytes become readable once the holder
+/// releases, so the only recovery reruns the read that failed. `{argv}`
+/// is the §8.3.4-quoted command line and embeds verbatim.
+pub(crate) const FIX_EENTRYTARGET_LOCKED: &str =
+    r#"wait for the process holding the target to release it, then retry: {argv}"#;
+
 /// W-BODY for a comment: only its author may rewrite it (E-EDIT-AUTHOR),
 /// so the recipe names who runs it. `{author}` / `{seq}` are the stored
 /// header values; the command follows after `: `.

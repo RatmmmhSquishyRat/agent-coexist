@@ -334,6 +334,10 @@ pub fn verify(brief_path: &Path, entry: &Entry) -> Verification {
                 .with("err", err.to_string());
             if err.kind() == io::ErrorKind::IsADirectory {
                 diagnostic = diagnostic.with("is_dir", "1");
+            } else if err.kind() == io::ErrorKind::WouldBlock {
+                // lock_target_shared's busy marker: the bytes read once
+                // the holder releases, so recovery only retries.
+                diagnostic = diagnostic.with("is_locked", "1");
             }
             return Verification {
                 diagnostics: vec![diagnostic],

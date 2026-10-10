@@ -35,7 +35,10 @@ fn busy_alias_targets_are_unchecked_and_cannot_update_briefs() {
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path();
     let target = root.join("thread.agent-besties.md");
-    fs::write(&target, b"# thread.post\n").unwrap();
+    // Unique body sentinel: any output showing it leaked target bytes
+    // the lock kept unreadable.
+    let sentinel = "busy-target-body-6d61c7";
+    fs::write(&target, format!("# thread.post\n{sentinel}\n")).unwrap();
     let alias = root.join("alias.txt");
     fs::hard_link(&target, &alias).unwrap();
     assert!(run(root, &["brief", "plan", "--target", "alias.txt"])
@@ -54,12 +57,21 @@ fn busy_alias_targets_are_unchecked_and_cannot_update_briefs() {
     assert_eq!(check.status.code(), Some(1));
     let checked = stdout(&check);
     assert!(checked.contains("unchecked"), "{checked}");
-    assert!(checked.contains("locked by another process"), "{checked}");
+    // Recovery retries the read that failed: the fix row's command
+    // keeps the original "check plan" operands (the program token is
+    // spelled as the runner's binary path) and never routes to a
+    // brief --target repoint.
+    let fix = checked
+        .lines()
+        .find(|line| line.starts_with("         fix  "))
+        .expect("E-ENTRY-TARGET fix row");
+    assert!(fix.ends_with(" check plan"), "{checked}");
+    assert!(!fix.contains("--target"), "{checked}");
     let read = run(root, &["read-brief", "plan"]);
     let read = stdout(&read);
     assert!(read.starts_with("warn  read-brief"), "{read}");
     assert!(read.contains("unchecked"), "{read}");
-    assert!(!read.contains("  content\n"), "{read}");
+    assert!(!read.contains(sentinel), "{read}");
 
     let refresh = run(root, &["brief", "plan", "--refresh"]);
     assert_eq!(refresh.status.code(), Some(1));
