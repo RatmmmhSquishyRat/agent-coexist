@@ -24,6 +24,8 @@ Concurrency and output delivery
   in-progress cooperating write. Self-references reuse the brief's locked
   pre-write snapshot. Target buffering also avoids reallocating on every
   read chunk while retaining the same memory cap and full-file hash.
+  When a target is busy, `check` recommends retrying the read rather than
+  changing permissions or rewriting the brief entry.
 - Help, version, and business reports check stdout write and flush errors
   and return exit 1 when delivery fails. A usage error remains exit 2
   even if stderr fails; an already committed file change is retained.
