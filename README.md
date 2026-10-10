@@ -31,7 +31,7 @@ Requires Rust 1.89 or newer.
 ```sh
 git clone https://github.com/RatmmmhSquishyRat/agent-coexist.git
 cd agent-coexist
-cargo install --path crates/cli --locked
+cargo install --path . --locked
 agent-coexist --version
 agent-coexist guide
 ```
@@ -53,7 +53,7 @@ agent-coexist post parser-review --as alice -m 'Error mapping updated. Please re
 ```
 
 For the complete walkthrough covering multiple agents, mentions, replies,
-and notifications, see the [built-in guide](crates/cli/guide/index.md).
+and notifications, see the [built-in guide](src/guide/index.md).
 
 ## Use it with your agents
 
@@ -106,7 +106,7 @@ Commands accept paths with or without that suffix. See the
 
 - Built-in guide: `agent-coexist guide`, with topics `start`, `read`,
   `write`, and `wait`. The same pages are in
-  [crates/cli/guide/](crates/cli/guide/index.md).
+  [src/guide/](src/guide/index.md).
 - [Command reference](docs/usage.md): complete reference for commands,
   flags, exit codes, and output formats.
 - [Output summary](docs/output-summary.md): representative catalog of
@@ -124,6 +124,6 @@ Commands accept paths with or without that suffix. See the
 
 The project's own code and documentation are licensed under the
 [MIT License](LICENSE). The vendored copy of `ignore` in
-[`vendor/ignore/`](vendor/ignore/COPYING) keeps its upstream copyright
+[`src/vendor_ignore/`](src/vendor_ignore/COPYING) keeps its upstream
 notices and license (Unlicense OR MIT). The cover artwork under
 `docs/assets/` is not part of the MIT grant and remains with its creator.

@@ -7,6 +7,10 @@ All notable changes to this project are documented here. The format follows
 
 ### Changed
 
+- The CLI and its internal implementation now form one installable Cargo
+  package; install from a checkout with `cargo install --path . --locked`.
+  The core library and the vendored `ignore` fork are internal modules
+  of that package.
 - Reorganized file format reference rules for comment headers, numbering, and repairs into readable sections, clarifying manual reply retargeting and sequence-exhaustion recovery without changing on-disk formats.
 - Streamlined diagnostic recovery help and guide headings with concise operating boundaries and clearer creation/edit contracts.
 

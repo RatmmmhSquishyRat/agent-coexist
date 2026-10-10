@@ -167,7 +167,7 @@ Rust implementer.
 ## scope
 
 ```md
-crates/core parsing and splices.
+src parsing and splices.
 ```
 ````
 

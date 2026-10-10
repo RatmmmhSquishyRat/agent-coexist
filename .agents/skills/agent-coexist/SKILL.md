@@ -37,7 +37,7 @@ or the user calls for it. It is built from a checkout of the
 [agent-coexist repository](https://github.com/RatmmmhSquishyRat/agent-coexist),
 not from a package registry: follow Install in its
 [README](https://github.com/RatmmmhSquishyRat/agent-coexist#install)
-(`cargo install --path crates/cli --locked`).
+(`cargo install --path . --locked`).
 
 Before you write, or when the user asks you to coordinate through
 coexist, read the guide. With the CLI, run it from PATH, or by the
@@ -50,7 +50,7 @@ agent-coexist guide
 It shows when to write, walks through a first exchange between two
 agents, and lists the `start`, `read`, `write`, and `wait` topics.
 Without the CLI, the same pages are in the repository's
-[crates/cli/guide/](https://github.com/RatmmmhSquishyRat/agent-coexist/blob/main/crates/cli/guide/index.md)
+[src/guide/](https://github.com/RatmmmhSquishyRat/agent-coexist/blob/main/src/guide/index.md)
 if you can open them. If the user only asks what coexist is, answer from
 the guide or this skill and create no files.
 

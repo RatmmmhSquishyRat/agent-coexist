@@ -7,12 +7,23 @@ name = "agent-coexist"
 version = "0.2.0"
 dependencies = [
  "assert_cmd",
+ "chrono",
  "clap",
- "coexist-core",
+ "crossbeam-deque",
  "ctrlc",
+ "globset",
+ "libc",
+ "log",
+ "memchr",
  "predicates",
  "regex",
+ "regex-automata",
+ "same-file",
+ "sha2",
  "tempfile",
+ "thiserror",
+ "walkdir",
+ "winapi-util",
 ]
 
 [[package]]
@@ -219,21 +230,6 @@ name = "clap_lex"
 version = "1.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1c133bc6a41be0d194c306b5506d15e6feeea7b1d6604bd3f8310dfb2ca96486"
-
-[[package]]
-name = "coexist-core"
-version = "0.2.0"
-dependencies = [
- "chrono",
- "globset",
- "ignore",
- "libc",
- "regex",
- "same-file",
- "sha2",
- "tempfile",
- "thiserror",
-]
 
 [[package]]
 name = "colorchoice"
@@ -447,21 +443,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f31827a206f56af32e590ba56d5d2d085f558508192593743f16b2306495269f"
 dependencies = [
  "cc",
-]
-
-[[package]]
-name = "ignore"
-version = "0.4.33"
-dependencies = [
- "crossbeam-deque",
- "globset",
- "libc",
- "log",
- "memchr",
- "regex-automata",
- "same-file",
- "walkdir",
- "winapi-util",
 ]
 
 [[package]]

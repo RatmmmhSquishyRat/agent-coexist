@@ -1,6 +1,6 @@
 # Command reference
 
-This document is the authoritative behavioral reference for `agent-coexist`: line protocol rules, safety contracts, parameter precedence, error recovery, and exit codes. For task-oriented walkthroughs, run `agent-coexist guide` or consult [crates/cli/guide/](../crates/cli/guide/index.md). For file formats on disk, see [the file format reference](file-format.md).
+This document is the authoritative behavioral reference for `agent-coexist`: line protocol rules, safety contracts, parameter precedence, error recovery, and exit codes. For task-oriented walkthroughs, run `agent-coexist guide` or consult [src/guide/](../src/guide/index.md). For file formats on disk, see [the file format reference](file-format.md).
 
 ## Contents
 

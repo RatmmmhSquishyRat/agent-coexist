@@ -1,31 +1,72 @@
-[workspace]
-resolver = "2"
-members = ["crates/core", "crates/cli"]
-exclude = ["vendor/ignore"]
-
-[workspace.package]
+[package]
+name = "agent-coexist"
 version = "0.2.0"
-edition = "2021"
+edition = "2024"
 rust-version = "1.89"
 license = "MIT"
+description = "Local markdown collaboration CLI for agents"
+repository = "https://github.com/RatmmmhSquishyRat/agent-coexist"
+readme = "README.md"
+keywords = ["cli", "agents", "collaboration", "filesystem", "markdown"]
+categories = ["command-line-utilities", "development-tools"]
+include = [
+    "/src",
+    "/tests",
+    "/Cargo.toml",
+    "/Cargo.lock",
+    "/LICENSE",
+    "/README.md",
+    "/rust-toolchain.toml",
+    "/.cargo/config.toml",
+]
 
-[workspace.dependencies]
+[dependencies]
 chrono = "0.4"
 clap = { version = "4.5", features = ["derive"] }
 ctrlc = "3.4"
-globset = "0.4"
-ignore = "=0.4.33"
-libc = "0.2"
+crossbeam-deque = "0.8.3"
+globset = "0.4.18"
+log = "0.4.20"
+memchr = "2.6.3"
 regex = "1.11"
-same-file = "1.0"
+regex-automata = { version = "0.4.18", default-features = false, features = [
+    "std",
+    "perf",
+    "syntax",
+    "meta",
+    "nfa",
+    "hybrid",
+    "dfa-onepass",
+] }
+same-file = "1.0.6"
 sha2 = "0.10"
 thiserror = "1.0"
+walkdir = "2.4.0"
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+[target.'cfg(windows)'.dependencies]
+winapi-util = "0.1.2"
+
+[dev-dependencies]
 assert_cmd = "2.0"
 predicates = "3.1"
 tempfile = "3.20"
 
-[patch.crates-io]
-ignore = { path = "vendor/ignore" }
+# Release archives store the binary at the archive root.
+[package.metadata.binstall]
+pkg-url = "{ repo }/releases/download/v{ version }/agent-coexist-{ target }.tar.gz"
+bin-dir = "{ bin }{ binary-ext }"
+pkg-fmt = "tgz"
+
+[package.metadata.binstall.overrides.x86_64-pc-windows-msvc]
+pkg-url = "{ repo }/releases/download/v{ version }/agent-coexist-{ target }.zip"
+pkg-fmt = "zip"
+
+[package.metadata.binstall.overrides.aarch64-pc-windows-msvc]
+pkg-url = "{ repo }/releases/download/v{ version }/agent-coexist-{ target }.zip"
+pkg-fmt = "zip"
 
 [profile.release]
 # Defaults are fine for a small CLI; no size tricks required.

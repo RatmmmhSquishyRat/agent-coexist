@@ -24,28 +24,29 @@ The binary is `target/debug/agent-coexist` (`agent-coexist.exe` on Windows).
 
 ## Project layout
 
-- `crates/core` (`coexist-core`): parsing of the collaboration files,
-  raw-byte splicing, file locking, the diagnostic catalog, and the logic
-  behind the fourteen business commands. It does not own `guide`,
-  `--help`, or `--version`.
-- `crates/cli` (`agent-coexist`): the binary, with argument parsing and
-  console rendering. Business commands call into `coexist-core`. `guide`
-  is a CLI-only information branch: it embeds `crates/cli/guide/*.md` and
-  writes that Markdown to stdout before any cwd, clock, storage, or lock
-  setup. Do not add a core Request or Report for it.
+- `src/` (`agent-coexist`, one package with a library and a binary): the
+  library holds parsing of the collaboration files, raw-byte splicing,
+  file locking, the diagnostic catalog, and the logic behind the fourteen
+  business commands; the binary adds argument parsing and console
+  rendering. The library is an internal implementation detail of the CLI,
+  not a supported public library. `guide` is a binary-only information
+  branch: it embeds `src/guide/*.md` and writes that Markdown to stdout
+  before any cwd, clock, storage, or lock setup. Do not add a Request or
+  Report for it.
 - `.agents/skills/agent-coexist/SKILL.md`: the canonical short discovery
   skill. Consuming projects copy that folder; there is no installer.
-- `vendor/ignore`: pinned `ignore` 0.4.33 with a bounded local patch; not
-  a workspace member. See [Vendored `ignore` crate](#vendored-ignore-crate).
+- `src/vendor_ignore`: the pinned `ignore` 0.4.33 fork, inlined as a
+  private module of the package. See
+  [Vendored `ignore` crate](#vendored-ignore-crate).
 
 Unit tests sit next to the code they cover; integration tests live in
-`crates/core/tests/` and `crates/cli/tests/`.
+`tests/`.
 
 ## Before you open a pull request
 
 1. **Behavior changes start with an issue.** Describe what should change
    and why. Current behavior is documented in
-   [the built-in guide](crates/cli/guide/index.md) (`agent-coexist guide`)
+   [the built-in guide](src/guide/index.md) (`agent-coexist guide`)
    for operational methods, [the command reference](docs/usage.md) for
    commands, flags, and the line protocol, and
    [the file format reference](docs/file-format.md) for the on-disk format.
@@ -58,16 +59,15 @@ Unit tests sit next to the code they cover; integration tests live in
    macOS:
 
    ```console
-   cargo fmt -p agent-coexist -p coexist-core -- --check
-   cargo clippy --workspace --all-targets --locked -- -D warnings
-   cargo test --workspace --release --locked
-   cargo test --manifest-path vendor/ignore/Cargo.toml --lib --release --locked --target-dir target/vendor-check
+   cargo fmt --check
+   cargo clippy --all-targets --locked -- -D warnings
+   cargo test --release --locked
    ```
 
-   `cargo fmt -p agent-coexist -p coexist-core` (without `--check`)
-   applies the formatting. The package filter is intentional: it formats
-   the two product crates and leaves the pinned `ignore` tree in upstream
-   style. The last command runs the vendor library tests.
+   `cargo fmt` (without `--check`) applies the formatting. The commands
+   cover the single package, including the vendored `ignore` module's
+   tests; its scoped lint and format isolation keeps upstream style (see
+   [Vendored `ignore` crate](#vendored-ignore-crate)).
 
 ## Writing tests
 
@@ -80,7 +80,7 @@ matter.
 
 Do not pin:
 
-- the full wording of `crates/cli/guide/*.md`, `SKILL.md`, or diagnostic
+- the full wording of `src/guide/*.md`, `SKILL.md`, or diagnostic
   prose;
 - exact quote spelling of a `fix` command (test that its operands survive
   a real POSIX shell instead);
@@ -142,7 +142,7 @@ Each item links to the reference section that defines its terms:
 ## Documentation and changelog
 
 If a change affects user-visible behavior, update the matching surface in
-the same change: `crates/cli/guide/` for operational methods, `--help`
+the same change: `src/guide/` for operational methods, `--help`
 text, `README.md`, `docs/usage.md`, `docs/file-format.md`, or
 `.agents/skills/agent-coexist/SKILL.md`. Add a line under
 `## [Unreleased]` in `CHANGELOG.md` (the file follows
@@ -156,19 +156,22 @@ and `docs/usage.md` stays a lookup reference rather than a second copy.
 
 You need this section only when changing scan behavior or refreshing the
 pin. Directory walking uses one pinned dependency: `ignore` 0.4.33 from
-crates.io, patched in-tree.
+crates.io, vendored in-tree.
 
-- The workspace `Cargo.toml` pins `ignore = "=0.4.33"` and redirects it
-  with `[patch.crates-io] ignore = { path = "vendor/ignore" }`.
-  `vendor/ignore` is listed in workspace `exclude`, so it is not a
-  workspace crate.
+- The fork lives in `src/vendor_ignore/` as a private module of the
+  package, declared in `src/lib.rs`. It is not a crates.io dependency
+  and needs no `[patch]` section.
 - Upstream package: [ignore 0.4.33](https://crates.io/crates/ignore/0.4.33).
   The SHA-256 of the published `ignore-0.4.33.crate` archive is
   `00b69833ed729dc5aa7d19541d96d6cf8e9137194207a04916d658e43168402f`.
 - License: Unlicense OR MIT. The license texts live at
-  `vendor/ignore/COPYING`, `vendor/ignore/LICENSE-MIT`, and
-  `vendor/ignore/UNLICENSE`. Keep them byte-for-byte when refreshing the
-  pin.
+  `src/vendor_ignore/COPYING`, `src/vendor_ignore/LICENSE-MIT`, and
+  `src/vendor_ignore/UNLICENSE`. Keep them byte-for-byte when refreshing
+  the pin.
+- Lint and format isolation is scoped to the module declaration in
+  `src/lib.rs` (`#[rustfmt::skip]` and lint `allow`s), so plain
+  `cargo fmt` and `cargo clippy` leave the vendored files in upstream
+  style. Do not run a formatter over the vendored files.
 - The local delta is limited to what scans need:
   - Ignore and git-config sources are opened as regular files, and load
     errors reach the scanner. When a file's rules parse but cannot be
@@ -204,10 +207,10 @@ crates.io, patched in-tree.
   stay as published; `globset` is the unmodified crates.io crate. The
   patch does not maintain every upstream API, and upstream's whole-tree
   `min_depth` limit is outside product scope.
-- To refresh the pin, re-apply that delta on the new upstream tree and
-  re-run the vendor library tests. Do not drop the pin, and do not run
-  `cargo fmt --all`: workspace-wide formatting can follow the path patch
-  and rewrite upstream style.
+- To refresh the pin, re-apply that delta on the new upstream tree, move
+  it into `src/vendor_ignore/` with the same integration (`lib.rs` →
+  `mod.rs`, `crate::` → `crate::vendor_ignore::`), and re-run the tests.
+  Do not drop the vendored sources.
 
 ## Reporting bugs
 
@@ -223,7 +226,7 @@ The project's own code and authored documentation are licensed under the
 MIT License (see [LICENSE](LICENSE)). By contributing, you agree that your
 contributions are licensed under it. There is no CLA and no DCO sign-off.
 
-The vendored `ignore` crate in `vendor/ignore/` keeps its upstream
+The vendored `ignore` crate in `src/vendor_ignore/` keeps its upstream
 copyright notices and license (Unlicense OR MIT; see
 [Vendored `ignore` crate](#vendored-ignore-crate)). The cover image in
 `docs/assets/cover.webp` is supplied artwork and is not part of the MIT
