@@ -186,7 +186,7 @@ A dry run runs the reusable CI, builds and smoke-tests the six native
 targets, records build provenance, and uploads the six archives plus the
 `SHA256SUMS` manifest as Actions artifacts. Staging, registry
 publication, and release publication are all skipped: it never creates
-or edits a GitHub Release and never touches crates.io.
+or edits a GitHub Release and never publishes to crates.io.
 
 A tag release produces one archive per target —
 `x86_64-unknown-linux-musl` and `aarch64-unknown-linux-musl` (`.tar.gz`),

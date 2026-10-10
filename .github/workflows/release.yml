@@ -9,7 +9,7 @@
 # reusable CI, all six builds and native smoke tests, all six attestations,
 # and checksum assembly/verification, then uploads the six archives plus
 # SHA256SUMS as Actions artifacts. Dry runs never create or edit a GitHub
-# Release and never touch crates.io.
+# Release and never publish to crates.io.
 #
 # Security posture:
 # - Default permission is contents:read. attestations:write + id-token:write
