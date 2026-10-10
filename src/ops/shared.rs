@@ -701,7 +701,7 @@ pub fn assemble(
     }
 
     // Ancestors near → far (deepest first); descendants canonical-ascending.
-    ancestors.sort_by(|a, b| b.dir.components().count().cmp(&a.dir.components().count()));
+    ancestors.sort_by_key(|a| std::cmp::Reverse(a.dir.components().count()));
     ancestors.dedup_by(|a, b| a.dir == b.dir);
     descendants.sort_by(|a, b| a.dir.cmp(&b.dir));
     descendants.dedup_by(|a, b| a.dir == b.dir);

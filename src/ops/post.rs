@@ -642,7 +642,7 @@ pub(super) fn refuse_report(
     if let Some(kind) = kind {
         report.kv("type", vec![kind.to_string()]);
     }
-    diags.sort_by(|a, b| (a.line, diag::order(a.id)).cmp(&(b.line, diag::order(b.id))));
+    diags.sort_by_key(|d| (d.line, diag::order(d.id)));
     let refused = diag::write_refusal(&diags);
     for d in diags {
         report.diagnostic(d);

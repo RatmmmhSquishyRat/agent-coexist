@@ -194,9 +194,18 @@ jobs:
         with:
           toolchain: 1.89.0
 
+      # Keep expanded package sources out of rust-cache's target cleanup.
+      # A fresh namespace excludes older caches containing those sources.
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          prefix-key: registry-only-v1
+          cache-targets: "false"
 
       - name: Packaging dry-run against the locked graph
+        # Verify in a scratch target dir so the expanded package never
+        # enters the workspace target/ the cache walks.
+        env:
+          CARGO_TARGET_DIR: ${{ runner.temp }}/publish-verify
         run: cargo publish --dry-run --locked
 
   supply-chain:

@@ -708,7 +708,7 @@ fn merge_inserts(
     splices: Vec<Splice>,
     mut inserts: Vec<(usize, Vec<u8>)>,
 ) -> Vec<Splice> {
-    inserts.sort_by(|a, b| a.0.cmp(&b.0));
+    inserts.sort_by_key(|a| a.0);
     let mut merged: Vec<Splice> = Vec::new();
     for (pos, bytes) in inserts {
         match merged.last_mut() {
