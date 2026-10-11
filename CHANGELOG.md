@@ -5,6 +5,19 @@ All notable changes to this project are documented here. The format follows
 [SemVer](https://semver.org/spec/2.0.0.html).
 ## [Unreleased]
 
+### Changed
+
+- Modernized public README to elevate `cargo install agent-coexist --locked` as the primary installation path, added live crates.io and CI badges, and streamlined prebuilt binary instructions.
+- Cleaned Cargo packaging: pruned unused `thiserror` dependency, excluded local toolchain files from `package.include`, and added Linux GNU `cargo-binstall` overrides pointing to static musl archives.
+- Supply chain hardening: re-enabled `[sources]` and `[bans]` in `deny.toml` with multi-version compatibility exception for `syn`.
+
+### Fixed
+
+- Appended Andrew Gallant's MIT copyright notice to the root `LICENSE` file for inlined `ignore` crate code.
+- Added explicit job timeouts (`timeout-minutes`) across `ci.yml`, `release.yml`, and `weekly.yml` GitHub workflows.
+- Eliminated Linux-only gating in `tests/output_delivery.rs` using a portable broken-pipe mechanism so output delivery error handling is natively verified on Windows and macOS.
+- Unblocked Windows concurrency execution in `tests/write_clock.rs` by replacing raw Unix `flock` with portable shared locking and preserving Windows system environment variables.
+
 ## [0.3.0] - 2026-10-11
 
 ### Added
