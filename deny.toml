@@ -43,6 +43,6 @@ version = "=2.0.119"
 reason = "windows-core on Windows targets requires syn v2 while clap_derive uses syn v3"
 
 [sources]
-unknown-registries = "deny"
+unknown-registry = "deny"
 unknown-git = "deny"
 allow-registry = ["https://github.com/rust-lang/crates.io-index"]
