@@ -26,18 +26,55 @@ file access can inspect them with standard file tools or the CLI.
 
 ## Install
 
-Requires Rust 1.89 or newer.
+**Prebuilt binary — no Rust toolchain needed.** Download the archive for
+your system from the
+[latest release](https://github.com/RatmmmhSquishyRat/agent-coexist/releases/latest)
+(currently [v0.3.0](https://github.com/RatmmmhSquishyRat/agent-coexist/releases/tag/v0.3.0)),
+extract it, and put `agent-coexist` (Windows: `agent-coexist.exe`) in a
+directory on your `PATH`. The Linux archives are statically linked with musl
+and do not require the host's glibc:
+
+| System | CPU | Archive |
+|---|---|---|
+| Linux (static musl) | x86_64 | [`agent-coexist-x86_64-unknown-linux-musl.tar.gz`](https://github.com/RatmmmhSquishyRat/agent-coexist/releases/latest/download/agent-coexist-x86_64-unknown-linux-musl.tar.gz) |
+| Linux (static musl) | ARM64 | [`agent-coexist-aarch64-unknown-linux-musl.tar.gz`](https://github.com/RatmmmhSquishyRat/agent-coexist/releases/latest/download/agent-coexist-aarch64-unknown-linux-musl.tar.gz) |
+| macOS | Intel | [`agent-coexist-x86_64-apple-darwin.tar.gz`](https://github.com/RatmmmhSquishyRat/agent-coexist/releases/latest/download/agent-coexist-x86_64-apple-darwin.tar.gz) |
+| macOS | Apple Silicon | [`agent-coexist-aarch64-apple-darwin.tar.gz`](https://github.com/RatmmmhSquishyRat/agent-coexist/releases/latest/download/agent-coexist-aarch64-apple-darwin.tar.gz) |
+| Windows | x64 | [`agent-coexist-x86_64-pc-windows-msvc.zip`](https://github.com/RatmmmhSquishyRat/agent-coexist/releases/latest/download/agent-coexist-x86_64-pc-windows-msvc.zip) |
+| Windows | ARM64 | [`agent-coexist-aarch64-pc-windows-msvc.zip`](https://github.com/RatmmmhSquishyRat/agent-coexist/releases/latest/download/agent-coexist-aarch64-pc-windows-msvc.zip) |
+
+Compare the archive's SHA-256 with its entry in
+[`SHA256SUMS`](https://github.com/RatmmmhSquishyRat/agent-coexist/releases/latest/download/SHA256SUMS):
+use `sha256sum <archive>` (Linux), `shasum -a 256 <archive>` (macOS), or
+`Get-FileHash <archive> -Algorithm SHA256` (PowerShell).
+
+Archives and binaries also have build-provenance attestations, checkable with
+`gh attestation verify <archive-or-binary> -R RatmmmhSquishyRat/agent-coexist`.
+
+macOS downloads are not notarized; Windows downloads are not publisher-signed.
+After verifying the checksum and provenance above, use per-file approval if
+your OS blocks execution: `xattr -d com.apple.quarantine agent-coexist` on macOS,
+or SmartScreen's "More info" → "Run anyway" on Windows.
+Do not disable Gatekeeper or SmartScreen globally.
+
+**With Cargo — Rust 1.89 or newer.** Installs the published crate from
+crates.io:
+
+```sh
+cargo install agent-coexist --locked
+```
+
+**From source — same Rust requirement.** Builds your own checkout:
 
 ```sh
 git clone https://github.com/RatmmmhSquishyRat/agent-coexist.git
 cd agent-coexist
 cargo install --path . --locked
-agent-coexist --version
-agent-coexist guide
 ```
 
-`agent-coexist guide` prints the built-in tutorial written for agents. It
-creates no files.
+Check the install with `agent-coexist --version` (the current release
+prints `agent-coexist 0.3.0`). `agent-coexist guide` prints the built-in
+tutorial written for agents. It creates no files.
 
 ## Getting started
 

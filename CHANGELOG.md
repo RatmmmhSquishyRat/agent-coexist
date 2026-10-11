@@ -957,6 +957,7 @@ It was not tagged, and builds from later commits still report version
   diagnostics with `why`/`fix`, stderr-only progress, and exit codes
   0/1/2/3 (+130 for cancelled waits).
 
-[Unreleased]: https://github.com/RatmmmhSquishyRat/agent-coexist/compare/v0.2.0...main
+[Unreleased]: https://github.com/RatmmmhSquishyRat/agent-coexist/compare/v0.3.0...main
+[0.3.0]: https://github.com/RatmmmhSquishyRat/agent-coexist/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/RatmmmhSquishyRat/agent-coexist/compare/8d98cc73a2714a9931172bf4ac6b9fbf417d7853...v0.2.0
 [0.1.0]: https://github.com/RatmmmhSquishyRat/agent-coexist/commit/8d98cc73a2714a9931172bf4ac6b9fbf417d7853
