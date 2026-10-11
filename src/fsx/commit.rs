@@ -53,6 +53,8 @@ pub(super) fn commit(file: &mut File, old: &[u8], new: &[u8]) -> Result<(), Comm
 // Keep the production entry on a real File. This small interface lets the
 // tests exercise partial writes and failing storage operations that a
 // normal temporary directory cannot cause deterministically.
+// INVARIANT: Used exclusively in internal unit tests for deterministic
+// ACID rollback mathematical verification. Production code accepts only std::fs::File.
 trait CommitFile: Write + Seek {
     fn set_len(&mut self, len: u64) -> io::Result<()>;
     fn len(&self) -> io::Result<u64>;

@@ -125,7 +125,8 @@ impl Cancellation {
     /// Sleep up to `ms` on the monotonic clock, waking early on
     /// cancellation. Returns `true` when cancelled (never busy-polls).
     fn sleep_poll(&self, ms: u64) -> bool {
-        let deadline = Instant::now() + Duration::from_millis(ms);
+        let start = Instant::now();
+        let budget = Duration::from_millis(ms);
         let mut guard = match self.signal.lock() {
             Ok(guard) => guard,
             Err(poisoned) => poisoned.into_inner(),
@@ -134,11 +135,11 @@ impl Cancellation {
             if *guard {
                 return true;
             }
-            let now = Instant::now();
-            if now >= deadline {
-                return false;
-            }
-            let (next, _) = match self.wake.wait_timeout(guard, deadline - now) {
+            let remaining = match budget.checked_sub(start.elapsed()) {
+                Some(rem) if !rem.is_zero() => rem,
+                _ => return false,
+            };
+            let (next, _) = match self.wake.wait_timeout(guard, remaining) {
                 Ok(pair) => pair,
                 Err(poisoned) => poisoned.into_inner(),
             };
@@ -221,9 +222,10 @@ pub fn run(
         if unchanged {
             continue;
         }
+        let event_now = time::now()?;
         let next = match raw {
             Raw::Absent => None,
-            Raw::Present(bytes) => match admit_present(bytes, path, &filter, now)? {
+            Raw::Present(bytes) => match admit_present(bytes, path, &filter, event_now)? {
                 Ok(parsed) => Some(parsed),
                 Err(report) => return Ok(report),
             },
@@ -238,7 +240,7 @@ pub fn run(
         if changed {
             let before_model = baseline.as_ref().map(extract);
             let after_model = next.as_ref().map(extract);
-            if let Some(report) = evaluate(&before_model, &after_model, &filter, path, now) {
+            if let Some(report) = evaluate(&before_model, &after_model, &filter, path, event_now) {
                 return Ok(report);
             }
         }
@@ -2702,5 +2704,35 @@ mod tests {
         let profile_orders = record_values(&profile_report, "order");
         assert_eq!(profile_orders.len(), 1);
         assert_eq!(profile_orders[0], ["sections".to_string()].as_slice());
+    }
+
+    #[test]
+    fn sleep_poll_checked_subtraction_does_not_panic_on_large_duration() {
+        let cancel = Cancellation::new();
+        // Zero duration returns false immediately without blocking
+        assert!(!cancel.sleep_poll(0));
+        // Large duration must not overflow monotonic clocks (DEF-07)
+        cancel.cancel();
+        assert!(cancel.sleep_poll(u64::MAX));
+    }
+
+    #[test]
+    fn sleep_poll_wakes_early_on_concurrent_cancellation() {
+        use std::sync::Arc;
+        let cancel = Arc::new(Cancellation::new());
+        let cancel_clone = cancel.clone();
+        let handle = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(15));
+            cancel_clone.cancel();
+        });
+        let start = Instant::now();
+        let was_cancelled = cancel.sleep_poll(5000);
+        let elapsed = start.elapsed();
+        handle.join().unwrap();
+        assert!(was_cancelled);
+        assert!(
+            elapsed < Duration::from_millis(2000),
+            "expected prompt wakeup on cancel, elapsed: {elapsed:?}"
+        );
     }
 }

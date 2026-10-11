@@ -3,12 +3,6 @@
 use std::path::Path;
 use std::process::{Command, Stdio};
 
-#[cfg(target_os = "linux")]
-fn failing_device() -> Stdio {
-    use std::fs::OpenOptions;
-    Stdio::from(OpenOptions::new().write(true).open("/dev/full").unwrap())
-}
-
 #[cfg(windows)]
 fn failing_device() -> Stdio {
     use std::os::windows::io::FromRawHandle;
@@ -48,12 +42,13 @@ fn failing_device() -> Stdio {
     }
 }
 
-#[cfg(all(unix, not(target_os = "linux")))]
+#[cfg(unix)]
 fn failing_device() -> Stdio {
     use std::os::fd::FromRawFd;
     let mut fds = [0i32; 2];
     unsafe {
-        assert_eq!(libc::pipe(fds.as_mut_ptr()), 0);
+        let ret = libc::pipe(fds.as_mut_ptr());
+        assert_eq!(ret, 0, "pipe creation failed");
         libc::close(fds[0]);
         Stdio::from_raw_fd(fds[1])
     }

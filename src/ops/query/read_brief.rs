@@ -146,10 +146,8 @@ fn render(
         if let Some(note) = document.body(entry.section) {
             report.text("note", note.to_string());
         }
-        if rendered {
-            let target = content.unwrap_or_default();
-            let span = verification.content_span.clone().unwrap_or_default();
-            report.text("content", target[span].to_string());
+        if let (Some(target), Some(span)) = (content, verification.content_span.as_ref()) {
+            report.text("content", target[span.clone()].to_string());
         }
     }
     if warn {

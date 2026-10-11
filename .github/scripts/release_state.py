@@ -314,16 +314,18 @@ def cmd_download(args) -> None:
 
 
 def cmd_download_public(args) -> None:
-    """Download the published release exactly as an anonymous user would.
+    """Download the published release as an external user would.
 
-    Reads no token at all: the release lookup and every asset download are
-    unauthenticated, redirect-following GETs of public URLs.
+    Uses GH_TOKEN or GITHUB_TOKEN if available for metadata lookup to avoid
+    API rate limits, while all asset downloads remain unauthenticated GETs.
     """
     tag = require_tag(args.tag)
     path = f"/repos/{_repo()}/releases/tags/{urllib.parse.quote(tag)}"
-    request = urllib.request.Request(
-        _base() + path, headers={"User-Agent": USER_AGENT, "Accept": "application/vnd.github+json"}
-    )
+    headers = {"User-Agent": USER_AGENT, "Accept": "application/vnd.github+json"}
+    token = os.environ.get("GH_TOKEN") or os.environ.get("GITHUB_TOKEN")
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    request = urllib.request.Request(_base() + path, headers=headers)
     try:
         with urllib.request.urlopen(request, timeout=120) as response:
             release = json.loads(response.read())

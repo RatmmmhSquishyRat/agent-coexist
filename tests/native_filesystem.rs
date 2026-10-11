@@ -3748,3 +3748,229 @@ fn malformed_ignore_state_scan_keeps_columns_and_write_commits() {
     );
     assert_eq!(fs::read(&ignore).unwrap(), ignore_bytes);
 }
+
+#[test]
+fn specification_diagnostics_coverage_unexercised_catalog_codes() {
+    let dir = tempfile::tempdir().unwrap();
+    let cwd = dir.path();
+
+    // 1. E-TARGET-MISSING: target file does not exist
+    let out = run(
+        cwd,
+        &["brief", "doc.agent-besties.md", "--target", "missing.md"],
+    );
+    assert_eq!(out.status.code(), Some(1), "{}", describe(&out));
+    let stdout = assert_first_line(&out, "error", "brief");
+    let reason = reason_row(&stdout).expect("reason row for E-TARGET-MISSING");
+    assert!(
+        reason.contains("does not exist; looked for"),
+        "expected E-TARGET-MISSING message, got: {reason}"
+    );
+
+    // 2. E-ENTRY-NOTFOUND: removing an entry that does not exist in the brief
+    fs::write(cwd.join("real.md"), b"content\n").unwrap();
+    let out = run(
+        cwd,
+        &[
+            "brief",
+            "doc.agent-besties.md",
+            "--target",
+            "real.md",
+            "--entry",
+            "real entry",
+        ],
+    );
+    assert!(out.status.success(), "{}", describe(&out));
+
+    let out = run(
+        cwd,
+        &[
+            "brief",
+            "doc.agent-besties.md",
+            "--entry",
+            "nonexistent entry",
+            "--remove",
+        ],
+    );
+    assert_eq!(out.status.code(), Some(1), "{}", describe(&out));
+    let stdout = assert_first_line(&out, "error", "brief");
+    let reason = reason_row(&stdout).expect("reason row for E-ENTRY-NOTFOUND");
+    assert!(
+        reason.contains("no entry titled \"nonexistent entry\""),
+        "expected E-ENTRY-NOTFOUND message, got: {reason}"
+    );
+
+    // E-ENTRY-NOTFOUND via read-brief
+    let out = run(
+        cwd,
+        &[
+            "read-brief",
+            "doc.agent-besties.md",
+            "--entry",
+            "nonexistent entry",
+        ],
+    );
+    assert_eq!(out.status.code(), Some(1), "{}", describe(&out));
+    let stdout = assert_first_line(&out, "error", "read-brief");
+    let reason = reason_row(&stdout).expect("reason row for E-ENTRY-NOTFOUND in read-brief");
+    assert_eq!(reason, "no entry titled \"nonexistent entry\"");
+
+    // 3. E-SECTION-NOTFOUND: removing a profile section that does not exist
+    let out = run(
+        cwd,
+        &[
+            "profile",
+            "agent.agent-besties.md",
+            "--section",
+            "role",
+            "-m",
+            "developer",
+        ],
+    );
+    assert!(out.status.success(), "{}", describe(&out));
+
+    let out = run(
+        cwd,
+        &[
+            "profile",
+            "agent.agent-besties.md",
+            "--section",
+            "nonexistent-section",
+            "--remove",
+        ],
+    );
+    assert_eq!(out.status.code(), Some(1), "{}", describe(&out));
+    let stdout = assert_first_line(&out, "error", "profile");
+    let reason = reason_row(&stdout).expect("reason row for E-SECTION-NOTFOUND");
+    assert!(
+        reason.contains("no section named \"nonexistent-section\""),
+        "expected E-SECTION-NOTFOUND message, got: {reason}"
+    );
+
+    // 4. E-STATE-NOTFOUND: removing a state entry when none exists for the nick
+    // 4a. Directory exists without a state file
+    let state_dir = cwd.join("state_dir");
+    fs::create_dir(&state_dir).unwrap();
+    let out = run(&state_dir, &["state", ".", "--remove", "bob"]);
+    assert_eq!(out.status.code(), Some(1), "{}", describe(&out));
+    let stdout = assert_first_line(&out, "error", "state");
+    let reason = reason_row(&stdout).expect("reason row for E-STATE-NOTFOUND");
+    assert!(
+        reason.contains("bob has no entry in"),
+        "expected E-STATE-NOTFOUND message, got: {reason}"
+    );
+
+    // 4b. State file exists with alice, but bob is not in it (RemovePlan::NotFound)
+    let out = run(
+        &state_dir,
+        &["state", ".", "--as", "alice", "--status", "idle"],
+    );
+    assert!(out.status.success(), "{}", describe(&out));
+
+    let out = run(&state_dir, &["state", ".", "--remove", "bob"]);
+    assert_eq!(out.status.code(), Some(1), "{}", describe(&out));
+    let stdout = assert_first_line(&out, "error", "state");
+    let reason =
+        reason_row(&stdout).expect("reason row for E-STATE-NOTFOUND with state file present");
+    assert!(
+        reason.contains("bob has no entry in"),
+        "expected E-STATE-NOTFOUND message, got: {reason}"
+    );
+
+    // 4c. Alice exists with idle, but removing under --status locked fails with E-STATE-NOTFOUND
+    let out = run(
+        &state_dir,
+        &["state", ".", "--remove", "alice", "--status", "locked"],
+    );
+    assert_eq!(out.status.code(), Some(1), "{}", describe(&out));
+    let stdout = assert_first_line(&out, "error", "state");
+    let reason =
+        reason_row(&stdout).expect("reason row for E-STATE-NOTFOUND with mismatched status");
+    assert!(
+        reason.contains("alice has no entry under status \"locked\" in"),
+        "expected status-aware E-STATE-NOTFOUND message, got: {reason}"
+    );
+
+    // 5. E-EDIT-AUTHOR: editing another author's comment
+    let out = run(
+        cwd,
+        &[
+            "post",
+            "standup.agent-besties.md",
+            "--as",
+            "alice",
+            "-m",
+            "alice's comment",
+        ],
+    );
+    assert!(out.status.success(), "{}", describe(&out));
+
+    let out = run(
+        cwd,
+        &[
+            "post",
+            "standup.agent-besties.md",
+            "--as",
+            "bob",
+            "--edit",
+            "1",
+            "-m",
+            "bob's attempt to overwrite",
+        ],
+    );
+    assert_eq!(out.status.code(), Some(1), "{}", describe(&out));
+    let stdout = assert_first_line(&out, "error", "post");
+    let reason = reason_row(&stdout).expect("reason row for E-EDIT-AUTHOR");
+    assert!(
+        reason.contains("comment #1 was written by alice, not bob"),
+        "expected E-EDIT-AUTHOR message, got: {reason}"
+    );
+
+    // 6. E-COMMENT-NOTFOUND: editing a non-existent comment index
+    let out = run(
+        cwd,
+        &[
+            "post",
+            "standup.agent-besties.md",
+            "--as",
+            "alice",
+            "--edit",
+            "99",
+            "-m",
+            "nonexistent comment",
+        ],
+    );
+    assert_eq!(out.status.code(), Some(1), "{}", describe(&out));
+    let stdout = assert_first_line(&out, "error", "post");
+    let reason = reason_row(&stdout).expect("reason row for E-COMMENT-NOTFOUND");
+    assert!(
+        reason.contains("comment #99 does not exist"),
+        "expected E-COMMENT-NOTFOUND message, got: {reason}"
+    );
+
+    // 7. E-SEQ-EXHAUSTED: comment numbering exhausted at u64::MAX - 1
+    let max_seq = u64::MAX - 1;
+    let post_content = format!(
+        "# thread.post\n\n## #{max_seq} alice (2026-09-17T10:00:00Z)\n\n```md\nfinal comment\n```\n"
+    );
+    fs::write(cwd.join("thread.agent-besties.md"), post_content.as_bytes()).unwrap();
+
+    let out = run(
+        cwd,
+        &[
+            "post",
+            "thread.agent-besties.md",
+            "--as",
+            "bob",
+            "-m",
+            "comment that would overflow",
+        ],
+    );
+    assert_eq!(out.status.code(), Some(1), "{}", describe(&out));
+    let stdout = assert_first_line(&out, "error", "post");
+    let reason = reason_row(&stdout).expect("reason row for E-SEQ-EXHAUSTED");
+    assert!(
+        reason.contains("comment numbering is exhausted"),
+        "expected E-SEQ-EXHAUSTED message, got: {reason}"
+    );
+}

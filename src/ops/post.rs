@@ -1285,4 +1285,204 @@ mod tests {
         );
         let _ = std::fs::remove_dir_all(&dir);
     }
+
+    #[test]
+    fn edit_comment_replaces_body_and_updates_header_in_place() {
+        let dir = scratch("edit-comment-in-place");
+        let target = dir.join("thread.agent-besties.md");
+        std::fs::write(
+            &target,
+            b"# thread.post\n\n## #1 alice (2026-09-25T10:00:00Z)\n\n```md\noriginal body\n```\n\n## #2 bob (2026-09-25T11:00:00Z)\n\n```md\nreply from bob\n```\n",
+        )
+        .unwrap();
+
+        let p = PostParams {
+            path: target.clone(),
+            nick: "alice".to_string(),
+            body: "revised body mentioning @bob and @#2".to_string(),
+            edit: Some(1),
+        };
+        let now = time::parse("2026-09-25T12:00:00Z").unwrap();
+        let mut ctx = test_ctx(now);
+        let report = run(&mut ctx, &p).unwrap();
+        assert_ne!(report.status, Status::Error);
+
+        assert_eq!(
+            field_lists(&report.rows, "comment"),
+            vec![vec![
+                "#1".to_string(),
+                "L3".to_string(),
+                "edited".to_string()
+            ]]
+        );
+        assert_eq!(
+            field_lists(&report.rows, "mentions"),
+            vec![vec!["bob".to_string()]]
+        );
+        assert_eq!(
+            field_lists(&report.rows, "reply-to"),
+            vec![vec!["#2".to_string()]]
+        );
+
+        let bytes = std::fs::read(&target).unwrap();
+        let parsed = doc::parse(bytes, &target, now).unwrap();
+        assert_eq!(parsed.post.comments.len(), 2);
+        let c1 = &parsed.post.comments[0];
+        assert_eq!(c1.seq, 1);
+        assert_eq!(c1.nick, "alice");
+        assert_eq!(time::format(c1.created), "2026-09-25T10:00:00Z");
+        assert_eq!(
+            c1.edited.map(time::format),
+            Some("2026-09-25T12:00:00Z".to_string())
+        );
+
+        let body1 = parsed.sections[c1.section].body.as_ref().unwrap();
+        assert_eq!(
+            &parsed.source[body1.content.clone()],
+            "revised body mentioning @bob and @#2"
+        );
+
+        let c2 = &parsed.post.comments[1];
+        assert_eq!(c2.seq, 2);
+        assert_eq!(c2.nick, "bob");
+        assert_eq!(c2.edited, None);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn edit_comment_without_prior_body_inserts_fence() {
+        let dir = scratch("edit-empty-body");
+        let target = dir.join("thread.agent-besties.md");
+        std::fs::write(
+            &target,
+            b"# thread.post\n\n## #1 alice (2026-09-25T10:00:00Z)\n",
+        )
+        .unwrap();
+
+        let p = PostParams {
+            path: target.clone(),
+            nick: "alice".to_string(),
+            body: "newly added body".to_string(),
+            edit: Some(1),
+        };
+        let now = time::parse("2026-09-25T13:00:00Z").unwrap();
+        let mut ctx = test_ctx(now);
+        let report = run(&mut ctx, &p).unwrap();
+        assert_ne!(report.status, Status::Error);
+
+        let bytes = std::fs::read(&target).unwrap();
+        let parsed = doc::parse(bytes, &target, now).unwrap();
+        assert_eq!(parsed.post.comments.len(), 1);
+        let c1 = &parsed.post.comments[0];
+        assert_eq!(
+            c1.edited.map(time::format),
+            Some("2026-09-25T13:00:00Z".to_string())
+        );
+        let body1 = parsed.sections[c1.section].body.as_ref().unwrap();
+        assert_eq!(&parsed.source[body1.content.clone()], "newly added body");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn edit_comment_replaces_prior_edit_header_and_body() {
+        let dir = scratch("edit-reedit");
+        let target = dir.join("thread.agent-besties.md");
+        std::fs::write(
+            &target,
+            b"# thread.post\n\n## #1 alice (2026-09-25T10:00:00Z, edited 2026-09-25T11:00:00Z)\n\n```md\nfirst revised body\n```\n",
+        )
+        .unwrap();
+
+        let p = PostParams {
+            path: target.clone(),
+            nick: "alice".to_string(),
+            body: "second revised body".to_string(),
+            edit: Some(1),
+        };
+        let now = time::parse("2026-09-25T14:00:00Z").unwrap();
+        let mut ctx = test_ctx(now);
+        let report = run(&mut ctx, &p).unwrap();
+        assert_ne!(report.status, Status::Error);
+
+        let bytes = std::fs::read(&target).unwrap();
+        let parsed = doc::parse(bytes, &target, now).unwrap();
+        assert_eq!(parsed.post.comments.len(), 1);
+        let c1 = &parsed.post.comments[0];
+        assert_eq!(c1.seq, 1);
+        assert_eq!(c1.nick, "alice");
+        assert_eq!(time::format(c1.created), "2026-09-25T10:00:00Z");
+        assert_eq!(
+            c1.edited.map(time::format),
+            Some("2026-09-25T14:00:00Z".to_string())
+        );
+
+        let head_line = &parsed.source[parsed.sections[c1.section].head.clone()];
+        assert_eq!(
+            head_line.trim_end(),
+            "## #1 alice (2026-09-25T10:00:00Z, edited 2026-09-25T14:00:00Z)"
+        );
+
+        let body1 = parsed.sections[c1.section].body.as_ref().unwrap();
+        assert_eq!(&parsed.source[body1.content.clone()], "second revised body");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn edit_rejects_unowned_comment_and_reports_edit_author() {
+        let dir = scratch("edit-unowned");
+        let target = dir.join("thread.agent-besties.md");
+        std::fs::write(
+            &target,
+            b"# thread.post\n\n## #1 alice (2026-09-25T10:00:00Z)\n\n```md\nalice's body\n```\n",
+        )
+        .unwrap();
+
+        let p = PostParams {
+            path: target.clone(),
+            nick: "bob".to_string(),
+            body: "bob trying to edit alice".to_string(),
+            edit: Some(1),
+        };
+        let now = time::parse("2026-09-25T12:00:00Z").unwrap();
+        let mut ctx = test_ctx(now);
+        let report = run(&mut ctx, &p).unwrap();
+        assert_eq!(report.status, Status::Error);
+        assert_eq!(report.command, "post");
+        let reasons = field_lists(&report.rows, "reason");
+        assert_eq!(reasons.len(), 1);
+        assert!(reasons[0][0].contains("comment #1 was written by alice, not bob"));
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn edit_rejects_nonexistent_comment_and_reports_comment_notfound() {
+        let dir = scratch("edit-notfound");
+        let target = dir.join("thread.agent-besties.md");
+        std::fs::write(
+            &target,
+            b"# thread.post\n\n## #1 alice (2026-09-25T10:00:00Z)\n\n```md\nbody\n```\n",
+        )
+        .unwrap();
+
+        let p = PostParams {
+            path: target.clone(),
+            nick: "alice".to_string(),
+            body: "editing comment 42".to_string(),
+            edit: Some(42),
+        };
+        let now = time::parse("2026-09-25T12:00:00Z").unwrap();
+        let mut ctx = test_ctx(now);
+        let report = run(&mut ctx, &p).unwrap();
+        assert_eq!(report.status, Status::Error);
+        assert_eq!(report.command, "post");
+        let reasons = field_lists(&report.rows, "reason");
+        assert_eq!(reasons.len(), 1);
+        assert!(reasons[0][0].contains("comment #42 does not exist"));
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }

@@ -582,6 +582,43 @@ fn wait_hit_reports_state_conflict_and_deletion_drops_it() {
 }
 
 #[test]
+fn expired_lease_does_not_conflict_with_new_lock_on_change() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("state.agent-besties.md");
+    // Alice had a lease that expired in the past.
+    write_file(
+        &path,
+        &doc(&[
+            "# .state",
+            "",
+            "## locked",
+            "",
+            "alice 2020-01-01T00:00:00Z..2020-01-01T01:00:00Z",
+        ]),
+    );
+    let waiting = spawn(&path, Filter::Any);
+    waiting.wait_ready();
+    // Bob adds a current active lock.
+    write_file(
+        &path,
+        &doc(&[
+            "# .state",
+            "",
+            "## locked",
+            "",
+            "alice 2020-01-01T00:00:00Z..2020-01-01T01:00:00Z",
+            "bob 2020-01-01T00:00:00Z..2030-01-01T00:00:00Z",
+        ]),
+    );
+    let hit = waiting.expect_hit("bob locks state while alice lease is expired");
+    assert!(
+        !diagnostic_ids(&hit).contains(&"W-STATE-CONFLICT"),
+        "expired lease must not trigger W-STATE-CONFLICT against active lock, ids={:?}",
+        diagnostic_ids(&hit)
+    );
+}
+
+#[test]
 fn state_deletion_without_selected_status_only_advances_to_absent() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("state.agent-besties.md");

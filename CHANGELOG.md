@@ -5,6 +5,11 @@ All notable changes to this project are documented here. The format follows
 [SemVer](https://semver.org/spec/2.0.0.html).
 ## [Unreleased]
 
+### Added
+
+- Automated Dependabot tracking for GitHub Actions dependencies (`.github/dependabot.yml`).
+- Exhaustive test coverage for 7 specification diagnostics (`E-TARGET-MISSING`, `E-ENTRY-NOTFOUND`, `E-SECTION-NOTFOUND`, `E-STATE-NOTFOUND`, `E-EDIT-AUTHOR`, `E-COMMENT-NOTFOUND`, `E-SEQ-EXHAUSTED`) and `post --edit` in-place replacement unit tests.
+
 ### Changed
 
 - Modernized public README to elevate `cargo install agent-coexist --locked` as the primary installation path, added live crates.io and CI badges, and streamlined prebuilt binary instructions.
@@ -17,6 +22,13 @@ All notable changes to this project are documented here. The format follows
 - Added explicit job timeouts (`timeout-minutes`) across `ci.yml`, `release.yml`, and `weekly.yml` GitHub workflows.
 - Eliminated Linux-only gating in `tests/output_delivery.rs` using a portable broken-pipe mechanism so output delivery error handling is natively verified on Windows and macOS.
 - Unblocked Windows concurrency execution in `tests/write_clock.rs` by replacing raw Unix `flock` with portable shared locking and preserving Windows system environment variables.
+- Dynamic wall-clock refresh in `wait::run`: sample `time::now()?` on byte changes so lease expirations and conflict evaluations reflect real wall-clock time instead of frozen startup timestamps.
+- Enforced `NO_DEFENSE_CODE_RULE` in `src/ops/query/read_brief.rs` by replacing defensive `.unwrap_or_default()` with explicit pattern matching.
+- Prevented monotonic clock arithmetic overflow in `src/wait.rs` by using checked elapsed duration subtraction.
+- Authenticated GitHub REST API metadata lookups in `release_state.py` with `GH_TOKEN`/`GITHUB_TOKEN` to prevent rate-limiting failures on shared CI runners.
+- Unified Unix broken-pipe testing in `tests/output_delivery.rs` under `#[cfg(unix)]` using closed `libc::pipe` descriptors.
+- Added secret token patterns (`crate_token.txt`, `*token*.txt`, `*.token`) to `.gitignore`.
+- Documented internal ACID rollback verification invariant for `CommitFile` in `src/fsx/commit.rs`.
 
 ## [0.3.0] - 2026-10-11
 

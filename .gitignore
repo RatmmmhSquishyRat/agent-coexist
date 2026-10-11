@@ -2,3 +2,10 @@ target/
 **/target/
 /dist/
 __pycache__/
+
+# Local secrets
+.env
+.env.*
+*token*.txt
+*.token
+crate_token.txt
