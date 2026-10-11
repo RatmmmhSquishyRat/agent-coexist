@@ -49,6 +49,7 @@ run-name: >-
 jobs:
   guard:
     name: Guard (source, version, changelog, reuse)
+    timeout-minutes: 10
     runs-on: ubuntu-24.04
     outputs:
       version: ${{ steps.guard.outputs.version }}
@@ -88,6 +89,7 @@ jobs:
 
   build:
     name: Build ${{ matrix.target }}
+    timeout-minutes: 30
     needs: [guard, ci]
     # Skipped only for verified same-tag reuse; assemble stays reachable.
     if: ${{ needs.guard.result == 'success' && needs.ci.result == 'success' && needs.guard.outputs.reusable != 'true' }}
@@ -192,6 +194,7 @@ jobs:
 
   assemble:
     name: Assemble and verify cohort
+    timeout-minutes: 15
     needs: [guard, ci, build]
     # Reachable after successful builds and when builds were skipped for
     # verified same-tag reuse; unreachable after any real failure.
@@ -260,6 +263,7 @@ jobs:
 
   stage:
     name: Stage draft release
+    timeout-minutes: 15
     needs: [guard, assemble]
     if: ${{ !cancelled() && needs.guard.result == 'success' && needs.assemble.result == 'success' && needs.guard.outputs.dry_run != 'true' }}
     runs-on: ubuntu-24.04
@@ -294,6 +298,7 @@ jobs:
 
   publish:
     name: Publish to crates.io
+    timeout-minutes: 15
     needs: [guard, stage]
     if: ${{ !cancelled() && needs.stage.result == 'success' }}
     runs-on: ubuntu-24.04
@@ -355,6 +360,7 @@ jobs:
 
   finalize:
     name: Verify and publish release
+    timeout-minutes: 15
     needs: [guard, stage, publish]
     if: ${{ !cancelled() && needs.guard.result == 'success' && needs.stage.result == 'success' && needs.publish.result == 'success' && needs.guard.outputs.dry_run != 'true' }}
     runs-on: ubuntu-24.04

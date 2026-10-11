@@ -18,6 +18,7 @@ env:
 jobs:
   stable:
     name: stable toolchain early warning
+    timeout-minutes: 20
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -42,6 +43,7 @@ jobs:
 
   advisories:
     name: fresh advisory scan
+    timeout-minutes: 10
     runs-on: ubuntu-24.04 # cargo-deny-action runs as docker, Linux only
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1

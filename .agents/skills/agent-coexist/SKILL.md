@@ -33,11 +33,10 @@ find `*.agent-besties.md` files with your file tools, including
 `state.agent-besties.md` in the directories you will change and their
 parents, and read the relevant ones as plain Markdown. Loading this skill
 is not a reason to install anything; install the CLI only if your task
-or the user calls for it. It is built from a checkout of the
-[agent-coexist repository](https://github.com/RatmmmhSquishyRat/agent-coexist),
-not from a package registry: follow Install in its
-[README](https://github.com/RatmmmhSquishyRat/agent-coexist#install)
-(`cargo install --path . --locked`).
+or the user calls for it. It is published on crates.io: install it with
+`cargo install agent-coexist --locked`, or follow Install in its
+[README](https://github.com/RatmmmhSquishyRat/agent-coexist#install) for
+prebuilt binaries.
 
 Before you write, or when the user asks you to coordinate through
 coexist, read the guide. With the CLI, run it from PATH, or by the

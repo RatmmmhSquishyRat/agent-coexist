@@ -107,7 +107,6 @@ fn fixed_state_clock_preserves_duration_and_rejects_overflow_before_creation() {
     assert!(!empty.path().join("state.agent-besties.md").exists());
 }
 
-#[cfg(unix)]
 mod queued {
     use super::*;
     use agent_coexist::fsx::walk::Options;
@@ -115,7 +114,6 @@ mod queued {
         self, Ctx, PostParams, ReadNotificationParams, StateDeclare, StateParams,
     };
     use agent_coexist::report::{Report, Row, Status};
-    use std::os::fd::AsRawFd;
     use std::thread;
     use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -139,12 +137,17 @@ mod queued {
         // inherited by cargo test, without changing the test runner's env.
         const CHILD: &str = "AGENT_COEXIST_WRITE_CLOCK_TEST_CHILD";
         if std::env::var_os(CHILD).as_deref() != Some(std::ffi::OsStr::new(test)) {
-            let output = Command::new(std::env::current_exe().unwrap())
-                .env_clear()
+            let mut cmd = Command::new(std::env::current_exe().unwrap());
+            cmd.env_clear()
                 .env(CHILD, test)
-                .args(["--exact", test, "--nocapture"])
-                .output()
-                .unwrap();
+                .args(["--exact", test, "--nocapture"]);
+            #[cfg(windows)]
+            for var in ["SystemRoot", "SYSTEMROOT", "windir", "TMP", "TEMP"] {
+                if let Some(val) = std::env::var_os(var) {
+                    cmd.env(var, val);
+                }
+            }
+            let output = cmd.output().unwrap();
             success(&output);
             return true;
         }
@@ -160,10 +163,7 @@ mod queued {
         let target = dir.path().join("thread.agent-besties.md");
         fs::write(&target, "# thread.post\n").unwrap();
         let held = fs::File::open(&target).unwrap();
-        unsafe extern "C" {
-            fn flock(fd: i32, operation: i32) -> i32;
-        }
-        assert_eq!(unsafe { flock(held.as_raw_fd(), 1) }, 0, "shared flock");
+        held.try_lock_shared().unwrap();
 
         // Construct the same context as the CLI before handing it to the
         // writer thread: startup clock capture has definitely finished.

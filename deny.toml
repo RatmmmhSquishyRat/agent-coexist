@@ -32,3 +32,17 @@ allow = [
     "Apache-2.0",
     "Unicode-3.0",
 ]
+
+[bans]
+multiple-versions = "deny"
+wildcards = "deny"
+
+[[bans.skip]]
+name = "syn"
+version = "=2.0.119"
+reason = "windows-core on Windows targets requires syn v2 while clap_derive uses syn v3"
+
+[sources]
+unknown-registries = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]

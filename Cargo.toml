@@ -16,8 +16,6 @@ include = [
     "/Cargo.lock",
     "/LICENSE",
     "/README.md",
-    "/rust-toolchain.toml",
-    "/.cargo/config.toml",
 ]
 
 [dependencies]
@@ -40,7 +38,6 @@ regex-automata = { version = "0.4.18", default-features = false, features = [
 ] }
 same-file = "1.0.6"
 sha2 = "0.10"
-thiserror = "1.0"
 walkdir = "2.4.0"
 
 [target.'cfg(unix)'.dependencies]
@@ -59,6 +56,12 @@ tempfile = "3.20"
 pkg-url = "{ repo }/releases/download/v{ version }/agent-coexist-{ target }.tar.gz"
 bin-dir = "{ bin }{ binary-ext }"
 pkg-fmt = "tgz"
+
+[package.metadata.binstall.overrides.x86_64-unknown-linux-gnu]
+pkg-url = "{ repo }/releases/download/v{ version }/agent-coexist-x86_64-unknown-linux-musl.tar.gz"
+
+[package.metadata.binstall.overrides.aarch64-unknown-linux-gnu]
+pkg-url = "{ repo }/releases/download/v{ version }/agent-coexist-aarch64-unknown-linux-musl.tar.gz"
 
 [package.metadata.binstall.overrides.x86_64-pc-windows-msvc]
 pkg-url = "{ repo }/releases/download/v{ version }/agent-coexist-{ target }.zip"
