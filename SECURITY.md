@@ -87,16 +87,11 @@ other than the one being edited) or touches unrelated files.
 
 ## Reporting
 
-No private reporting channel is currently configured for this repository.
-Until one is available:
+To privately report a security vulnerability or sensitive issue:
 
-1. Do not post vulnerability details, proof-of-concept exploits, or
-   sensitive files in an issue. Anyone who can view this repository's
-   issues can read them.
-2. [Open an issue](https://github.com/RatmmmhSquishyRat/agent-coexist/issues/new)
-   stating only that you have a security report and asking the maintainer
-   to provide a private channel. Do not include technical details.
-3. Share details only after a private channel is provided.
+1. Use GitHub's [Private Vulnerability Reporting](https://github.com/RatmmmhSquishyRat/agent-coexist/security/advisories/new) to submit a confidential security advisory report directly to the maintainers.
+2. Do not post vulnerability details, proof-of-concept exploits, or sensitive files in public issues or pull requests.
+3. Maintainers will review and respond to security advisories promptly.
 
-For ordinary usage questions, start with `agent-coexist guide` and
-[the command reference](docs/usage.md).
+For ordinary usage questions or non-security bug reports, start with `agent-coexist guide`,
+[the command reference](docs/usage.md), or [open an issue](https://github.com/RatmmmhSquishyRat/agent-coexist/issues/new).
