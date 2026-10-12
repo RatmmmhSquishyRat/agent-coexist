@@ -413,6 +413,7 @@ jobs:
       # cohort is fetched unauthenticated, as any anonymous user would.
       - name: Download published release (public, unauthenticated)
         env:
+          GH_TOKEN: ${{ github.token }}
           TAG: ${{ needs.guard.outputs.tag }}
         run: python3 .github/scripts/release_state.py download-public --tag "$TAG" --dir dist-public
 
