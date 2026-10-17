@@ -886,7 +886,7 @@ mod tests {
     #[test]
     fn create_rejects_invalid_stem_without_leaving_a_trace() {
         let dir = scratch("ename");
-        let target = dir.join("bad/stem!.agent-besties.md");
+        let target = dir.join("bad/stem!.agent-coexist.md");
         let p = BriefParams {
             path: target.clone(),
             as_nick: None,
@@ -905,8 +905,8 @@ mod tests {
     #[test]
     fn flock_refusal_cleans_brief_creation() {
         let dir = scratch("flock-clean");
-        std::fs::write(dir.join("state.agent-besties.md"), LOCKED_BY_OTHER).unwrap();
-        let target = dir.join("sub/plan.agent-besties.md");
+        std::fs::write(dir.join("state.agent-coexist.md"), LOCKED_BY_OTHER).unwrap();
+        let target = dir.join("sub/plan.agent-coexist.md");
         let p = BriefParams {
             path: target.clone(),
             as_nick: Some("me".to_string()),
@@ -960,7 +960,7 @@ mod tests {
     #[test]
     fn default_title_repairs_pathless_entry_and_replaces_existing_props() {
         let dir = scratch("pathless-repair");
-        let brief = dir.join("plan.agent-besties.md");
+        let brief = dir.join("plan.agent-coexist.md");
         let foo = dir.join("foo.rs");
         std::fs::write(&foo, b"hello\n").unwrap();
         std::fs::write(
@@ -1007,7 +1007,7 @@ mod tests {
     #[test]
     fn default_title_keeps_regex_when_flag_absent() {
         let dir = scratch("pathless-keep-re");
-        let brief = dir.join("plan.agent-besties.md");
+        let brief = dir.join("plan.agent-coexist.md");
         let foo = dir.join("foo.rs");
         std::fs::write(&foo, b"hello\n").unwrap();
         std::fs::write(
@@ -1033,7 +1033,7 @@ mod tests {
     #[test]
     fn default_title_rejects_a_different_existing_target() {
         let dir = scratch("title-taken");
-        let brief = dir.join("plan.agent-besties.md");
+        let brief = dir.join("plan.agent-coexist.md");
         let foo = dir.join("foo.rs");
         std::fs::write(&foo, b"hello\n").unwrap();
         let original = "# plan.brief\n\n> paths below are relative to this file's directory; hashes are SHA-256 of the target's bytes.\n\n## foo.rs\n\n- path: other.rs\n- hash: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855\n";
@@ -1053,7 +1053,7 @@ mod tests {
     #[test]
     fn unterminated_last_property_keeps_composed_path_hash_regex_lines() {
         let dir = scratch("prop-insert-eof");
-        let brief = dir.join("plan.agent-besties.md");
+        let brief = dir.join("plan.agent-coexist.md");
         let target = dir.join("empty.txt");
         std::fs::write(&target, b"").unwrap();
         std::fs::write(
@@ -1103,7 +1103,7 @@ mod tests {
         std::fs::write(&other, b"other body\n").unwrap();
         let sha = hash::read_target(&target).unwrap().sha256;
         let sha_other = hash::read_target(&other).unwrap().sha256;
-        let brief = dir.join("plan.agent-besties.md");
+        let brief = dir.join("plan.agent-coexist.md");
         let original = format!(
             "# plan.brief\n\n> paths below are relative to this file's directory; hashes are SHA-256 of the target's bytes.\n\n## item\n\n- path: target.txt\n- extra: keep-me\n- hash: {sha}\n- regex: first-never-matches\n- regex: second-never-matches\n\n```md\nkeep-note\n```\n\n## other\n\n- path: other.txt\n- hash: {sha_other}\n- regex: other\n"
         );
@@ -1150,7 +1150,7 @@ mod tests {
     #[test]
     fn refresh_without_entries_reports_unchanged_and_writes_nothing() {
         let dir = scratch("refresh-empty");
-        let brief = dir.join("plan.agent-besties.md");
+        let brief = dir.join("plan.agent-coexist.md");
         let original = "# plan.brief\n\n> paths below are relative to this file's directory; hashes are SHA-256 of the target's bytes.\n";
         std::fs::write(&brief, original).unwrap();
         let mut ctx = test_ctx(time::parse(NOW).unwrap());
@@ -1180,7 +1180,7 @@ mod tests {
     #[test]
     fn refresh_with_current_hash_reports_unchanged_until_the_target_changes() {
         let dir = scratch("refresh-current");
-        let brief = dir.join("plan.agent-besties.md");
+        let brief = dir.join("plan.agent-coexist.md");
         let target = dir.join("a.rs");
         std::fs::write(&target, b"one\n").unwrap();
         let sha = hash::read_target(&target).unwrap().sha256;

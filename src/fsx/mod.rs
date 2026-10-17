@@ -1,7 +1,7 @@
 //! Managed-file lifecycle: locked reads and locked splice writes.
 //!
 //! This module is the single place that talks to the filesystem for
-//! collaboration files (`*.agent-besties.md`). It implements the lock
+//! collaboration files (`*.agent-coexist.md`). It implements the lock
 //! protocol of spec §10.2:
 //!
 //! * reads: open a regular file (read-only) → shared lock → read all bytes
@@ -786,7 +786,7 @@ fn is_current_created_dir(dir: &CreatedDir) -> Result<bool, Fault> {
 /// `path` with its final component spelled as the directory lists it.
 ///
 /// On Windows and macOS an operand such as `ROOM/STANDUP` opens
-/// `room/standup.agent-besties.md`; the file name that `list` shows and
+/// `room/standup.agent-coexist.md`; the file name that `list` shows and
 /// that `W-NAME` compares is the entry's own spelling, not the typed one.
 /// One native lookup of the final component (Windows `FindFirstFileW`,
 /// macOS `getattrlist(ATTR_CMN_NAME)`), neither of which follows a final
@@ -1243,7 +1243,7 @@ mod tests {
     #[test]
     fn mutate_creates_file_and_parents() {
         let dir = scratch("create");
-        let target = dir.join("a/b/notes.agent-besties.md");
+        let target = dir.join("a/b/notes.agent-coexist.md");
         let res = mutate(&target, policy(200, true, true), |bytes, initial| {
             assert!(bytes.is_empty());
             assert!(initial);
@@ -1262,7 +1262,7 @@ mod tests {
     #[test]
     fn mutate_missing_without_create_reports_file_missing() {
         let dir = scratch("missing");
-        let target = dir.join("none.agent-besties.md");
+        let target = dir.join("none.agent-coexist.md");
         let err = mutate(
             &target,
             policy(0, false, false),
@@ -1286,7 +1286,7 @@ mod tests {
         const CHILD_DIR: &str = "COEXIST_FSX_DANGLING_SYMLINK_CHILD_DIR";
         if let Some(dir) = std::env::var_os(CHILD_DIR) {
             let dir = PathBuf::from(dir);
-            let target = dir.join("x.agent-besties.md");
+            let target = dir.join("x.agent-coexist.md");
             // Zero budget exercises fastfail; a practically unlimited budget
             // must still stop at the lifecycle retry cap, not spin forever.
             for wait_ms in [0, u64::MAX] {
@@ -1307,8 +1307,8 @@ mod tests {
         }
 
         let dir = scratch("dangling-symlink");
-        let target = dir.join("x.agent-besties.md");
-        let referent = Path::new("missing.agent-besties.md");
+        let target = dir.join("x.agent-coexist.md");
+        let referent = Path::new("missing.agent-coexist.md");
         #[cfg(unix)]
         std::os::unix::fs::symlink(referent, &target).unwrap();
         #[cfg(windows)]
@@ -1358,7 +1358,7 @@ mod tests {
     #[test]
     fn mutate_splices_existing_content() {
         let dir = scratch("splice");
-        let target = dir.join("x.agent-besties.md");
+        let target = dir.join("x.agent-coexist.md");
         std::fs::write(&target, b"old-bytes").unwrap();
         let res = mutate(&target, policy(200, true, true), |bytes, initial| {
             assert_eq!(bytes, b"old-bytes");
@@ -1375,7 +1375,7 @@ mod tests {
     #[test]
     fn mutate_shorter_write_removes_old_tail() {
         let dir = scratch("shorter");
-        let target = dir.join("x.agent-besties.md");
+        let target = dir.join("x.agent-coexist.md");
         std::fs::write(&target, b"0123456789").unwrap();
         mutate(&target, policy(200, false, false), |_, _| {
             Ok((Mutation::Write(b"abc".to_vec()), ()))
@@ -1389,7 +1389,7 @@ mod tests {
     #[test]
     fn mutate_delete_removes_file_under_lock() {
         let dir = scratch("delete");
-        let target = dir.join("x.agent-besties.md");
+        let target = dir.join("x.agent-coexist.md");
         std::fs::write(&target, b"# .state\n").unwrap();
         let res = mutate(&target, policy(200, false, false), |_, _| {
             Ok((Mutation::Delete, ()))
@@ -1406,7 +1406,7 @@ mod tests {
     fn mutate_delete_preserves_unlink_permission_error_and_bytes() {
         use std::os::unix::fs::PermissionsExt;
         let dir = scratch("delete-permission");
-        let target = dir.join("x.agent-besties.md");
+        let target = dir.join("x.agent-coexist.md");
         let original =
             b"# .state\n\n## locked\n\nalice 2026-09-25T11:00:00Z..2026-09-25T13:00:00Z\n";
         std::fs::write(&target, original).unwrap();
@@ -1449,7 +1449,7 @@ mod tests {
     #[test]
     fn mutate_plan_failure_cleans_up_own_creation() {
         let dir = scratch("cleanup");
-        let target = dir.join("a/b/x.agent-besties.md");
+        let target = dir.join("a/b/x.agent-coexist.md");
         let err = mutate(
             &target,
             policy(200, true, true),
@@ -1469,7 +1469,7 @@ mod tests {
     #[test]
     fn mutate_empty_existing_file_without_create_reports_eh1() {
         let dir = scratch("empty-no-create");
-        let target = dir.join("x.agent-besties.md");
+        let target = dir.join("x.agent-coexist.md");
         std::fs::write(&target, b"").unwrap();
         let err = mutate(
             &target,
@@ -1493,7 +1493,7 @@ mod tests {
     #[test]
     fn mutate_takes_over_abandoned_empty_file_at_deadline() {
         let dir = scratch("takeover");
-        let target = dir.join("x.agent-besties.md");
+        let target = dir.join("x.agent-coexist.md");
         std::fs::write(&target, b"").unwrap();
         let res = mutate(&target, policy(0, true, true), |bytes, initial| {
             assert!(bytes.is_empty());
@@ -1509,7 +1509,7 @@ mod tests {
     #[test]
     fn read_returns_bytes_and_reports_busy_as_elocked() {
         let dir = scratch("read");
-        let target = dir.join("x.agent-besties.md");
+        let target = dir.join("x.agent-coexist.md");
         std::fs::write(&target, b"payload").unwrap();
         assert_eq!(read(&target, 100, None).unwrap(), b"payload");
 
@@ -1548,7 +1548,7 @@ mod tests {
         const CHILD_DIR: &str = "COEXIST_FSX_FIFO_CHILD_DIR";
         if let Some(dir) = std::env::var_os(CHILD_DIR) {
             let dir = PathBuf::from(dir);
-            let target = dir.join("pipe.agent-besties.md");
+            let target = dir.join("pipe.agent-coexist.md");
             // No writer is ever opened. Each public read boundary must reject
             // the object, not block or return a successful empty snapshot.
             for fault in [
@@ -1571,7 +1571,7 @@ mod tests {
 
             // A successful initial open is not enough: rollback reopens the
             // path for identity after the plan can replace it with a FIFO.
-            let replaced = dir.join("created/notes.agent-besties.md");
+            let replaced = dir.join("created/notes.agent-coexist.md");
             let fault = mutate::<()>(&replaced, policy(0, true, true), |_, _| {
                 std::fs::remove_file(&replaced).unwrap();
                 make_fifo(&replaced);
@@ -1597,7 +1597,7 @@ mod tests {
         }
 
         let dir = scratch("fifo-reads");
-        let target = dir.join("pipe.agent-besties.md");
+        let target = dir.join("pipe.agent-coexist.md");
         make_fifo(&target);
         // Keep a historical blocking open from stranding the test runner.
         let mut child = std::process::Command::new(std::env::current_exe().unwrap())
@@ -1639,7 +1639,7 @@ mod tests {
     #[test]
     fn read_missing_file_is_real_io_not_busy() {
         let dir = scratch("read-missing");
-        let target = dir.join("none.agent-besties.md");
+        let target = dir.join("none.agent-coexist.md");
         let err = read(&target, 0, None).unwrap_err();
         match err {
             Fault::Io { action, source, .. } => {
@@ -1654,7 +1654,7 @@ mod tests {
     #[test]
     fn mutate_plan_failure_never_deletes_replacement_file() {
         let dir = scratch("rollback-replaced");
-        let target = dir.join("x.agent-besties.md");
+        let target = dir.join("x.agent-coexist.md");
         let err = mutate::<()>(&target, policy(200, true, false), |_, _| {
             // A non-cooperating writer replaces the path while we hold
             // the lock on the original: rename foreign content over the
@@ -1679,7 +1679,7 @@ mod tests {
     fn successful_plan_refuses_replacement_before_write_or_delete() {
         for delete in [false, true] {
             let dir = scratch("successful-plan-replaced");
-            let target = dir.join("x.agent-besties.md");
+            let target = dir.join("x.agent-coexist.md");
             let detached = dir.join("detached.tmp");
             std::fs::write(&target, b"original").unwrap();
             let err = mutate(&target, policy(0, false, false), |_, _| {
@@ -1703,7 +1703,7 @@ mod tests {
     #[test]
     fn successful_plan_refuses_missing_path_before_write() {
         let dir = scratch("successful-plan-missing");
-        let target = dir.join("x.agent-besties.md");
+        let target = dir.join("x.agent-coexist.md");
         let detached = dir.join("detached.tmp");
         std::fs::write(&target, b"original").unwrap();
         let err = mutate(&target, policy(0, false, false), |_, _| {
@@ -1720,7 +1720,7 @@ mod tests {
     #[test]
     fn mutate_plan_failure_keeps_occupied_created_dir() {
         let dir = scratch("rollback-occupied");
-        let target = dir.join("a/b/x.agent-besties.md");
+        let target = dir.join("a/b/x.agent-coexist.md");
         let err = mutate::<()>(&target, policy(200, true, true), |_, _| {
             // Foreign content lands in a directory this call created:
             // cleanup must keep the directory — only still-empty
@@ -1744,7 +1744,7 @@ mod tests {
     #[test]
     fn directory_cleanup_preserves_foreign_empty_replacement() {
         let dir = scratch("rollback-replaced-dir");
-        let target = dir.join("a/x.agent-besties.md");
+        let target = dir.join("a/x.agent-coexist.md");
         let mut created_dirs = Vec::new();
         ensure_parents(&target, &mut created_dirs).unwrap();
         std::fs::rename(dir.join("a"), dir.join("moved")).unwrap();
@@ -1758,7 +1758,7 @@ mod tests {
     #[test]
     fn first_write_failure_cleans_verified_empty_creation() {
         let dir = scratch("rollback-first-write");
-        let target = dir.join("a/b/x.agent-besties.md");
+        let target = dir.join("a/b/x.agent-coexist.md");
         let mut created_dirs = Vec::new();
         ensure_parents(&target, &mut created_dirs).unwrap();
         let creator = OpenOptions::new()
@@ -1796,7 +1796,7 @@ mod tests {
     #[test]
     fn failed_write_cleanup_preserves_partial_bytes_and_directories() {
         let dir = scratch("rollback-partial-write");
-        let target = dir.join("a/b/x.agent-besties.md");
+        let target = dir.join("a/b/x.agent-coexist.md");
         let mut created_dirs = Vec::new();
         ensure_parents(&target, &mut created_dirs).unwrap();
         let creator = OpenOptions::new()
@@ -1829,7 +1829,7 @@ mod tests {
     #[test]
     fn mutate_oversize_result_rolls_back_creation() {
         let dir = scratch("rollback-toolarge");
-        let target = dir.join("a/b/x.agent-besties.md");
+        let target = dir.join("a/b/x.agent-coexist.md");
         let err = mutate(
             &target,
             policy(200, true, true),
@@ -1880,7 +1880,7 @@ mod tests {
                 matches!(fault, Fault::Io { action: "write", source, .. }
                     if source.kind() == io::ErrorKind::FileTooLarge)
             };
-            let target = dir.join("x.agent-besties.md");
+            let target = dir.join("x.agent-coexist.md");
             let original = std::fs::read(&target).unwrap();
             for change_inside in [false, true] {
                 let fault = mutate::<()>(&target, policy(0, false, false), |bytes, _| {
@@ -1895,7 +1895,7 @@ mod tests {
                 assert!(is_limit(&fault), "{fault:?}");
                 assert_eq!(std::fs::read(&target).unwrap(), original);
             }
-            let created = dir.join("a/b/new.agent-besties.md");
+            let created = dir.join("a/b/new.agent-coexist.md");
             let fault = mutate::<()>(&created, policy(0, true, true), |_, _| {
                 Ok((Mutation::Write(vec![b'c'; 5000]), ()))
             })
@@ -1907,7 +1907,7 @@ mod tests {
         }
 
         let dir = scratch("fsize-limit");
-        let target = dir.join("x.agent-besties.md");
+        let target = dir.join("x.agent-coexist.md");
         let original = b"# x.post\n\n## #1 alice (2026-09-17T09:12:00Z)\n\n```md\nhi\n```\n";
         std::fs::write(&target, original).unwrap();
         let output = std::process::Command::new(std::env::current_exe().unwrap())
@@ -1938,7 +1938,7 @@ mod tests {
     #[test]
     fn read_stable_optional_distinguishes_absent_zero_and_present() {
         let dir = scratch("stable");
-        let target = dir.join("x.agent-besties.md");
+        let target = dir.join("x.agent-coexist.md");
         // Absent with a valid parent -> None, file not created.
         assert!(read_stable_optional(&target, None).unwrap().is_none());
         assert!(!target.exists());
@@ -1955,7 +1955,7 @@ mod tests {
             Some(b"body".to_vec())
         );
         // Parent gone -> error, not None.
-        let nested = dir.join("gone/x.agent-besties.md");
+        let nested = dir.join("gone/x.agent-coexist.md");
         std::fs::create_dir(dir.join("gone")).unwrap();
         std::fs::write(&nested, b"body").unwrap();
         std::fs::remove_file(&nested).unwrap();
@@ -1977,8 +1977,8 @@ mod tests {
         use std::os::windows::fs::symlink_file;
 
         let dir = scratch("stable-dangling");
-        let target = dir.join("notes.agent-besties.md");
-        let referent = dir.join("ordinary.agent-besties.md");
+        let target = dir.join("notes.agent-coexist.md");
+        let referent = dir.join("ordinary.agent-coexist.md");
         let bytes = b"# notes.post\n";
         std::fs::write(&target, bytes).unwrap();
         assert_eq!(
@@ -1989,7 +1989,7 @@ mod tests {
         // Following a symlink to an ordinary file remains supported by all
         // three read entry points; rejecting every symlink is not the fix.
         std::fs::rename(&target, &referent).unwrap();
-        if let Err(error) = symlink_file("ordinary.agent-besties.md", &target) {
+        if let Err(error) = symlink_file("ordinary.agent-coexist.md", &target) {
             #[cfg(windows)]
             if error.raw_os_error() == Some(1314) {
                 std::fs::remove_dir_all(&dir).unwrap();
@@ -2011,14 +2011,14 @@ mod tests {
         );
 
         std::fs::remove_file(&target).unwrap();
-        symlink_file("missing.agent-besties.md", &target).unwrap();
+        symlink_file("missing.agent-coexist.md", &target).unwrap();
         assert!(matches!(
             read_stable_optional(&target, None),
             Err(Fault::Io { source, .. }) if source.kind() == io::ErrorKind::NotFound
         ));
         assert_eq!(
             std::fs::read_link(&target).unwrap(),
-            Path::new("missing.agent-besties.md")
+            Path::new("missing.agent-coexist.md")
         );
         assert_eq!(std::fs::read(&referent).unwrap(), bytes);
 
@@ -2034,7 +2034,7 @@ mod tests {
         // Duration` would overflow-panic (notably on Windows), the
         // elapsed/remaining accounting must not.
         let dir = scratch("huge-budget");
-        let target = dir.join("x.agent-besties.md");
+        let target = dir.join("x.agent-coexist.md");
         std::fs::write(&target, b"payload").unwrap();
         assert_eq!(read(&target, u64::MAX, None).unwrap(), b"payload");
         let res = mutate(&target, policy(u64::MAX, false, false), |bytes, initial| {
@@ -2053,7 +2053,7 @@ mod tests {
     fn cleanup_failure_surfaces_instead_of_the_plan_fault() {
         use std::os::unix::fs::PermissionsExt;
         let dir = scratch("cleanup-visible");
-        let target = dir.join("x.agent-besties.md");
+        let target = dir.join("x.agent-coexist.md");
         let original_perms = std::fs::metadata(&dir).unwrap().permissions();
         let mut readonly_perms = original_perms.clone();
         readonly_perms.set_mode(0o500);

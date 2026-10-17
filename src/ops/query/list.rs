@@ -341,26 +341,26 @@ mod tests {
 
     #[test]
     fn relative_parts_skip_leading_curdir_and_keep_trailing_space_dir() {
-        let trailing = PathBuf::from("room ").join("one.agent-besties.md");
+        let trailing = PathBuf::from("room ").join("one.agent-coexist.md");
         let (dirs, name) = fsx::walk::relative_native_parts(&trailing, Path::new("room "))
             .expect("trailing-space DIR");
         assert!(dirs.is_empty());
-        assert_eq!(name, OsString::from("one.agent-besties.md"));
+        assert_eq!(name, OsString::from("one.agent-coexist.md"));
 
         let (dirs, name) = fsx::walk::relative_native_parts(
-            Path::new("./-/note.agent-besties.md"),
+            Path::new("./-/note.agent-coexist.md"),
             Path::new("-"),
         )
         .expect("dash DIR vs ./- file");
         assert!(dirs.is_empty(), "extra dir level: {dirs:?}");
-        assert_eq!(name, OsString::from("note.agent-besties.md"));
+        assert_eq!(name, OsString::from("note.agent-coexist.md"));
 
         let (dirs, name) = fsx::walk::relative_native_parts(
-            Path::new("-/note.agent-besties.md"),
+            Path::new("-/note.agent-coexist.md"),
             Path::new("./-"),
         )
         .expect("./- DIR vs - file");
         assert!(dirs.is_empty(), "extra dir level: {dirs:?}");
-        assert_eq!(name, OsString::from("note.agent-besties.md"));
+        assert_eq!(name, OsString::from("note.agent-coexist.md"));
     }
 }

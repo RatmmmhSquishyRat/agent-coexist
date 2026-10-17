@@ -42,7 +42,7 @@ stdout:
 ok  wait  notes
   bytes         changed
   semantic      changed
-  created       notes.agent-besties.md
+  created       notes.agent-coexist.md
   add     comment  #1
   author
     | alice
@@ -66,7 +66,7 @@ stdout:
 ok  wait  notes
   bytes         changed
   semantic      changed
-  removed       notes.agent-besties.md
+  removed       notes.agent-coexist.md
   remove  comment  #1
   author
     | alice
@@ -199,8 +199,8 @@ waiting  wait  standup
 stdout:
 ```text
 error  wait-post  room/standup
-  reason        cannot open room/standup.agent-besties.md: Not a directory (os error 20)
-  fix           a directory on the path of room/standup.agent-besties.md is now a file; move that file aside, keeping it, and recreate the directory it replaced; restart with this command, then read the file again after its ready line (the new wait cannot report changes made while it was stopped): agent-coexist wait-post room/standup --as alice
+  reason        cannot open room/standup.agent-coexist.md: Not a directory (os error 20)
+  fix           a directory on the path of room/standup.agent-coexist.md is now a file; move that file aside, keeping it, and recreate the directory it replaced; restart with this command, then read the file again after its ready line (the new wait cannot report changes made while it was stopped): agent-coexist wait-post room/standup --as alice
 ```
 
 stderr:

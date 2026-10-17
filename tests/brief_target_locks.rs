@@ -34,7 +34,7 @@ fn stdout(output: &Output) -> String {
 fn busy_alias_targets_are_unchecked_and_cannot_update_briefs() {
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path();
-    let target = root.join("thread.agent-besties.md");
+    let target = root.join("thread.agent-coexist.md");
     // Unique body sentinel: any output showing it leaked target bytes
     // the lock kept unreadable.
     let sentinel = "busy-target-body-6d61c7";
@@ -46,7 +46,7 @@ fn busy_alias_targets_are_unchecked_and_cannot_update_briefs() {
             .status
             .success()
     );
-    let brief = root.join("plan.agent-besties.md");
+    let brief = root.join("plan.agent-coexist.md");
     let before = fs::read(&brief).unwrap();
     let writer = fs::OpenOptions::new()
         .read(true)
@@ -96,7 +96,7 @@ fn busy_alias_targets_are_unchecked_and_cannot_update_briefs() {
 fn self_target_and_refresh_hash_the_snapshot_before_the_write() {
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path();
-    let brief = root.join("plan.agent-besties.md");
+    let brief = root.join("plan.agent-coexist.md");
     assert!(run(root, &["brief", "plan"]).status.success());
     let before = agent_coexist::hash::read_target(&brief).unwrap().sha256;
     let create = run(
@@ -105,7 +105,7 @@ fn self_target_and_refresh_hash_the_snapshot_before_the_write() {
             "brief",
             "plan",
             "--target",
-            "plan.agent-besties.md",
+            "plan.agent-coexist.md",
             "--entry",
             "self",
         ],

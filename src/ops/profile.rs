@@ -251,8 +251,8 @@ mod tests {
     #[test]
     fn flock_refusal_cleans_file_and_dirs_this_call_created() {
         let dir = scratch("flock-clean");
-        std::fs::write(dir.join("state.agent-besties.md"), LOCKED_BY_OTHER).unwrap();
-        let target = dir.join("sub/notes.agent-besties.md");
+        std::fs::write(dir.join("state.agent-coexist.md"), LOCKED_BY_OTHER).unwrap();
+        let target = dir.join("sub/notes.agent-coexist.md");
         let mut ctx = test_ctx(time::parse(NOW).unwrap());
         let report = run(&mut ctx, &set_section(target.clone())).unwrap();
         assert_eq!(report.status, Status::Error);
@@ -266,8 +266,8 @@ mod tests {
     #[test]
     fn flock_refusal_keeps_preexisting_empty_target() {
         let dir = scratch("flock-adopted");
-        std::fs::write(dir.join("state.agent-besties.md"), LOCKED_BY_OTHER).unwrap();
-        let target = dir.join("notes.agent-besties.md");
+        std::fs::write(dir.join("state.agent-coexist.md"), LOCKED_BY_OTHER).unwrap();
+        let target = dir.join("notes.agent-coexist.md");
         std::fs::write(&target, b"").unwrap();
         let mut ctx = test_ctx(time::parse(NOW).unwrap());
         let report = run(&mut ctx, &set_section(target.clone())).unwrap();
@@ -289,12 +289,12 @@ mod tests {
         let free = dir.join("free");
         std::fs::create_dir_all(&nested).unwrap();
         std::fs::create_dir(&free).unwrap();
-        let target = nested.join("notes.agent-besties.md");
-        let alias = free.join("notes.agent-besties.md");
+        let target = nested.join("notes.agent-coexist.md");
+        let alias = free.join("notes.agent-coexist.md");
         let original = b"# notes.agent-profile\n\n## role\n\n```\nold\n```\n";
         std::fs::write(&target, original).unwrap();
         std::os::unix::fs::symlink(&target, &alias).unwrap();
-        std::fs::write(locked.join("state.agent-besties.md"), LOCKED_BY_OTHER).unwrap();
+        std::fs::write(locked.join("state.agent-coexist.md"), LOCKED_BY_OTHER).unwrap();
 
         for path in [&target, &alias] {
             let mut ctx = test_ctx(time::parse(NOW).unwrap());
@@ -306,7 +306,7 @@ mod tests {
 
         // This ancestor belongs to both chains, but represents only one
         // additional lock; distinct directories retain their own holders.
-        std::fs::write(dir.join("state.agent-besties.md"), LOCKED_BY_OTHER).unwrap();
+        std::fs::write(dir.join("state.agent-coexist.md"), LOCKED_BY_OTHER).unwrap();
         let mut ctx = test_ctx(time::parse(NOW).unwrap());
         let report = run(&mut ctx, &set_section(alias.clone())).unwrap();
         assert_eq!(report.status, Status::Error);
@@ -334,15 +334,15 @@ mod tests {
         let free = dir.join("free");
         std::fs::create_dir(&locked).unwrap();
         std::fs::create_dir(&free).unwrap();
-        let target = free.join("notes.agent-besties.md");
-        let alias = locked.join("notes.agent-besties.md");
+        let target = free.join("notes.agent-coexist.md");
+        let alias = locked.join("notes.agent-coexist.md");
         std::fs::write(
             &target,
             b"# notes.agent-profile\n\n## role\n\n```\nold\n```\n",
         )
         .unwrap();
         std::os::unix::fs::symlink(&target, &alias).unwrap();
-        std::fs::write(locked.join("state.agent-besties.md"), LOCKED_BY_OTHER).unwrap();
+        std::fs::write(locked.join("state.agent-coexist.md"), LOCKED_BY_OTHER).unwrap();
 
         let mut direct = set_section(target.clone());
         direct.action = ProfileAction::SetBody("direct".to_string());
@@ -365,8 +365,8 @@ mod tests {
     #[test]
     fn successful_write_warns_when_lock_scan_skipped_etype() {
         let dir = scratch("scan-etype");
-        std::fs::write(dir.join("state.agent-besties.md"), WRONG_KIND_STATE).unwrap();
-        let target = dir.join("notes.agent-besties.md");
+        std::fs::write(dir.join("state.agent-coexist.md"), WRONG_KIND_STATE).unwrap();
+        let target = dir.join("notes.agent-coexist.md");
         let mut ctx = test_ctx(time::parse(NOW).unwrap());
         let report = run(&mut ctx, &set_section(target.clone())).unwrap();
         // Best-effort: no recognizable holder, the write proceeds — but
@@ -385,8 +385,8 @@ mod tests {
     #[test]
     fn flock_still_blocks_with_duplicate_state_sections() {
         let dir = scratch("flock-dup");
-        std::fs::write(dir.join("state.agent-besties.md"), DUP_LOCKED_SECTIONS).unwrap();
-        let target = dir.join("sub/notes.agent-besties.md");
+        std::fs::write(dir.join("state.agent-coexist.md"), DUP_LOCKED_SECTIONS).unwrap();
+        let target = dir.join("sub/notes.agent-coexist.md");
         let mut ctx = test_ctx(time::parse(NOW).unwrap());
         let report = run(&mut ctx, &set_section(target.clone())).unwrap();
         assert_eq!(report.status, Status::Error);
@@ -404,7 +404,7 @@ mod tests {
     #[test]
     fn create_rejects_invalid_stem_without_leaving_a_trace() {
         let dir = scratch("ename");
-        let target = dir.join("bad stem.agent-besties.md");
+        let target = dir.join("bad stem.agent-coexist.md");
         let mut ctx = test_ctx(time::parse(NOW).unwrap());
         let report = run(
             &mut ctx,
@@ -427,7 +427,7 @@ mod tests {
         let dir = scratch("mismatch");
         // Invalid raw stem (space): if NAME gating ever escaped the
         // initial-content branch, this existing valid file would be refused.
-        let target = dir.join("hand renamed.agent-besties.md");
+        let target = dir.join("hand renamed.agent-coexist.md");
         std::fs::write(
             &target,
             "# other.agent-profile\n\n## role\n\n```\nold\n```\n",
@@ -538,7 +538,7 @@ mod tests {
     #[test]
     fn successful_write_warns_when_lock_scan_dir_is_unreadable() {
         let dir = scratch("scan-unreadable");
-        let target = dir.join("notes.agent-besties.md");
+        let target = dir.join("notes.agent-coexist.md");
         std::fs::write(
             &target,
             "# notes.agent-profile\n\n## role\n\n```\nold\n```\n",
@@ -584,7 +584,7 @@ mod tests {
     #[test]
     fn set_section_does_not_activate_terminal_cr_heading() {
         let dir = scratch("append-cr-h2");
-        let target = dir.join("a.agent-besties.md");
+        let target = dir.join("a.agent-coexist.md");
         std::fs::write(
             &target,
             b"# a.agent-profile\n\n## role\n\n```md\nx\n```\n## z\r",

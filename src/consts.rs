@@ -1,7 +1,10 @@
 //! Compile-time constants, transcribed from spec §12 (normative constants table).
 
 /// Managed-file name suffix (§12, per §2.4).
-pub const SUFFIX: &str = ".agent-besties.md";
+pub const SUFFIX: &str = ".agent-coexist.md";
+
+/// File name of the per-directory state file (§12, per §2.4.2, §10.1.6).
+pub const STATE_FILE_NAME: &str = "state.agent-coexist.md";
 
 /// Default duration of a `locked` declaration: 2h in seconds (§12, per §6.3.1).
 pub const DEFAULT_FOR_LOCKED: i64 = 7200; // 2h in seconds

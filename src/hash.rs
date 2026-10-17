@@ -548,7 +548,7 @@ mod tests {
     #[test]
     fn busy_target_verification_has_no_hash_or_content() {
         let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("post.agent-besties.md");
+        let path = dir.path().join("post.agent-coexist.md");
         fs::write(&path, b"part of a write").unwrap();
         let writer = OpenOptions::new()
             .read(true)
@@ -556,8 +556,8 @@ mod tests {
             .open(&path)
             .unwrap();
         writer.try_lock().unwrap();
-        let entry = entry(Some("post.agent-besties.md"), Some(EMPTY_SHA), None);
-        let result = verify(&dir.path().join("brief.agent-besties.md"), &entry);
+        let entry = entry(Some("post.agent-coexist.md"), Some(EMPTY_SHA), None);
+        let result = verify(&dir.path().join("brief.agent-coexist.md"), &entry);
         assert_eq!(result.state, "unchecked");
         assert_eq!(result.reason, Some("target unreadable"));
         assert!(result.target.is_none());
@@ -574,7 +574,7 @@ mod tests {
     #[test]
     fn self_refresh_and_aliases_use_the_exclusive_lock_snapshot() {
         let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("brief.agent-besties.md");
+        let path = dir.path().join("brief.agent-coexist.md");
         let old = b"# brief.brief\n";
         fs::write(&path, old).unwrap();
         let alias = dir.path().join("alias.txt");

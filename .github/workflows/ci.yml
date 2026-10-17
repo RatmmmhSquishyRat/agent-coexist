@@ -76,7 +76,7 @@ jobs:
 
           out="$(env $NOW "$BIN" profile agents/alice --section role -m 'Rust implementer.')"
           test "$(first_line "$out")" = "ok  profile  agents/alice"
-          test -f agents/alice.agent-besties.md
+          test -f agents/alice.agent-coexist.md
 
           out="$(env $NOW "$BIN" post docs/standup --as alice -m 'Daily standup thread. @bob please post your status here.')"
           test "$(first_line "$out")" = "ok  post  docs/standup"

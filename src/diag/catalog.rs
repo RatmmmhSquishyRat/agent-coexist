@@ -238,14 +238,14 @@ pub(crate) const CATALOG: &[Template] = &[
         command_fix: false,
         message: r#"file name "{stem}" does not match the H1 name "{name}""#,
         why: r#"list shows the file name, the file says another name; readers will be confused"#,
-        fix: r##"rename the file to {name}.agent-besties.md if no file has that name yet (never overwrite an existing file), or set line 1 to "# {stem}.{type}""##,
+        fix: r##"rename the file to {name}.agent-coexist.md if no file has that name yet (never overwrite an existing file), or set line 1 to "# {stem}.{type}""##,
     },
     Template {
         id: "W-NAME-STATE",
         command_fix: false,
-        message: r#"state file is named "{stem}.agent-besties.md", not "state.agent-besties.md""#,
-        why: r#"check-state and state look only for state.agent-besties.md (case-insensitive on Windows/macOS); other names are ignored"#,
-        fix: r##"inspect this file and any state.agent-besties.md already in this directory. Resolve intended declarations before choosing which file should use that name, and never overwrite an existing state file (keep line 1 as "# .state")"##,
+        message: r#"state file is named "{stem}.agent-coexist.md", not "state.agent-coexist.md""#,
+        why: r#"check-state and state look only for state.agent-coexist.md (case-insensitive on Windows/macOS); other names are ignored"#,
+        fix: r##"inspect this file and any state.agent-coexist.md already in this directory. Resolve intended declarations before choosing which file should use that name, and never overwrite an existing state file (keep line 1 as "# .state")"##,
     },
     Template {
         id: "W-STRAY",
@@ -400,7 +400,7 @@ pub(crate) const MESSAGE_ESTATE_NOTFOUND_STATUS: &str =
 pub(crate) const MESSAGE_EFILEMISSING_DIR: &str = r#"{file} does not exist; {given_dir} is a directory, and this command needs one collaboration file"#;
 
 /// See [`MESSAGE_EFILEMISSING_DIR`].
-pub(crate) const FIX_EFILEMISSING_DIR: &str = r#"rerun with the path of one collaboration file (the .agent-besties.md suffix may be omitted); collaboration files in that directory: agent-coexist list {dir_arg}"#;
+pub(crate) const FIX_EFILEMISSING_DIR: &str = r#"rerun with the path of one collaboration file (the .agent-coexist.md suffix may be omitted); collaboration files in that directory: agent-coexist list {dir_arg}"#;
 
 /// E-STATE-NOTFOUND fix when the removal named `--status`: keep that
 /// selection, because a bare `--remove` would drop every status.
@@ -412,7 +412,7 @@ pub(crate) const FIX_ESTATE_NOTFOUND_STATUS: &str = r#"check which statuses hold
 /// file. After the rename, line 1 must use that same name and keep this
 /// file's type (`{actual}`), matching the E-H1 reserved-name recipe. The
 /// retry repeats the original declaration or wait.
-pub(crate) const FIX_ETYPE_RESERVED: &str = r##"state.agent-besties.md in this directory has type {actual}, so it cannot hold state. Rename that file to <name>.agent-besties.md with an unused valid name (never overwrite an existing file), set line 1 to "# <name>.post" (or .brief / .agent-profile) with that same name, then retry: {argv}"##;
+pub(crate) const FIX_ETYPE_RESERVED: &str = r##"state.agent-coexist.md in this directory has type {actual}, so it cannot hold state. Rename that file to <name>.agent-coexist.md with an unused valid name (never overwrite an existing file), set line 1 to "# <name>.post" (or .brief / .agent-profile) with that same name, then retry: {argv}"##;
 
 /// E-TYPE fix when the failed command is a write form that creates a
 /// missing file (`post` without `--edit`, `profile` without `--remove`,
@@ -465,27 +465,27 @@ pub(crate) const FIX_EENTRYREGEX_REVIEW: &str = r#"review the target and the not
 /// selected by the existing reserved-state lookup. Failed selection is
 /// not authority to mutate a possibly different file, so the fix gates
 /// every declaration change behind two steps instead: settle which file
-/// is this directory's state.agent-besties.md (a W-NAME-STATE row, when
+/// is this directory's state.agent-coexist.md (a W-NAME-STATE row, when
 /// one is shown, carries the matching inspection advice), then re-check
 /// — and only the declaring agent ever changes, renews or removes its
 /// own entry by hand.
-pub(crate) const FIX_UNSELECTED_STATE: &str = "this file is not confirmed as this directory's state.agent-besties.md; settle which file should be, without overwriting another state file, then run check on this file again before editing declarations by hand. Only the declaring agent may change, renew or remove its entry";
+pub(crate) const FIX_UNSELECTED_STATE: &str = "this file is not confirmed as this directory's state.agent-coexist.md; settle which file should be, without overwriting another state file, then run check on this file again before editing declarations by hand. Only the declaring agent may change, renew or remove its entry";
 
 /// W-STATE-DUP why under the same unselected gate as
 /// [`FIX_UNSELECTED_STATE`]: the catalog row's merge happens on the next
 /// state write, and no state command writes this file, so the duplicate
 /// stays until someone edits the file by hand.
-pub(crate) const WHY_WSTATEDUP_UNSELECTED: &str = r#"the latest end time wins; no state write merges them, because state commands do not write this file until it is confirmed as this directory's state.agent-besties.md"#;
+pub(crate) const WHY_WSTATEDUP_UNSELECTED: &str = r#"the latest end time wins; no state write merges them, because state commands do not write this file until it is confirmed as this directory's state.agent-coexist.md"#;
 
 /// W-STATE-RANGE why under the same unselected gate as
 /// [`FIX_UNSELECTED_STATE`]: the removal the catalog row promises cannot
 /// happen, because no state command writes this file.
-pub(crate) const WHY_WSTATERANGE_UNSELECTED: &str = r#"treated as expired: it never counts as a lock; no state write removes it, because state commands do not write this file until it is confirmed as this directory's state.agent-besties.md"#;
+pub(crate) const WHY_WSTATERANGE_UNSELECTED: &str = r#"treated as expired: it never counts as a lock; no state write removes it, because state commands do not write this file until it is confirmed as this directory's state.agent-coexist.md"#;
 
 /// W-STATE-EXPIRED why under the same unselected gate as
 /// [`FIX_UNSELECTED_STATE`]: same non-removal as
 /// [`WHY_WSTATERANGE_UNSELECTED`], for an entry that has ended.
-pub(crate) const WHY_WSTATEEXPIRED_UNSELECTED: &str = r#"expired entries are ignored by conflict checks; no state write removes them, because state commands do not write this file until it is confirmed as this directory's state.agent-besties.md"#;
+pub(crate) const WHY_WSTATEEXPIRED_UNSELECTED: &str = r#"expired entries are ignored by conflict checks; no state write removes them, because state commands do not write this file until it is confirmed as this directory's state.agent-coexist.md"#;
 
 /// W-STRAY in a post: a fenced body remains a possible destination,
 /// but a comment may be changed only by that comment's author.
@@ -549,21 +549,21 @@ pub(crate) const FIX_WSTATUSNAME_REPEATED: &str = r###"merge this status's secti
 /// instead. It carries no command argument, so it substitutes as plain
 /// text (§8.3.4 quoting stays on command-form fixes). The optional rename
 /// carries the same never-overwrite condition as every rename recipe.
-pub(crate) const FIX_EH1_BAD_STEM: &str = r##"set line 1 to "# <name>.post" (or .brief / .agent-profile) using 1-100 letters, digits, "_", "-" or ".", starting with a letter, digit, "_" or "-"; use "# .state" for a state file. Renaming the file to <name>.agent-besties.md as well keeps the name in agreement, if no file has that name yet (never overwrite an existing file)"##;
+pub(crate) const FIX_EH1_BAD_STEM: &str = r##"set line 1 to "# <name>.post" (or .brief / .agent-profile) using 1-100 letters, digits, "_", "-" or ".", starting with a letter, digit, "_" or "-"; use "# .state" for a state file. Renaming the file to <name>.agent-coexist.md as well keeps the name in agreement, if no file has that name yet (never overwrite an existing file)"##;
 
 /// E-H1 fix when the file has the reserved state file name: the name says
 /// this is the directory's state file, so `# .state` comes first. A post,
 /// brief or profile H1 under this name would make every state command
 /// refuse the file (E-TYPE) and lock scans skip it, so another type is
 /// offered only together with moving the file off the reserved name.
-pub(crate) const FIX_EH1_STATE_NAME: &str = r##"set line 1 to "# .state" if this file holds state declarations, because its name is reserved for this directory's state file. If it holds a post, brief or profile instead, rename it first to <name>.agent-besties.md with an unused valid name (never overwrite an existing file), then set line 1 to "# <name>.post" (or .brief / .agent-profile) with that same name"##;
+pub(crate) const FIX_EH1_STATE_NAME: &str = r##"set line 1 to "# .state" if this file holds state declarations, because its name is reserved for this directory's state file. If it holds a post, brief or profile instead, rename it first to <name>.agent-coexist.md with an unused valid name (never overwrite an existing file), then set line 1 to "# <name>.post" (or .brief / .agent-profile) with that same name"##;
 
 /// 2026-09-25 repair: W-NAME fix when the file stem is not a valid NAME.
 /// The base template also offers `set line 1 to "# {stem}.{type}"`, which
 /// would be an invalid H1; this variant keeps only the other recovery:
 /// rename the file to the H1 name, which parsing already proved to be a
 /// valid NAME. Plain text, like the E-H1 variant.
-pub(crate) const FIX_WNAME_BAD_STEM: &str = r#"rename the file to {name}.agent-besties.md if no file has that name yet (never overwrite an existing file). The file stem is not a valid name, so no valid H1 can be built from it"#;
+pub(crate) const FIX_WNAME_BAD_STEM: &str = r#"rename the file to {name}.agent-coexist.md if no file has that name yet (never overwrite an existing file). The file stem is not a valid name, so no valid H1 can be built from it"#;
 
 /// §9 supplement 3: E-HEAD fix when no number above the highest legal one
 /// (`{max}`) is left. The allocator never wraps or reuses numbers, so the

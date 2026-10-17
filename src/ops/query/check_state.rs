@@ -260,7 +260,7 @@ mod tests {
     fn overview_uses_latest_declaration_even_when_its_range_is_inverted() {
         let dir = scratch("latest-until");
         std::fs::write(
-            dir.join("state.agent-besties.md"),
+            dir.join("state.agent-coexist.md"),
             concat!(
                 "# .state\n\n## locked\n",
                 "alice 2026-09-25T11:00:00Z..2026-09-25T13:00:00Z\n",
@@ -304,7 +304,7 @@ mod tests {
                     "{nick} 2026-09-25T11:00:00Z..2026-09-25T14:00:00Z\n"
                 ));
             }
-            std::fs::write(path.join("state.agent-besties.md"), text).unwrap();
+            std::fs::write(path.join("state.agent-coexist.md"), text).unwrap();
         }
         let mut ctx = test_ctx(time::parse("2026-09-25T12:00:00Z").unwrap());
         let p = CheckStateParams {
@@ -348,7 +348,7 @@ mod tests {
         ] {
             let child = dir.join(name);
             std::fs::create_dir(&child).unwrap();
-            std::fs::write(child.join("state.agent-besties.md"), contents).unwrap();
+            std::fs::write(child.join("state.agent-coexist.md"), contents).unwrap();
         }
         let mut ctx = test_ctx(time::parse("2026-09-25T12:00:00Z").unwrap());
         let report = check_state(
@@ -395,7 +395,7 @@ mod tests {
         for (path, nick) in [(&dir, "carol"), (&child, "alice"), (&deep, "bob")] {
             std::fs::create_dir_all(path).unwrap();
             std::fs::write(
-                path.join("state.agent-besties.md"),
+                path.join("state.agent-coexist.md"),
                 format!(
                     "# .state\n\n## custom\u{1b}[2J\n{nick} 2026-09-25T11:00:00Z..2026-09-25T14:00:00Z\n"
                 ),
@@ -432,19 +432,19 @@ mod tests {
         let mut p = CheckStateParams {
             dir: dir.clone(),
             walk: fsx::walk::Options {
-                include: vec!["*.agent-besties.md".to_string()],
+                include: vec!["*.agent-coexist.md".to_string()],
                 ..Default::default()
             },
         };
         let report = check_state(&mut ctx, &p).unwrap();
         assert_eq!(report.status, Status::Warn);
-        assert_eq!(values(&report, "include")[0][0], "*.agent-besties.md");
+        assert_eq!(values(&report, "include")[0][0], "*.agent-coexist.md");
         assert_eq!(values(&report, "total")[0][0], "0");
         p.walk.no_ignore = true;
         let without_ignore = check_state(&mut ctx, &p).unwrap();
         assert_eq!(without_ignore.status, Status::Warn);
         let hint = &values(&without_ignore, "include")[0];
-        assert_eq!(hint[0], "*.agent-besties.md");
+        assert_eq!(hint[0], "*.agent-coexist.md");
         assert!(
             !hint[1].contains("--no-ignore"),
             "--no-ignore is already given: {hint:?}"
@@ -461,7 +461,7 @@ mod tests {
         let child = dir.join("child");
         std::fs::create_dir_all(&child).unwrap();
         std::fs::write(
-            child.join("state.agent-besties.md"),
+            child.join("state.agent-coexist.md"),
             concat!(
                 "# .state\n\n## observing\n",
                 "alice 2026-09-25T11:00:00Z..2026-09-25T14:00:00Z\n",
@@ -505,7 +505,7 @@ mod tests {
         let child = dir.join("child");
         std::fs::create_dir(&child).unwrap();
         std::fs::write(
-            child.join("state.agent-besties.md"),
+            child.join("state.agent-coexist.md"),
             concat!(
                 "# .state\n\n## locked\n",
                 "alice 2026-09-25T11:00:00Z..2026-09-25T14:00:00Z\n",

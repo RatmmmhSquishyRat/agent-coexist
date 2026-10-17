@@ -366,7 +366,7 @@ fn plain_post() -> String {
 #[test]
 fn post_newly_relevant_via_reply_target_change() {
     let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("standup.agent-besties.md");
+    let path = dir.path().join("standup.agent-coexist.md");
     write_file(&path, &post_with_first_author("carol"));
     let waiting = spawn(&path, Filter::Post(Some("alice".to_string())));
     waiting.wait_ready();
@@ -389,7 +389,7 @@ fn post_newly_relevant_via_reply_target_change() {
 #[test]
 fn unqualified_deletion_advances_baseline_and_recreation_is_judged_fresh() {
     let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("standup.agent-besties.md");
+    let path = dir.path().join("standup.agent-coexist.md");
     write_file(&path, &plain_post());
     let waiting = spawn(&path, Filter::Post(Some("alice".to_string())));
     waiting.wait_ready();
@@ -451,7 +451,7 @@ fn unqualified_deletion_advances_baseline_and_recreation_is_judged_fresh() {
 #[test]
 fn state_renewal_hits_but_stored_expiry_alone_does_not() {
     let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("state.agent-besties.md");
+    let path = dir.path().join("state.agent-coexist.md");
     write_file(
         &path,
         &doc(&[
@@ -491,7 +491,7 @@ fn state_renewal_hits_but_stored_expiry_alone_does_not() {
 #[test]
 fn state_file_deletion_with_selected_declarations_hits() {
     let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("state.agent-besties.md");
+    let path = dir.path().join("state.agent-coexist.md");
     write_file(
         &path,
         &doc(&[
@@ -522,7 +522,7 @@ fn state_file_deletion_with_selected_declarations_hits() {
 #[test]
 fn wait_hit_reports_state_conflict_and_deletion_drops_it() {
     let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("state.agent-besties.md");
+    let path = dir.path().join("state.agent-coexist.md");
     write_file(
         &path,
         &doc(&[
@@ -584,7 +584,7 @@ fn wait_hit_reports_state_conflict_and_deletion_drops_it() {
 #[test]
 fn expired_lease_does_not_conflict_with_new_lock_on_change() {
     let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("state.agent-besties.md");
+    let path = dir.path().join("state.agent-coexist.md");
     // Alice had a lease that expired in the past.
     write_file(
         &path,
@@ -621,7 +621,7 @@ fn expired_lease_does_not_conflict_with_new_lock_on_change() {
 #[test]
 fn state_deletion_without_selected_status_only_advances_to_absent() {
     let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("state.agent-besties.md");
+    let path = dir.path().join("state.agent-coexist.md");
     write_file(
         &path,
         &doc(&[
@@ -668,7 +668,7 @@ fn state_deletion_without_selected_status_only_advances_to_absent() {
 #[test]
 fn duplicate_state_nick_fails_instead_of_waiting() {
     let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("state.agent-besties.md");
+    let path = dir.path().join("state.agent-coexist.md");
     write_file(
         &path,
         &doc(&[
@@ -694,7 +694,7 @@ fn duplicate_state_nick_fails_instead_of_waiting() {
     );
     let report = expect_blocking_report(waiting.finish(), "duplicate identities");
     assert!(
-        file_row_mentions(&report, "state.agent-besties.md"),
+        file_row_mentions(&report, "state.agent-coexist.md"),
         "duplicate failure must name the file:\n{}",
         row_text(&report)
     );
@@ -709,12 +709,12 @@ fn duplicate_state_nick_fails_instead_of_waiting() {
 #[test]
 fn zero_byte_present_file_fails_before_ready() {
     let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("standup.agent-besties.md");
+    let path = dir.path().join("standup.agent-coexist.md");
     write_file(&path, "");
     let waiting = spawn(&path, Filter::Post(None));
     let report = expect_blocking_report(waiting.finish(), "zero-byte present file");
     assert!(
-        file_row_mentions(&report, "standup.agent-besties.md"),
+        file_row_mentions(&report, "standup.agent-coexist.md"),
         "empty present file must name the file:\n{}",
         row_text(&report)
     );
@@ -734,7 +734,7 @@ fn zero_byte_present_file_fails_before_ready() {
 #[test]
 fn malformed_update_after_ready_reports_file_type_and_fence() {
     let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("standup.agent-besties.md");
+    let path = dir.path().join("standup.agent-coexist.md");
     write_file(&path, &plain_post());
     let waiting = spawn(&path, Filter::Post(None));
     waiting.wait_ready();
@@ -751,7 +751,7 @@ fn malformed_update_after_ready_reports_file_type_and_fence() {
     );
     let report = expect_blocking_report(waiting.finish(), "unclosed fence after ready");
     assert!(
-        file_row_mentions(&report, "standup.agent-besties.md"),
+        file_row_mentions(&report, "standup.agent-coexist.md"),
         "malformed update must name the file:\n{}",
         row_text(&report)
     );
@@ -766,12 +766,12 @@ fn malformed_update_after_ready_reports_file_type_and_fence() {
 #[test]
 fn oversize_present_file_fails_before_ready() {
     let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("huge.agent-besties.md");
+    let path = dir.path().join("huge.agent-coexist.md");
     write_over_limit(&path);
     let waiting = spawn(&path, Filter::Any);
     let report = expect_blocking_report(waiting.finish(), "over-limit present file");
     assert!(
-        file_row_mentions(&report, "huge.agent-besties.md"),
+        file_row_mentions(&report, "huge.agent-coexist.md"),
         "over-limit present file must name the file:\n{}",
         row_text(&report)
     );
@@ -791,14 +791,14 @@ fn oversize_present_file_fails_before_ready() {
 #[test]
 fn oversize_update_after_ready_reports_file_without_type() {
     let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("standup.agent-besties.md");
+    let path = dir.path().join("standup.agent-coexist.md");
     write_file(&path, &plain_post());
     let waiting = spawn(&path, Filter::Post(None));
     waiting.wait_ready();
     write_over_limit(&path);
     let report = expect_blocking_report(waiting.finish(), "over-limit after ready");
     assert!(
-        file_row_mentions(&report, "standup.agent-besties.md"),
+        file_row_mentions(&report, "standup.agent-coexist.md"),
         "over-limit update must name the file:\n{}",
         row_text(&report)
     );
@@ -817,7 +817,7 @@ fn oversize_update_after_ready_reports_file_without_type() {
 #[test]
 fn unfiltered_format_only_change_hits_semantic_unchanged() {
     let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("standup.agent-besties.md");
+    let path = dir.path().join("standup.agent-coexist.md");
     write_file(&path, &plain_post());
     let waiting = spawn(&path, Filter::Any);
     waiting.wait_ready();
@@ -859,7 +859,7 @@ fn unfiltered_format_only_change_hits_semantic_unchanged() {
 #[test]
 fn cancellation_returns_cancelled_fault() {
     let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("standup.agent-besties.md");
+    let path = dir.path().join("standup.agent-coexist.md");
     write_file(&path, &plain_post());
     let waiting = spawn(&path, Filter::Any);
     waiting.wait_ready();
@@ -884,7 +884,7 @@ fn cancellation_returns_cancelled_fault() {
 #[test]
 fn absent_baseline_never_creates_the_file_and_later_creation_hits() {
     let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("standup.agent-besties.md");
+    let path = dir.path().join("standup.agent-coexist.md");
     let waiting = spawn(&path, Filter::Post(Some("alice".to_string())));
     waiting.wait_ready();
     assert!(
@@ -920,7 +920,7 @@ fn absent_baseline_never_creates_the_file_and_later_creation_hits() {
 #[test]
 fn specialized_command_with_wrong_type_fails_with_e_type() {
     let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("notes.agent-besties.md");
+    let path = dir.path().join("notes.agent-coexist.md");
     write_file(
         &path,
         &doc(&["# notes.brief", "", "```md", "description", "```"]),
@@ -940,7 +940,7 @@ fn specialized_command_with_wrong_type_fails_with_e_type() {
 #[test]
 fn generic_wait_reports_legal_type_switch_without_pairing() {
     let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("mixed.agent-besties.md");
+    let path = dir.path().join("mixed.agent-coexist.md");
     write_file(&path, &plain_post_with_stem("mixed"));
     let waiting = spawn(&path, Filter::Any);
     waiting.wait_ready();
@@ -998,7 +998,7 @@ fn generic_wait_reports_legal_type_switch_without_pairing() {
 #[test]
 fn generic_wait_reports_brief_description_on_create_and_delete() {
     let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("notes.agent-besties.md");
+    let path = dir.path().join("notes.agent-coexist.md");
     let body = doc(&["# notes.brief", "", "```md", "only description", "```"]);
 
     let created_wait = spawn(&path, Filter::Any);
@@ -1063,7 +1063,7 @@ fn generic_wait_reports_brief_description_on_create_and_delete() {
 #[test]
 fn self_mention_qualifies_without_author_exclusion() {
     let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("standup.agent-besties.md");
+    let path = dir.path().join("standup.agent-coexist.md");
     write_file(&path, &plain_post());
     let waiting = spawn(&path, Filter::Post(Some("alice".to_string())));
     waiting.wait_ready();
@@ -1098,7 +1098,7 @@ fn self_mention_qualifies_without_author_exclusion() {
 #[test]
 fn same_length_rewrite_is_discovered_by_content() {
     let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("standup.agent-besties.md");
+    let path = dir.path().join("standup.agent-coexist.md");
     write_file(&path, &plain_post());
     let waiting = spawn(&path, Filter::Any);
     waiting.wait_ready();

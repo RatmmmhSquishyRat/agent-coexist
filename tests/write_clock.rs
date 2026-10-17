@@ -54,7 +54,7 @@ fn fixed_clock_is_preserved_for_create_append_and_edit() {
         }
         success(&cmd.output().unwrap());
     }
-    let stored = fs::read_to_string(dir.path().join("thread.agent-besties.md")).unwrap();
+    let stored = fs::read_to_string(dir.path().join("thread.agent-coexist.md")).unwrap();
     assert!(stored.contains(&format!("## #1 bob ({}, edited {})", times[0], times[2])));
     assert!(stored.contains(&format!("## #2 bob ({})", times[1])));
 
@@ -64,7 +64,7 @@ fn fixed_clock_is_preserved_for_create_append_and_edit() {
         .output()
         .unwrap();
     assert_eq!(invalid.status.code(), Some(2));
-    assert!(!dir.path().join("untouched.agent-besties.md").exists());
+    assert!(!dir.path().join("untouched.agent-coexist.md").exists());
 }
 
 #[test]
@@ -85,7 +85,7 @@ fn fixed_state_clock_preserves_duration_and_rejects_overflow_before_creation() {
         .unwrap();
     let range = "2026-09-17T10:00:00Z..2026-09-17T11:00:00Z";
     assert!(success(&output).contains(range));
-    let stored = fs::read_to_string(dir.path().join("state.agent-besties.md")).unwrap();
+    let stored = fs::read_to_string(dir.path().join("state.agent-coexist.md")).unwrap();
     assert!(stored.contains(&format!("alice {range}")));
 
     let empty = tempfile::tempdir().unwrap();
@@ -104,7 +104,7 @@ fn fixed_state_clock_preserves_duration_and_rejects_overflow_before_creation() {
         .unwrap();
     assert_eq!(overflow.status.code(), Some(2));
     assert!(overflow.stdout.is_empty());
-    assert!(!empty.path().join("state.agent-besties.md").exists());
+    assert!(!empty.path().join("state.agent-coexist.md").exists());
 }
 
 mod queued {
@@ -160,7 +160,7 @@ mod queued {
             return;
         }
         let dir = tempfile::tempdir().unwrap();
-        let target = dir.path().join("thread.agent-besties.md");
+        let target = dir.path().join("thread.agent-coexist.md");
         fs::write(&target, "# thread.post\n").unwrap();
         let held = fs::File::open(&target).unwrap();
         held.try_lock_shared().unwrap();
@@ -257,7 +257,7 @@ mod queued {
             return;
         }
         let dir = tempfile::tempdir().unwrap();
-        let target = dir.path().join("state.agent-besties.md");
+        let target = dir.path().join("state.agent-coexist.md");
         fs::write(&target, "# .state\n\n").unwrap();
         for attempt in 0..3 {
             let held = fs::File::open(&target).unwrap();

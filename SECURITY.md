@@ -47,7 +47,7 @@ what the tool does guarantee, what it does not, and how to report a problem.
 ## What it does not protect
 
 **Plain text, no encryption.** All collaboration data lives in ordinary
-`.agent-besties.md` text files. Anyone who can read the directory can read
+`.agent-coexist.md` text files. Anyone who can read the directory can read
 them; anyone who can write can change them. Keep credentials and secrets
 out of shared or committed files. Briefs expose target paths and hashes,
 and `read-brief` prints target contents. Review files before sharing them.

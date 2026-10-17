@@ -201,7 +201,7 @@ pub fn parse(bytes: Vec<u8>, path: &Path, now: DateTime<Utc>) -> Result<Document
 
     // Stem = file name minus the COMPLETE managed suffix (spec §1, §2.4).
     // `Path::file_stem` peels only the final `.md`, so every valid
-    // `standup.agent-besties.md` compared as `standup.agent-besties` and
+    // `standup.agent-coexist.md` compared as `standup.agent-coexist` and
     // tripped W-NAME / W-NAME-STATE. The suffix is matched
     // case-insensitively, like the walker's managed-file test (§10.1.4);
     // a name without it (bare-stem paths) is the stem as-is, dots
@@ -550,11 +550,11 @@ mod tests {
         assert_eq!(ids(&d), Vec::<&str>::new());
         // the complete managed suffix is stripped from the stem: real
         // on-disk names (dotted or not) compare by their true stem
-        let d = parse_str("# standup.post\n", "standup.agent-besties.md");
+        let d = parse_str("# standup.post\n", "standup.agent-coexist.md");
         assert_eq!(ids(&d), Vec::<&str>::new());
-        let d = parse_str("# a.b.post\n", "a.b.agent-besties.md");
+        let d = parse_str("# a.b.post\n", "a.b.agent-coexist.md");
         assert_eq!(ids(&d), Vec::<&str>::new());
-        let d = parse_str("# .state\n", "state.agent-besties.md");
+        let d = parse_str("# .state\n", "state.agent-coexist.md");
         assert_eq!(ids(&d), Vec::<&str>::new());
     }
 

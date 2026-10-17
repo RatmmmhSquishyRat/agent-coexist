@@ -34,7 +34,7 @@ body:
     attributes:
       label: Minimal reproduction
       description: >
-        The exact commands, and the contents of the `.agent-besties.md` file
+        The exact commands, and the contents of the `.agent-coexist.md` file
         involved if relevant. Redact anything private: these are plain text
         files, and everything pasted here is visible to anyone who can view
         this repository's issues.

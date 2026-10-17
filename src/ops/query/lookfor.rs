@@ -146,7 +146,7 @@ mod tests {
     fn parse_post(src: &str) -> Document {
         doc::parse(
             src.as_bytes().to_vec(),
-            Path::new("foo.agent-besties.md"),
+            Path::new("foo.agent-coexist.md"),
             time::parse("2026-09-17T10:00:00Z").unwrap(),
         )
         .expect("parses")

@@ -206,7 +206,7 @@ mod tests {
     }
 
     fn write_brief(dir: &std::path::Path, body: &str) -> PathBuf {
-        let path = dir.join("plan.agent-besties.md");
+        let path = dir.join("plan.agent-coexist.md");
         std::fs::write(&path, body).unwrap();
         path
     }

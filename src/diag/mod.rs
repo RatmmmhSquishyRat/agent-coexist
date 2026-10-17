@@ -945,7 +945,7 @@ mod tests {
         Context {
             path: "docs/standup".into(),
             dir: "docs".into(),
-            path_arg: "docs/standup.agent-besties.md".into(),
+            path_arg: "docs/standup.agent-coexist.md".into(),
             dir_arg: "docs".into(),
             state_file_selected: false,
             stem: "standup".into(),
@@ -995,7 +995,7 @@ mod tests {
             .with("type", "post");
         let r = render(&d, &ctx());
         assert!(
-            r.fix.contains("alice.agent-besties.md"),
+            r.fix.contains("alice.agent-coexist.md"),
             "rename target missing: {s}",
             s = r.fix
         );
@@ -1014,7 +1014,7 @@ mod tests {
                 .with("type", "post");
             let r = render(&d, &ctx());
             assert!(
-                r.fix.contains("alice.agent-besties.md"),
+                r.fix.contains("alice.agent-coexist.md"),
                 "rename target missing: {s}",
                 s = r.fix
             );
@@ -1128,7 +1128,7 @@ mod tests {
         let (advice, command) = fix.rsplit_once(": ").expect("command");
         assert_eq!(
             command,
-            "agent-coexist post docs/standup.agent-besties.md --as=alice --edit=1 -m '<text>'"
+            "agent-coexist post docs/standup.agent-coexist.md --as=alice --edit=1 -m '<text>'"
         );
         assert!(advice.contains("alice") && advice.contains("@#1"), "{fix}");
     }

@@ -1039,19 +1039,19 @@ mod tests {
 
     #[test]
     fn root_prefix_collision_requires_component_boundary() {
-        let gi = gi_from_str("/T/a", "/b/note.agent-besties.md");
-        assert!(!gi.matched("/T/ab/note.agent-besties.md", false).is_ignore());
-        assert!(gi.matched("/T/a/b/note.agent-besties.md", false).is_ignore());
+        let gi = gi_from_str("/T/a", "/b/note.agent-coexist.md");
+        assert!(!gi.matched("/T/ab/note.agent-coexist.md", false).is_ignore());
+        assert!(gi.matched("/T/a/b/note.agent-coexist.md", false).is_ignore());
 
-        let gi = gi_from_str("a", "/b/note.agent-besties.md");
-        assert!(!gi.matched("ab/note.agent-besties.md", false).is_ignore());
-        assert!(gi.matched("a/b/note.agent-besties.md", false).is_ignore());
-        assert!(!gi.matched("./ab/note.agent-besties.md", false).is_ignore());
-        assert!(gi.matched("./a/b/note.agent-besties.md", false).is_ignore());
+        let gi = gi_from_str("a", "/b/note.agent-coexist.md");
+        assert!(!gi.matched("ab/note.agent-coexist.md", false).is_ignore());
+        assert!(gi.matched("a/b/note.agent-coexist.md", false).is_ignore());
+        assert!(!gi.matched("./ab/note.agent-coexist.md", false).is_ignore());
+        assert!(gi.matched("./a/b/note.agent-coexist.md", false).is_ignore());
 
-        let gi = gi_from_str("/", "/b/note.agent-besties.md");
-        assert!(gi.matched("/b/note.agent-besties.md", false).is_ignore());
-        assert!(!gi.matched("/ab/note.agent-besties.md", false).is_ignore());
+        let gi = gi_from_str("/", "/b/note.agent-coexist.md");
+        assert!(gi.matched("/b/note.agent-coexist.md", false).is_ignore());
+        assert!(!gi.matched("/ab/note.agent-coexist.md", false).is_ignore());
 
         #[cfg(unix)]
         {
@@ -1059,11 +1059,11 @@ mod tests {
             use std::os::unix::ffi::OsStrExt;
 
             let root = Path::new(OsStr::from_bytes(b"/T/\xff"));
-            let gi = gi_from_str(root, "/b/note.agent-besties.md");
+            let gi = gi_from_str(root, "/b/note.agent-coexist.md");
             let sibling =
-                Path::new(OsStr::from_bytes(b"/T/\xffb/note.agent-besties.md"));
+                Path::new(OsStr::from_bytes(b"/T/\xffb/note.agent-coexist.md"));
             let descendant =
-                Path::new(OsStr::from_bytes(b"/T/\xff/b/note.agent-besties.md"));
+                Path::new(OsStr::from_bytes(b"/T/\xff/b/note.agent-coexist.md"));
             assert!(!gi.matched(sibling, false).is_ignore());
             assert!(gi.matched(descendant, false).is_ignore());
 
@@ -1076,58 +1076,58 @@ mod tests {
     #[cfg(windows)]
     #[test]
     fn windows_volume_prefix_equivalence_relativizes_anchored_rules() {
-        let gi = gi_from_str(r"C:\T\room", "/note.agent-besties.md");
-        assert!(gi.matched(r"C:\T\room\note.agent-besties.md", false).is_ignore());
+        let gi = gi_from_str(r"C:\T\room", "/note.agent-coexist.md");
+        assert!(gi.matched(r"C:\T\room\note.agent-coexist.md", false).is_ignore());
         assert!(gi
-            .matched(r"\\?\C:\T\room\note.agent-besties.md", false)
+            .matched(r"\\?\C:\T\room\note.agent-coexist.md", false)
             .is_ignore());
         assert!(!gi
-            .matched(r"C:\T\roomx\note.agent-besties.md", false)
+            .matched(r"C:\T\roomx\note.agent-coexist.md", false)
             .is_ignore());
         assert!(!gi
-            .matched(r"\\?\C:\T\roomx\note.agent-besties.md", false)
+            .matched(r"\\?\C:\T\roomx\note.agent-coexist.md", false)
             .is_ignore());
         assert!(gi
-            .matched(r"\\?\c:\T\room\note.agent-besties.md", false)
+            .matched(r"\\?\c:\T\room\note.agent-coexist.md", false)
             .is_ignore());
         assert!(!gi
-            .matched(r"\\?\D:\T\room\note.agent-besties.md", false)
+            .matched(r"\\?\D:\T\room\note.agent-coexist.md", false)
             .is_ignore());
         assert!(!gi
-            .matched(r"\\.\C:\T\room\note.agent-besties.md", false)
+            .matched(r"\\.\C:\T\room\note.agent-coexist.md", false)
             .is_ignore());
 
-        let gi = gi_from_str(r"\\?\C:\T\room", "/note.agent-besties.md");
-        assert!(gi.matched(r"C:\T\room\note.agent-besties.md", false).is_ignore());
+        let gi = gi_from_str(r"\\?\C:\T\room", "/note.agent-coexist.md");
+        assert!(gi.matched(r"C:\T\room\note.agent-coexist.md", false).is_ignore());
         assert!(gi
-            .matched(r"\\?\C:\T\room\note.agent-besties.md", false)
+            .matched(r"\\?\C:\T\room\note.agent-coexist.md", false)
             .is_ignore());
 
-        let gi = gi_from_str(r"C:\T\a", "/b/note.agent-besties.md");
+        let gi = gi_from_str(r"C:\T\a", "/b/note.agent-coexist.md");
         assert!(!gi
-            .matched(r"\\?\C:\T\ab\note.agent-besties.md", false)
+            .matched(r"\\?\C:\T\ab\note.agent-coexist.md", false)
             .is_ignore());
         assert!(gi
-            .matched(r"\\?\C:\T\a\b\note.agent-besties.md", false)
+            .matched(r"\\?\C:\T\a\b\note.agent-coexist.md", false)
             .is_ignore());
 
-        let gi = gi_from_str(r"\\server\share\room", "/note.agent-besties.md");
+        let gi = gi_from_str(r"\\server\share\room", "/note.agent-coexist.md");
         assert!(gi
-            .matched(r"\\server\share\room\note.agent-besties.md", false)
+            .matched(r"\\server\share\room\note.agent-coexist.md", false)
             .is_ignore());
         assert!(gi
-            .matched(r"\\?\UNC\server\share\room\note.agent-besties.md", false)
+            .matched(r"\\?\UNC\server\share\room\note.agent-coexist.md", false)
             .is_ignore());
         assert!(!gi
-            .matched(r"\\?\UNC\server\share\roomx\note.agent-besties.md", false)
+            .matched(r"\\?\UNC\server\share\roomx\note.agent-coexist.md", false)
             .is_ignore());
 
         let gi = gi_from_str(
             r"\\?\UNC\server\share\room",
-            "/note.agent-besties.md",
+            "/note.agent-coexist.md",
         );
         assert!(gi
-            .matched(r"\\server\share\room\note.agent-besties.md", false)
+            .matched(r"\\server\share\room\note.agent-coexist.md", false)
             .is_ignore());
     }
 

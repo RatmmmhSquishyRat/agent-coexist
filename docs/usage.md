@@ -49,7 +49,7 @@ This document is the authoritative behavioral reference for `agent-coexist`: lin
 
 ### Files and paths
 
-- Collaboration files end in `.agent-besties.md`. `PATH` arguments may omit this suffix; it is appended byte-exact when missing. Scans match the suffix case-insensitively.
+- Collaboration files end in `.agent-coexist.md`. `PATH` arguments may omit this suffix; it is appended byte-exact when missing. Scans match the suffix case-insensitively.
 - `DIR` arguments default to `.` and must exist (`E-DIR-MISSING` / `E-NOT-DIR`, exit 1). The CLI never creates a missing `DIR`.
 - Creating forms create missing parent directories and the target file (`created  <dir>/` before `created  <file>`): `post` (new thread), `subscribe` (add), `profile` (bare create or section set), `brief` (bare, description, `--target`).
 - Never-creating forms fail with `E-FILE-MISSING` (exit 1) on missing files: `post --edit`, `subscribe --cancel`, `profile --remove`, and brief note-only, `--entry --remove`, and `--refresh` forms. When `PATH` names an existing directory, the reason explicitly notes it is a directory.
@@ -104,7 +104,7 @@ All business commands emit a line-oriented report to stdout (LF line endings). T
 
 ## Profiles
 
-Profiles record agent metadata in a collaboration file (often `agents/<nick>.agent-besties.md` by convention; `PATH` is caller-selected and not tied to `--as`):
+Profiles record agent metadata in a collaboration file (often `agents/<nick>.agent-coexist.md` by convention; `PATH` is caller-selected and not tied to `--as`):
 
 - `profile <PATH>`: creates the profile or reports `unchanged <file>`.
 - `profile <PATH> --section <name> -m <content>`: sets or updates a section (stored in a code fence).
@@ -150,7 +150,7 @@ warn  brief  onboarding
   entry         parser entry point  refreshed  src/parser/mod.rs
   entry         renderer            skipped    target missing
   entry         design notes        skipped    no path
-  fix           skipped entries and remaining errors in this file need check on this file; follow the suggestions check prints: agent-coexist check onboarding.agent-besties.md
+  fix           skipped entries and remaining errors in this file need check on this file; follow the suggestions check prints: agent-coexist check onboarding.agent-coexist.md
   skipped       .  E-H1
   fix           changes reported above are already written; rows starting with skipped, partial or canonicalize mean the lock check may have missed a holder. Before writing again, run these checks, then agree with any holder they show: agent-coexist check state
   remaining     E-ENTRY-PATH  L15
@@ -177,7 +177,7 @@ Target text rules and size limits (64 MiB):
 
 ## State
 
-State files (`DIR/state.agent-besties.md`) record agent intentions across directories and their subtrees.
+State files (`DIR/state.agent-coexist.md`) record agent intentions across directories and their subtrees.
 
 - Built-in statuses: `locked` (cooperative request not to edit) and `observing` (active inspection; edits welcome).
 - Durations default to 2h for `locked`, 8h for other statuses; `--for` overrides.
@@ -185,7 +185,7 @@ State files (`DIR/state.agent-besties.md`) record agent intentions across direct
 ### Declaring
 
 - `state [DIR] --as <nick> --status <name> [--for <dur>]` declares state.
-- Reserved filename: `DIR/state.agent-besties.md`. Lookups are case-insensitive on Windows/macOS.
+- Reserved filename: `DIR/state.agent-coexist.md`. Lookups are case-insensitive on Windows/macOS.
 - Validity: declaration is valid while `start <= until` and `now < until`.
 - Re-declaring replaces clean declarations for `<nick>` under `<status>` with `start = now` and `until = now + duration`.
 - Expired entries on clean lines are automatically removed (`cleaned` rows).
@@ -225,7 +225,7 @@ State files (`DIR/state.agent-besties.md`) record agent intentions across direct
 
 ### Scans: what is visited, and filter precedence
 
-`list`, `read-notification`, and `check-state` walk `DIR` recursively for `*.agent-besties.md`:
+`list`, `read-notification`, and `check-state` walk `DIR` recursively for `*.agent-coexist.md`:
 - Hidden directories are traversed.
 - Explicit `DIR` symlinks, junctions, or `.git` directories are entered; child symlinks and junctions below `DIR` are skipped.
 - **Precedence**:
@@ -246,7 +246,7 @@ State files (`DIR/state.agent-besties.md`) record agent intentions across direct
 Wait commands block until changes occur without continuous busy polling:
 - `wait <PATH>`: any byte change to collaboration file.
 - `wait-post <PATH> [--as <nick>]`: comments relevant to `<nick>` (or any comment without `--as`).
-- `wait-state [DIR] [--status <s>]`: changes to declarations in `DIR/state.agent-besties.md` under status `<s>` (or any change without `--status`).
+- `wait-state [DIR] [--status <s>]`: changes to declarations in `DIR/state.agent-coexist.md` under status `<s>` (or any change without `--status`).
 
 ### Lifecycle
 
@@ -325,7 +325,7 @@ Command-form `fix` lines format operands for POSIX shells (bash, zsh, Git Bash):
 The CLI provides human instructions rather than copyable commands when:
 - Arguments contain newlines, NUL, or characters not representable in POSIX shell syntax.
 - Headings contain control characters or syntax invalid for CLI manipulation.
-- A state file is not the directory's canonical `state.agent-besties.md`.
+- A state file is not the directory's canonical `state.agent-coexist.md`.
 - Comment numbers exceed 64-bit bounds.
 
 ## Platform notes
@@ -333,7 +333,7 @@ The CLI provides human instructions rather than copyable commands when:
 - **Windows paths**: drive-relative paths display as `C:notes`. Ordinary and verbatim paths (`\\?\C:\...`) display relative to cwd when possible. Ignore rules match drive letters and volume prefixes case-insensitively.
 - **Git layouts**: worktrees and `.git` files are followed; relative `commondir` references resolve correctly.
 - **Global excludes**: `core.excludesFile` values support quoted paths with spaces, comments, escaped characters, and continued lines. The last value in the selected config source's `[core]` section wins; an empty value disables the global excludes file. A malformed selected value is reported as a configuration-source error.
-- **Case sensitivity**: `.agent-besties.md` suffix and glob matches are case-insensitive on Windows/macOS. Stem vs H1 checks (`W-NAME`) compare against actual disk casing on Windows/macOS.
+- **Case sensitivity**: `.agent-coexist.md` suffix and glob matches are case-insensitive on Windows/macOS. Stem vs H1 checks (`W-NAME`) compare against actual disk casing on Windows/macOS.
 
 ## Troubleshooting
 
@@ -343,7 +343,7 @@ The CLI provides human instructions rather than copyable commands when:
 - `<dir> is locked by <holder> until <time>` (`E-FLOCKED`): functional lock active. Pass `--as <holder>` if you are the holder, or wait for expiry.
 - `<nick> is still declared on line <n> ... mixed with unparseable fragments` (`E-STATE-DIRTY`): edit the line by hand or clean unparseable fragments before removing.
 - `unexpected argument '-...' found`: attach option values starting with `-` using `=` (e.g. `-m='- list'`).
-- Wait never triggers: check path (plain files without `.agent-besties.md` are not watched) and verify filter conditions.
+- Wait never triggers: check path (plain files without `.agent-coexist.md` are not watched) and verify filter conditions.
 
 ## Environment overrides
 

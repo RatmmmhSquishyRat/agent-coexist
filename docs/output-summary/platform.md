@@ -27,8 +27,8 @@ Run as a normal user; the file has been chmod 000.
 `agent-coexist check room/standup` · exit code 1
 ```text
 error  check  room/standup
-  reason        cannot open room/standup.agent-besties.md: Permission denied (os error 13)
-  fix           check the permissions of room/standup.agent-besties.md and of the directories on its path, then retry: agent-coexist check room/standup
+  reason        cannot open room/standup.agent-coexist.md: Permission denied (os error 13)
+  fix           check the permissions of room/standup.agent-coexist.md and of the directories on its path, then retry: agent-coexist check room/standup
 ```
 
 <a id="plat-operands"></a>
@@ -38,7 +38,7 @@ error  check  room/standup
 `agent-coexist check 'room\standup'` · Windows: the backslash path opens normally.
 ```text
 ok  check  room/standup
-  file          room/standup.agent-besties.md
+  file          room/standup.agent-coexist.md
   type          post
   comments      1
   authors       alice
@@ -50,7 +50,7 @@ ok  check  room/standup
 `agent-coexist check 'room\standup'` · exit code 1 · Linux: the same spelling names a file that does not exist.
 ```text
 error  check  room\standup
-  reason        room\standup.agent-besties.md does not exist
+  reason        room\standup.agent-coexist.md does not exist
   fix           correct the path and rerun (this command never creates the file); collaboration files under that directory: agent-coexist list .
 ```
 
@@ -61,14 +61,14 @@ error  check  room\standup
 `agent-coexist check $'room-\xff/nothere'` · exit code 1 · The directory name contains byte 0xFF, shown as a replacement character in the output.
 ```text
 error  check  room-�/nothere
-  reason        room-�/nothere.agent-besties.md does not exist
+  reason        room-�/nothere.agent-coexist.md does not exist
   fix           correct the path and rerun (this command never creates the file); collaboration files under that directory: agent-coexist list room-"$(printf '\377')"
 ```
 
 `agent-coexist check $'a\nb/p'` · The directory name contains a line break; the fix carries the `<path of this file>` marker in place of the path.
 ```text
 warn  check  a b/p
-  file          a b/p.agent-besties.md
+  file          a b/p.agent-coexist.md
   type          agent-profile
   warn   L1  profile has no sections
          why  nothing tells other agents who this is or what they own
@@ -94,7 +94,7 @@ ok  list  big
 terminal frame (stderr went straight to the terminal, not captured separately; varies between runs: frame count and counters depend on scanning speed; escaped view; no trailing newline):
 <!-- output-summary:volatile:start -->
 ```text
-\rscanning dirs: 31656, files: 0...\rscanning dirs: 44247, files: 0...\rscanning dirs: 56868, files: 0...\r                                 \r
+\rscanning dirs: 29795, files: 0...\rscanning dirs: 40269, files: 0...\rscanning dirs: 51484, files: 0...\r                                 \r
 ```
 <!-- output-summary:volatile:end -->
 

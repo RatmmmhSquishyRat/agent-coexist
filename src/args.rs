@@ -215,7 +215,7 @@ pub enum Commands {
     /// Check one file: format, diagnostics and a preview
     #[command(override_usage = U_CHECK, after_help = H_CHECK)]
     Check {
-        /// the collaboration file; the '.agent-besties.md' suffix may be omitted
+        /// the collaboration file; the '.agent-coexist.md' suffix may be omitted
         path: PathBuf,
     },
     /// Create or update an agent profile
@@ -375,7 +375,7 @@ pub enum Commands {
         #[arg(long = "as", value_name = "nick")]
         as_nick: Option<String>,
     },
-    /// Wait for changes to DIR/state.agent-besties.md
+    /// Wait for changes to DIR/state.agent-coexist.md
     #[command(override_usage = U_WAIT_STATE, after_help = H_WAIT_STATE)]
     WaitState {
         /// the directory (default: the current directory); only its state file is watched
@@ -756,7 +756,7 @@ pub fn resolve(command: Commands, ctx: &Ctx) -> Result<Invocation, String> {
         Commands::WaitState { dir, status } => {
             let dir = dir.unwrap_or_else(|| PathBuf::from("."));
             let status = opt_status(status)?;
-            let path = dir.join(format!("state{}", consts::SUFFIX));
+            let path = dir.join(consts::STATE_FILE_NAME);
             Ok(Invocation::Wait {
                 kind: DiagKind::Dir(dir),
                 path,
@@ -1282,7 +1282,7 @@ const TOP_AFTER_HELP: &str = concat!(
 New here? 'agent-coexist guide' explains when and how to use coexist. Exact flags for one command: 'agent-coexist <command> --help'.
 
 Arguments:
-  PATH      a collaboration file; the '.agent-besties.md' suffix may be omitted
+  PATH      a collaboration file; the '.agent-coexist.md' suffix may be omitted
   DIR       a directory (default: the current directory); scans are recursive
   TIME      an RFC 3339 time, e.g. 2026-09-17T09:12:00Z; any offset is converted to UTC and fractional seconds are dropped
   DURATION  e.g. 1h30m: ",
@@ -1495,7 +1495,7 @@ Writes 'waiting  wait-post  <object>' to stderr once baseline is recorded; re-re
 
 const H_WAIT_STATE: &str = concat!(
     "\
-Watches DIR/state.agent-besties.md (defaults to .); does not watch ancestors or subtrees.
+Watches DIR/state.agent-coexist.md (defaults to .); does not watch ancestors or subtrees.
 --status waits for declaration add/remove/renewal under that status (clock expiry alone does not trigger). Without --status, any change triggers.
 Writes 'waiting  wait-state  <object>' to stderr once baseline is recorded; run check-state after this line.
 ",
@@ -1511,12 +1511,12 @@ mod tests {
     /// append (regression: CLI-SUFFIXED-WHOLE-PATH).
     #[test]
     fn suffixed_path_with_trailing_separator_is_used_as_is() {
-        let path = PathBuf::from("docs/standup.agent-besties.md/");
+        let path = PathBuf::from("docs/standup.agent-coexist.md/");
         let resolved = suffixed(path.clone());
         assert_eq!(resolved.as_os_str(), path.as_os_str());
         assert_eq!(
             resolved.file_name().and_then(|name| name.to_str()),
-            Some("standup.agent-besties.md")
+            Some("standup.agent-coexist.md")
         );
     }
 
@@ -1526,7 +1526,7 @@ mod tests {
     fn suffixed_appends_once_to_plain_name() {
         assert_eq!(
             suffixed(PathBuf::from("docs/standup")),
-            PathBuf::from("docs/standup.agent-besties.md")
+            PathBuf::from("docs/standup.agent-coexist.md")
         );
     }
 
@@ -1545,7 +1545,7 @@ mod tests {
 
         // Already suffixed: untouched identity, not even a rebuild.
         let path =
-            PathBuf::from(parent).join(std::ffi::OsStr::from_bytes(b"standup.agent-besties.md"));
+            PathBuf::from(parent).join(std::ffi::OsStr::from_bytes(b"standup.agent-coexist.md"));
         assert_eq!(suffixed(path.clone()), path);
     }
 

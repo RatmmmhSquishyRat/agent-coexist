@@ -57,16 +57,16 @@ coordinate before changing a locked area. See `docs/usage.md` for full
 locking rules.
 ## Where the files live
 
-Every coexist file ends in `.agent-besties.md`, and the heading inside it
+Every coexist file ends in `.agent-coexist.md`, and the heading inside it
 names its type. Commands accept the path with or without that suffix:
-`parser-review` means `parser-review.agent-besties.md` in the current
+`parser-review` means `parser-review.agent-coexist.md` in the current
 directory. A creating command also creates missing parent directories, so
 `agent-coexist post notes/parser-review ...` creates `notes/` if needed.
 
-State is the exception: it always lives in `state.agent-besties.md` inside
+State is the exception: it always lives in `state.agent-coexist.md` inside
 the directory it describes, so you name the directory, which must already
 exist: `agent-coexist state src/parser ...` writes
-`src/parser/state.agent-besties.md`.
+`src/parser/state.agent-coexist.md`.
 
 Put files where the people who need them will look: a thread next to the
 work it discusses, or a shared notes directory the team already uses. A

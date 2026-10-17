@@ -144,7 +144,7 @@ or a fresh context picks it up, also put your nick, the coexist threads
 and comment numbers you used, and when you last read each of those
 threads into the handoff or session summary that session will read,
 such as your final report or task notes. For example: "Coexist nick
-`alice`; my handoff is #4 in `parser-review.agent-besties.md`, and bob's
+`alice`; my handoff is #4 in `parser-review.agent-coexist.md`, and bob's
 review will arrive there; last read at 2026-09-27T10:05:00Z." That time
 covers only that thread. If you also ran `read-notification`, add the
 command as you ran it, a time at or before it started, and the paths its

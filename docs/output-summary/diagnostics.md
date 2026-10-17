@@ -7,7 +7,7 @@
 `agent-coexist check standup` · exit code 1 · The é on line 6 is Latin-1 encoded
 ```text
 error  check  standup
-  file          standup.agent-besties.md
+  file          standup.agent-coexist.md
   error  L6  file is not valid UTF-8
          why  the CLI cannot locate lines or headings in it
          fix  re-save the file as UTF-8
@@ -16,7 +16,7 @@ error  check  standup
 `agent-coexist check notes` · exit code 1
 ```text
 error  check  notes
-  file          notes.agent-besties.md
+  file          notes.agent-coexist.md
   error  L1  first line is "Standup notes", not "# <name>.<type>"
          why  the H1 is the only place the file type is recorded; without it nothing else can be parsed
          fix  set line 1 to "# notes.post" (or .brief / .agent-profile), or "# .state" for a state file
@@ -29,7 +29,7 @@ error  check  notes
 `agent-coexist check standup` · exit code 1
 ```text
 error  check  standup
-  file          standup.agent-besties.md
+  file          standup.agent-coexist.md
   type          post
   error  L9  "## #2 bob 2026-09-17T09:05:00Z" looks like a comment header but is malformed
          why  comment headers must be "## #<n> <nick> (<time>)"; a malformed one makes numbering and @#n references ambiguous
@@ -60,7 +60,7 @@ error  check  standup
 `agent-coexist check seq`
 ```text
 warn  check  seq
-  file          seq.agent-besties.md
+  file          seq.agent-coexist.md
   type          post
   warn   L3  text outside any fence at L3 is not part of the record
          why  this text stays in the file but is not included in CLI reports
@@ -94,17 +94,17 @@ warn  check  seq
 `agent-coexist check handoff`
 ```text
 warn  check  handoff
-  file          handoff.agent-besties.md
+  file          handoff.agent-coexist.md
   type          brief
   warn   L3  entry "parser" is shifted: src/parser.rs changed since its hash was taken
          why  the note may describe code that no longer looks like this
-         fix  review the target and the note, update the note if it no longer describes the target, then refresh the entry's hash; this command records the target's current hash: agent-coexist brief handoff.agent-besties.md --entry=parser --refresh
+         fix  review the target and the note, update the note if it no longer describes the target, then refresh the entry's hash; this command records the target's current hash: agent-coexist brief handoff.agent-coexist.md --entry=parser --refresh
   warn   L12  entry "lexer" is stale: target missing
          why  the note points at something that is gone or no longer matches its regex
-         fix  choose a file you know is the right target, review that file and the note, update the note if needed, then point the entry at it; if it no longer exists, remove or rewrite the entry. This command also records the target's current hash: agent-coexist brief handoff.agent-besties.md --target <file> --entry=lexer
+         fix  choose a file you know is the right target, review that file and the note, update the note if needed, then point the entry at it; if it no longer exists, remove or rewrite the entry. This command also records the target's current hash: agent-coexist brief handoff.agent-coexist.md --target <file> --entry=lexer
   warn   L22  entry "errors" is stale: regex not found
          why  the note points at something that is gone or no longer matches its regex
-         fix  review the target and the note, update the note if it no longer describes the target, then give the entry a regex that matches it; this command also records the target's current hash: agent-coexist brief handoff.agent-besties.md --target=src/errors.rs --entry=errors --regex '<pattern>'
+         fix  review the target and the note, update the note if it no longer describes the target, then give the entry a regex that matches it; this command also records the target's current hash: agent-coexist brief handoff.agent-coexist.md --target=src/errors.rs --entry=errors --regex '<pattern>'
   entries       3
   fresh         0
   shifted       1
@@ -156,7 +156,7 @@ error  list  .
 `agent-coexist state src --as alice --status locked` · .ignore has a syntax error
 ```text
 warn  state  src
-  created       src/state.agent-besties.md
+  created       src/state.agent-coexist.md
   set           locked  alice  2026-09-17T10:00:00Z..2026-09-17T12:00:00Z
   scan          .ignore  line 1: error parsing glob 'notes/{broken': unclosed alternate group; missing '}' (maybe escape '{' with '[{]'?)
   fix           correct line 1 of .ignore, then check for conflicts without declaring again: agent-coexist check-state src

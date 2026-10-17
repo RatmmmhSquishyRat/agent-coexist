@@ -15,22 +15,22 @@ IDs in parentheses, such as `W-NAME` or `E-STATE-DIRTY`, are catalog names for k
 
 ### Names and the H1 line
 
-All file names end with the suffix `.agent-besties.md`. Commands accept paths with or without the suffix: `agent-coexist check docs/standup` opens `docs/standup.agent-besties.md`.
+All file names end with the suffix `.agent-coexist.md`. Commands accept paths with or without the suffix: `agent-coexist check docs/standup` opens `docs/standup.agent-coexist.md`.
 
 | Type | File name | First line (H1) |
 | ---- | --------- | ---------------- |
-| post | `<name>.agent-besties.md` | `# <name>.post` |
-| brief | `<name>.agent-besties.md` | `# <name>.brief` |
-| agent-profile | `<name>.agent-besties.md` | `# <name>.agent-profile` |
-| state | `state.agent-besties.md` | `# .state` |
+| post | `<name>.agent-coexist.md` | `# <name>.post` |
+| brief | `<name>.agent-coexist.md` | `# <name>.brief` |
+| agent-profile | `<name>.agent-coexist.md` | `# <name>.agent-profile` |
+| state | `state.agent-coexist.md` | `# .state` |
 
 - The H1 is the first non-blank line of the file, and it decides the type.
-- Its `<name>` must equal the file name minus the whole suffix, compared case-sensitively: `standup.agent-besties.md` starts with `# standup.post`. `# Standup.post` there is a mismatch warning (`W-NAME`). On Windows and macOS the file name compared is the one on disk, whatever case you typed in the command's `PATH`.
+- Its `<name>` must equal the file name minus the whole suffix, compared case-sensitively: `standup.agent-coexist.md` starts with `# standup.post`. `# Standup.post` there is a mismatch warning (`W-NAME`). On Windows and macOS the file name compared is the one on disk, whatever case you typed in the command's `PATH`.
 - A missing or unrecognizable H1 is a blocking error: write commands refuse the file until it is fixed. A refused write repeats `check`'s rows and ends with a `refused` row naming the blocking rows to fix first; nothing is written.
 - Creating a new post, brief, or profile (or a new post via `subscribe`) requires the stem to be a valid name; otherwise the command fails with `E-NAME` and writes nothing. An existing file whose H1 already parses stays editable when stem and H1 disagree. If the stem is not a valid name, rename the file to match the H1 rather than copying `# {stem}.…` into line 1. Rename only to a name no other file has yet; never overwrite an existing file.
-- `E-TYPE` (`file type is <type>, not <type>`) means the H1 names a different type from the one the command works on. The printed `fix` keeps your command and asks for a path of the needed type; `agent-coexist list <dir> --type=<type>` lists such files. Creating write forms (`post` without `--edit`, `profile` without `--remove`, `brief` bare, description, or `--target`) add `or with a new path that no file uses yet to create one`; query, `subscribe`, `--edit`, `--cancel`, `--remove`, `--refresh`, and the waits do not. When `state` or `wait-state` finds another type under the reserved state file name, the `fix` is `state.agent-besties.md in this directory has type <type>, so it cannot hold state; rename that file to <name>.agent-besties.md with a valid name that no file has yet (never overwrite an existing file), then set line 1 to "# <name>.post" (or .brief / .agent-profile) with that same name, then retry: <original command>`.
-- The state file is the exception: exactly one per directory, always named `state.agent-besties.md`, with the fixed H1 `# .state` (empty name). `state` and `check-state` look only for that reserved name (case-insensitive on Windows and macOS).
-- A file with H1 `# .state` under another name can still be inspected with `check`, but `state` and `check-state` ignore it, and `check` gives hand-edit advice only. Before giving it the reserved name, resolve its declarations together with any `state.agent-besties.md` already in that directory; never overwrite a separate existing state file.
+- `E-TYPE` (`file type is <type>, not <type>`) means the H1 names a different type from the one the command works on. The printed `fix` keeps your command and asks for a path of the needed type; `agent-coexist list <dir> --type=<type>` lists such files. Creating write forms (`post` without `--edit`, `profile` without `--remove`, `brief` bare, description, or `--target`) add `or with a new path that no file uses yet to create one`; query, `subscribe`, `--edit`, `--cancel`, `--remove`, `--refresh`, and the waits do not. When `state` or `wait-state` finds another type under the reserved state file name, the `fix` is `state.agent-coexist.md in this directory has type <type>, so it cannot hold state; rename that file to <name>.agent-coexist.md with a valid name that no file has yet (never overwrite an existing file), then set line 1 to "# <name>.post" (or .brief / .agent-profile) with that same name, then retry: <original command>`.
+- The state file is the exception: exactly one per directory, always named `state.agent-coexist.md`, with the fixed H1 `# .state` (empty name). `state` and `check-state` look only for that reserved name (case-insensitive on Windows and macOS).
+- A file with H1 `# .state` under another name can still be inspected with `check`, but `state` and `check-state` ignore it, and `check` gives hand-edit advice only. Before giving it the reserved name, resolve its declarations together with any `state.agent-coexist.md` already in that directory; never overwrite a separate existing state file.
 
 ### Identifiers in plain terms
 
@@ -129,7 +129,7 @@ Read this first, then open the target file.
 ```
 ````
 
-The example is internally consistent. With the brief at `docs/onboarding.agent-besties.md`, the path resolves to `notes/parser-entry.txt` (relative to the brief's own directory). If that file contains exactly these 101 bytes (four lines, each ending in `LF`, no BOM):
+The example is internally consistent. With the brief at `docs/onboarding.agent-coexist.md`, the path resolves to `notes/parser-entry.txt` (relative to the brief's own directory). If that file contains exactly these 101 bytes (four lines, each ending in `LF`, no BOM):
 
 ```text
 Parser entry conventions

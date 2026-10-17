@@ -872,7 +872,7 @@ pub(super) fn require_valid_stem(path: &Path) -> Result<String, Fault> {
 }
 
 /// Stem of a managed file path (file name without the
-/// `.agent-besties.md` suffix) for H1 creation.
+/// `.agent-coexist.md` suffix) for H1 creation.
 pub(super) fn stem_of(path: &Path) -> String {
     let name = path
         .file_name()
@@ -909,7 +909,7 @@ mod tests {
 
     #[test]
     fn invalid_stem_fails_ename_with_the_actual_name() {
-        let target = PathBuf::from("has space.agent-besties.md");
+        let target = PathBuf::from("has space.agent-coexist.md");
         match require_valid_stem(&target) {
             Ok(stem) => panic!("invalid stem accepted: {stem}"),
             Err(Fault::Reason { id, params }) => {
@@ -919,13 +919,13 @@ mod tests {
             Err(other) => panic!("unexpected fault: {other:?}"),
         }
         // The raw stem is judged, not a folded or truncated surrogate.
-        assert!(require_valid_stem(&PathBuf::from("ok.agent-besties.md")).is_ok());
+        assert!(require_valid_stem(&PathBuf::from("ok.agent-coexist.md")).is_ok());
     }
 
     #[test]
     fn create_rejects_invalid_stem_without_leaving_a_file() {
         let dir = scratch("ename");
-        let target = dir.join("bad stem.agent-besties.md");
+        let target = dir.join("bad stem.agent-coexist.md");
         let p = PostParams {
             path: target.clone(),
             nick: "me".to_string(),
@@ -962,7 +962,7 @@ mod tests {
 
     #[test]
     fn remaining_rows_follow_incomplete_scan_rows() {
-        let path = PathBuf::from("notes.agent-besties.md");
+        let path = PathBuf::from("notes.agent-coexist.md");
         let mut ctx = test_ctx(time::parse("2026-09-25T12:00:00Z").unwrap());
         let mut done = Done::empty();
         done.kv("description", vec!["set".to_string()]);
@@ -1007,7 +1007,7 @@ mod tests {
     fn skipped_scan_rows_follow_displayed_dir_order() {
         let cwd = std::env::current_dir().expect("cwd available");
         let parent = cwd.parent().expect("cwd has a parent").to_path_buf();
-        let path = PathBuf::from("notes.agent-besties.md");
+        let path = PathBuf::from("notes.agent-coexist.md");
         let mut ctx = test_ctx(time::parse("2026-09-25T12:00:00Z").unwrap());
         let mut done = Done::empty();
         done.kv("description", vec!["set".to_string()]);
@@ -1069,7 +1069,7 @@ mod tests {
     #[test]
     fn subscribe_inserts_before_cr_tainted_gt_line() {
         let dir = scratch("preamble-cr");
-        let target = dir.join("foo.agent-besties.md");
+        let target = dir.join("foo.agent-coexist.md");
         std::fs::write(&target, b"# foo.post\n\n> hello\rworld\n").unwrap();
         let p = crate::ops::SubscribeParams {
             path: target.clone(),
@@ -1085,7 +1085,7 @@ mod tests {
             b"# foo.post\n\n- subscribers: alice\n\n> hello\rworld\n"
         );
 
-        let target = dir.join("noted.agent-besties.md");
+        let target = dir.join("noted.agent-coexist.md");
         std::fs::write(&target, b"# noted.post\n> note\n> also\n").unwrap();
         let p = crate::ops::SubscribeParams {
             path: target.clone(),
@@ -1105,7 +1105,7 @@ mod tests {
     #[test]
     fn append_does_not_activate_terminal_cr_comment_header() {
         let dir = scratch("append-cr-h2");
-        let target = dir.join("foo.agent-besties.md");
+        let target = dir.join("foo.agent-coexist.md");
         // R3 witness: opaque `## #2 …\r` is not a comment; appending LF
         // against that CR used to form CRLF and mint a duplicate #2.
         std::fs::write(
@@ -1177,7 +1177,7 @@ mod tests {
     #[test]
     fn subscribe_keeps_unterminated_whitespace_and_effective_nick() {
         let dir = scratch("eof-blank-sub");
-        let target = dir.join("foo.agent-besties.md");
+        let target = dir.join("foo.agent-coexist.md");
         std::fs::write(&target, b"# foo.post\n ").unwrap();
         let p = crate::ops::SubscribeParams {
             path: target.clone(),
@@ -1198,7 +1198,7 @@ mod tests {
     #[test]
     fn profile_keeps_unterminated_whitespace_and_valid_fence() {
         let dir = scratch("eof-blank-profile");
-        let target = dir.join("a.agent-besties.md");
+        let target = dir.join("a.agent-coexist.md");
         std::fs::write(&target, b"# a.agent-profile\n\n## role\n    ").unwrap();
         let p = crate::ops::ProfileParams {
             path: target.clone(),
@@ -1248,7 +1248,7 @@ mod tests {
     #[test]
     fn append_reply_includes_new_sequence_and_warns_on_missing() {
         let dir = scratch("reply-seq");
-        let target = dir.join("foo.agent-besties.md");
+        let target = dir.join("foo.agent-coexist.md");
         std::fs::write(
             &target,
             b"# foo.post\n\n## #1 alice (2026-09-25T10:00:00Z)\n\n```md\nhi\n```\n",
@@ -1289,7 +1289,7 @@ mod tests {
     #[test]
     fn edit_comment_replaces_body_and_updates_header_in_place() {
         let dir = scratch("edit-comment-in-place");
-        let target = dir.join("thread.agent-besties.md");
+        let target = dir.join("thread.agent-coexist.md");
         std::fs::write(
             &target,
             b"# thread.post\n\n## #1 alice (2026-09-25T10:00:00Z)\n\n```md\noriginal body\n```\n\n## #2 bob (2026-09-25T11:00:00Z)\n\n```md\nreply from bob\n```\n",
@@ -1353,7 +1353,7 @@ mod tests {
     #[test]
     fn edit_comment_without_prior_body_inserts_fence() {
         let dir = scratch("edit-empty-body");
-        let target = dir.join("thread.agent-besties.md");
+        let target = dir.join("thread.agent-coexist.md");
         std::fs::write(
             &target,
             b"# thread.post\n\n## #1 alice (2026-09-25T10:00:00Z)\n",
@@ -1388,7 +1388,7 @@ mod tests {
     #[test]
     fn edit_comment_replaces_prior_edit_header_and_body() {
         let dir = scratch("edit-reedit");
-        let target = dir.join("thread.agent-besties.md");
+        let target = dir.join("thread.agent-coexist.md");
         std::fs::write(
             &target,
             b"# thread.post\n\n## #1 alice (2026-09-25T10:00:00Z, edited 2026-09-25T11:00:00Z)\n\n```md\nfirst revised body\n```\n",
@@ -1433,7 +1433,7 @@ mod tests {
     #[test]
     fn edit_rejects_unowned_comment_and_reports_edit_author() {
         let dir = scratch("edit-unowned");
-        let target = dir.join("thread.agent-besties.md");
+        let target = dir.join("thread.agent-coexist.md");
         std::fs::write(
             &target,
             b"# thread.post\n\n## #1 alice (2026-09-25T10:00:00Z)\n\n```md\nalice's body\n```\n",
@@ -1461,7 +1461,7 @@ mod tests {
     #[test]
     fn edit_rejects_nonexistent_comment_and_reports_comment_notfound() {
         let dir = scratch("edit-notfound");
-        let target = dir.join("thread.agent-besties.md");
+        let target = dir.join("thread.agent-coexist.md");
         std::fs::write(
             &target,
             b"# thread.post\n\n## #1 alice (2026-09-25T10:00:00Z)\n\n```md\nbody\n```\n",

@@ -625,7 +625,7 @@ mod tests {
         // used to re-read it and print a second skipped row under the
         // directory's display name.
         let dir = scratch("root-state-skip-once");
-        std::fs::write(dir.join("state.agent-besties.md"), b"# not a managed H1\n").unwrap();
+        std::fs::write(dir.join("state.agent-coexist.md"), b"# not a managed H1\n").unwrap();
         let mut ctx = Ctx::new(Some("agent-coexist read-notification".to_string()), None).unwrap();
         let p = params(&dir, &ctx);
         let report = read_notification(&mut ctx, &p).unwrap();
@@ -645,7 +645,7 @@ mod tests {
         let start = crate::time::format(now - chrono::Duration::minutes(30));
         let until = crate::time::format(now + chrono::Duration::hours(2));
         std::fs::write(
-            dir.join("state.agent-besties.md"),
+            dir.join("state.agent-coexist.md"),
             format!("# .state\n\n## locked\nbob {start}..{until}\n").as_bytes(),
         )
         .unwrap();
@@ -666,7 +666,7 @@ mod tests {
         let child = sub.join("child");
         std::fs::create_dir_all(&child).unwrap();
         std::fs::write(
-            sub.join("state.agent-besties.md"),
+            sub.join("state.agent-coexist.md"),
             concat!(
                 "# state.post\n\n## #1 bob (2026-09-25T11:30:00Z)\n\n```md\n@alice hello\n```\n",
                 "\n## #malformed\n\n```md\nunparsed comment\n```\n",
@@ -706,7 +706,7 @@ mod tests {
     fn latest_state_does_not_erase_history_or_revive_superseded_locks() {
         let dir = scratch("effective-history");
         std::fs::write(
-            dir.join("state.agent-besties.md"),
+            dir.join("state.agent-coexist.md"),
             concat!(
                 "# .state\n\n## locked\n",
                 "alice 2026-09-25T11:00:00Z..2026-09-25T13:00:00Z\n",
@@ -738,7 +738,7 @@ mod tests {
         let sub = dir.join("sub");
         std::fs::create_dir(&sub).unwrap();
         std::fs::write(
-            sub.join("a.agent-besties.md"),
+            sub.join("a.agent-coexist.md"),
             concat!(
                 "# .state\n\n## observing\n",
                 "alice 2026-09-25T10:00:00Z..2026-09-25T11:30:00Z\n",
@@ -748,7 +748,7 @@ mod tests {
         )
         .unwrap();
         std::fs::write(
-            sub.join("state.agent-besties.md"),
+            sub.join("state.agent-coexist.md"),
             concat!(
                 "# .state\n\n## locked\n",
                 "alice 2026-09-25T10:00:00Z..2026-09-25T16:00:00Z\n",
@@ -782,7 +782,7 @@ mod tests {
             assert_eq!(partial.len(), 1);
             assert_eq!(
                 partial[0][0],
-                context::object_of_path(&sub.join("a.agent-besties.md"))
+                context::object_of_path(&sub.join("a.agent-coexist.md"))
             );
             assert_eq!(partial[0][1], "W-STATE-ENTRY");
             assert!(partial[0][2].starts_with('L'));
@@ -830,7 +830,7 @@ mod tests {
         ] {
             std::fs::create_dir_all(path).unwrap();
             std::fs::write(
-                path.join("state.agent-besties.md"),
+                path.join("state.agent-coexist.md"),
                 format!("# .state\n\n## locked\n{declarations}"),
             )
             .unwrap();
@@ -875,7 +875,7 @@ mod tests {
         ] {
             std::fs::create_dir_all(path).unwrap();
             std::fs::write(
-                path.join("state.agent-besties.md"),
+                path.join("state.agent-coexist.md"),
                 format!(
                     "# .state\n\n## locked\n{nick} 2026-09-25T11:00:00Z..2026-09-25T14:00:00Z\n"
                 ),
@@ -906,13 +906,13 @@ mod tests {
         for source in [&a, &b] {
             std::fs::create_dir(source).unwrap();
             std::fs::write(
-                source.join("state.agent-besties.md"),
+                source.join("state.agent-coexist.md"),
                 "# .state\n\n## observing\nbob 2026-09-25T11:30:00Z..2026-09-25T14:00:00Z\n",
             )
             .unwrap();
         }
         std::fs::create_dir(&last).unwrap();
-        std::fs::write(last.join("notes.agent-besties.md"), "# notes.post\n").unwrap();
+        std::fs::write(last.join("notes.agent-coexist.md"), "# notes.post\n").unwrap();
         let removed = [a.clone(), b.clone()];
         let mut ctx = Ctx::new(
             Some(String::new()),
@@ -946,7 +946,7 @@ mod tests {
     #[test]
     fn state_history_and_expiry_titles_are_sanitized_only_for_output() {
         let dir = scratch("status-title-controls");
-        let file = dir.join("state.agent-besties.md");
+        let file = dir.join("state.agent-coexist.md");
         let source = concat!(
             "# .state\n\n## custom\u{1b}[2J\n",
             "bob 2026-09-25T11:00:00Z..2026-09-25T14:00:00Z\n",
@@ -973,8 +973,8 @@ mod tests {
         for name in ["a  b", "a b"] {
             let child = dir.join(name);
             std::fs::create_dir(&child).unwrap();
-            std::fs::write(child.join("state.agent-besties.md"), b"# invalid\n").unwrap();
-            std::fs::write(dir.join(format!("{name}.agent-besties.md")), b"# invalid\n").unwrap();
+            std::fs::write(child.join("state.agent-coexist.md"), b"# invalid\n").unwrap();
+            std::fs::write(dir.join(format!("{name}.agent-coexist.md")), b"# invalid\n").unwrap();
         }
         let mut ctx = test_ctx(time::parse("2026-09-25T12:00:00Z").unwrap());
         let mut p = params(&dir, &ctx);

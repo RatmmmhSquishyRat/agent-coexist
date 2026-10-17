@@ -248,56 +248,56 @@ mod tests {
     #[test]
     fn disk_and_verbatim_disk_strip_to_native_remainder() {
         let root = Path::new(r"C:\T\room");
-        let verbatim = Path::new(r"\\?\C:\T\room\note.agent-besties.md");
+        let verbatim = Path::new(r"\\?\C:\T\room\note.agent-coexist.md");
         assert_eq!(
             strip_prefix(root, verbatim),
-            Some(Path::new("note.agent-besties.md"))
+            Some(Path::new("note.agent-coexist.md"))
         );
         assert_eq!(
-            strip_prefix(Path::new(r"\\?\C:\T\room"), Path::new(r"C:\T\room\note.agent-besties.md")),
-            Some(Path::new("note.agent-besties.md"))
+            strip_prefix(Path::new(r"\\?\C:\T\room"), Path::new(r"C:\T\room\note.agent-coexist.md")),
+            Some(Path::new("note.agent-coexist.md"))
         );
         assert_eq!(
             strip_prefix(Path::new(r"\\?\C:\T\room"), verbatim),
-            Some(Path::new("note.agent-besties.md"))
+            Some(Path::new("note.agent-coexist.md"))
         );
         assert_eq!(
-            strip_prefix(root, Path::new(r"C:\T\room\note.agent-besties.md")),
-            Some(Path::new("note.agent-besties.md"))
+            strip_prefix(root, Path::new(r"C:\T\room\note.agent-coexist.md")),
+            Some(Path::new("note.agent-coexist.md"))
         );
-        assert!(strip_prefix(root, Path::new(r"\\?\C:\T\roomx\note.agent-besties.md")).is_none());
+        assert!(strip_prefix(root, Path::new(r"\\?\C:\T\roomx\note.agent-coexist.md")).is_none());
         assert_eq!(
-            strip_prefix(root, Path::new(r"\\?\c:\T\room\note.agent-besties.md")),
-            Some(Path::new("note.agent-besties.md"))
+            strip_prefix(root, Path::new(r"\\?\c:\T\room\note.agent-coexist.md")),
+            Some(Path::new("note.agent-coexist.md"))
         );
-        assert!(strip_prefix(root, Path::new(r"\\.\C:\T\room\note.agent-besties.md")).is_none());
-        assert!(strip_prefix(root, Path::new(r"\\?\D:\T\room\note.agent-besties.md")).is_none());
+        assert!(strip_prefix(root, Path::new(r"\\.\C:\T\room\note.agent-coexist.md")).is_none());
+        assert!(strip_prefix(root, Path::new(r"\\?\D:\T\room\note.agent-coexist.md")).is_none());
     }
 
     #[test]
     fn unc_and_verbatim_unc_strip_to_native_remainder() {
         let root = Path::new(r"\\server\share\room");
         let verbatim =
-            Path::new(r"\\?\UNC\server\share\room\note.agent-besties.md");
+            Path::new(r"\\?\UNC\server\share\room\note.agent-coexist.md");
         assert_eq!(
             strip_prefix(root, verbatim),
-            Some(Path::new("note.agent-besties.md"))
+            Some(Path::new("note.agent-coexist.md"))
         );
         assert_eq!(
             strip_prefix(
                 Path::new(r"\\?\UNC\server\share\room"),
-                Path::new(r"\\server\share\room\note.agent-besties.md")
+                Path::new(r"\\server\share\room\note.agent-coexist.md")
             ),
-            Some(Path::new("note.agent-besties.md"))
+            Some(Path::new("note.agent-coexist.md"))
         );
         assert!(strip_prefix(
             root,
-            Path::new(r"\\?\UNC\server\share\roomx\note.agent-besties.md")
+            Path::new(r"\\?\UNC\server\share\roomx\note.agent-coexist.md")
         )
         .is_none());
         assert!(strip_prefix(
             root,
-            Path::new(r"\\?\UNC\other\share\room\note.agent-besties.md")
+            Path::new(r"\\?\UNC\other\share\room\note.agent-coexist.md")
         )
         .is_none());
     }
@@ -307,13 +307,13 @@ mod tests {
         let root = Path::new(r"C:\T\room");
         let mut wide: Vec<u16> = r"\\?\C:\T\room\".encode_utf16().collect();
         wide.push(0xD800);
-        wide.extend("note.agent-besties.md".encode_utf16());
+        wide.extend("note.agent-coexist.md".encode_utf16());
         let path = PathBuf::from(OsString::from_wide(&wide));
         let stripped = strip_prefix(root, &path)
             .expect("Disk and VerbatimDisk of the same volume");
         let rem: Vec<u16> = stripped.as_os_str().encode_wide().collect();
         let mut expected = vec![0xD800];
-        expected.extend("note.agent-besties.md".encode_utf16());
+        expected.extend("note.agent-coexist.md".encode_utf16());
         assert_eq!(rem, expected);
     }
 

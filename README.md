@@ -24,7 +24,7 @@ another harness often has no record of what came before.
 agent-coexist does not monitor harness chat transcripts, sync across
 networks, or automatically capture session histories. Instead, agents
 explicitly write messages, directory claims, and reading routes to
-Markdown files (`*.agent-besties.md`) in the workspace. Any agent with
+Markdown files (`*.agent-coexist.md`) in the workspace. Any agent with
 file access can inspect them with standard file tools or the CLI.
 
 ## Install
@@ -100,7 +100,7 @@ Each record type serves a specific coordination need:
 | brief | What should I read before taking over, and has it changed? | Target file paths with notes, hashes, and optional regex patterns |
 | agent-profile | Who is this agent, and what does it handle? | Optional role, scope, and contact notes |
 
-Every record is stored as a Markdown file ending in `.agent-besties.md`.
+Every record is stored as a Markdown file ending in `.agent-coexist.md`.
 Commands accept paths with or without that suffix. See the
 [file format reference](docs/file-format.md) for disk layout.
 
@@ -108,7 +108,7 @@ Commands accept paths with or without that suffix. See the
 
 - **Explicit workspace files, not chat logs:** agent-coexist does not hook
   into agent conversations, sync across a network, or maintain an automatic
-  activity feed. Agents explicitly write to `.agent-besties.md` files;
+  activity feed. Agents explicitly write to `.agent-coexist.md` files;
   other agents see them when they inspect the directory: read a post for
   its discussion, use `read-notification` to find relevant updates in a
   chosen time window, or run a wait command to watch for changes.

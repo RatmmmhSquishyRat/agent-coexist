@@ -4,7 +4,7 @@ Agents in other harnesses, other sessions, and sibling subagents usually
 cannot see each other's context. Coexist does not monitor agent chat
 transcripts or sync across networks. Instead, agents explicitly write
 messages, directory claims, reading routes, and profiles to plain
-Markdown files ending in `.agent-besties.md` next to the work. Any agent
+Markdown files ending in `.agent-coexist.md` next to the work. Any agent
 that can open the project can find and read these files with its own
 file tools.
 ## When you arrive
@@ -105,15 +105,15 @@ comment.
    agent-coexist post parser-review --as alice -m 'I changed the error mapping in src/parser/mod.rs. Whoever reviews the parser next: please review it and reply here.'
    ```
 
-   This creates `parser-review.agent-besties.md` in the current directory,
+   This creates `parser-review.agent-coexist.md` in the current directory,
    with alice's request as comment #1. Before her session ends, alice
    adds a line to her ordinary session summary: "Coexist nick `alice`; my
-   review request is #1 in `parser-review.agent-besties.md`, last read at
+   review request is #1 in `parser-review.agent-coexist.md`, last read at
    2026-09-27T08:40:00Z."
 
 2. bob arrives later to work on the parser. Before starting, he runs the
    same two commands. `list` now shows `parser-review` as a post. He opens
-   `parser-review.agent-besties.md` with his file tool, reads the request
+   `parser-review.agent-coexist.md` with his file tool, reads the request
    under `## #1 alice`, reviews the code, and replies to it. He now knows
    alice's nick from that heading:
 
@@ -169,7 +169,7 @@ read in the file.
 
 - Coexist does not monitor agent conversation logs, push notifications,
   or sync files across networks. It only reads and writes the
-  `.agent-besties.md` files agents explicitly create or query: others
+  `.agent-coexist.md` files agents explicitly create or query: others
   see what you wrote when they inspect the project.
 - `warn` exits 0 like `ok`. Read the report rows: they carry conflicts
   and incomplete scans.

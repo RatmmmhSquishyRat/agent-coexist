@@ -27,8 +27,7 @@ use ignore::WalkBuilder;
 use crate::error::{Fault, SourceProblem};
 use crate::vendor_ignore as ignore;
 
-/// File name of the per-directory state file (spec §2.4.2, §10.1.6).
-const STATE_FILE_NAME: &str = "state.agent-besties.md";
+use crate::consts::STATE_FILE_NAME;
 
 /// `FILE_ATTRIBUTE_REPARSE_POINT`: junctions and symlinks on Windows carry
 /// this attribute on their directory entry (spec §10.1.1).
@@ -712,7 +711,7 @@ pub fn ancestors(path: &Path) -> Vec<PathBuf> {
 }
 
 /// `true` when `name` (a whole file name) is the state file name: exact
-/// `state.agent-besties.md` on Linux, ASCII-case-insensitive on Windows and
+/// `state.agent-coexist.md` on Linux, ASCII-case-insensitive on Windows and
 /// macOS (§10.1.6 — the same platform rule [`state_file`] locates by; the
 /// `W-NAME-STATE` judgement belongs to `check`).
 pub fn is_state_file_name(name: &OsStr) -> bool {
@@ -723,7 +722,7 @@ pub fn is_state_file_name(name: &OsStr) -> bool {
     }
 }
 
-/// Locate the state file inside `dir` (§10.1.6): exact `state.agent-besties.md`
+/// Locate the state file inside `dir` (§10.1.6): exact `state.agent-coexist.md`
 /// on Linux, ASCII-case-insensitive on Windows and macOS. At most one hit is
 /// expected per directory; if several case variants coexist, the first in
 /// `read_dir` order wins. The returned path keeps the on-disk casing (the
@@ -958,13 +957,13 @@ mod tests {
                 .expect("scan literal dash directory");
             assert_eq!(
                 result.files,
-                vec![PathBuf::from("-").join("note.agent-besties.md")]
+                vec![PathBuf::from("-").join("note.agent-coexist.md")]
             );
             assert_eq!(result.dirs, 1);
             return;
         }
         let root = scratch("dash-root");
-        touch(&root, "-/note.agent-besties.md");
+        touch(&root, "-/note.agent-coexist.md");
         let result = std::process::Command::new(std::env::current_exe().unwrap())
             .args([
                 "--exact",
@@ -981,8 +980,8 @@ mod tests {
     #[test]
     fn hidden_dirs_and_files_are_traversed() {
         let root = scratch("hidden");
-        touch(&root, ".hidden/x.agent-besties.md");
-        touch(&root, ".toplevel.agent-besties.md");
+        touch(&root, ".hidden/x.agent-coexist.md");
+        touch(&root, ".toplevel.agent-coexist.md");
         touch(&root, "plain.md");
 
         let mut calls: Vec<(usize, usize)> = Vec::new();
@@ -1003,28 +1002,28 @@ mod tests {
     #[test]
     fn git_directory_skipped_case_insensitively() {
         let root = scratch("gitdir");
-        touch(&root, ".Git/inner.agent-besties.md");
-        touch(&root, "keep.agent-besties.md");
+        touch(&root, ".Git/inner.agent-coexist.md");
+        touch(&root, "keep.agent-coexist.md");
 
         let res = scan(&root, &opts(vec![], vec![]), &mut sink).expect("scan ok");
 
         assert_eq!(res.dirs, 1); // root only: .Git pruned, not entered
         assert_eq!(res.files.len(), 1);
-        assert!(display_path(&res.files[0]).ends_with("keep.agent-besties.md"));
+        assert!(display_path(&res.files[0]).ends_with("keep.agent-coexist.md"));
         let _ = fs::remove_dir_all(&root);
     }
 
     #[test]
     fn basename_and_anchored_globs_differ() {
         let root = scratch("globs");
-        touch(&root, "top.agent-besties.md");
-        touch(&root, "sub/top.agent-besties.md");
-        touch(&root, "sub/deep/nested.agent-besties.md");
+        touch(&root, "top.agent-coexist.md");
+        touch(&root, "sub/top.agent-coexist.md");
+        touch(&root, "sub/deep/nested.agent-coexist.md");
 
         // Basename pattern: matches the name at any depth.
         let res = scan(
             &root,
-            &opts(vec!["top.agent-besties.md"], vec![]),
+            &opts(vec!["top.agent-coexist.md"], vec![]),
             &mut sink,
         )
         .expect("basename scan ok");
@@ -1032,24 +1031,24 @@ mod tests {
         assert!(
             res.files
                 .iter()
-                .all(|f| display_path(f).ends_with("top.agent-besties.md"))
+                .all(|f| display_path(f).ends_with("top.agent-coexist.md"))
         );
 
         // Anchored pattern: `*` does not cross `/`, so only sub's direct
         // child matches — not sub/deep/nested (spec §10.1.3).
         let res = scan(&root, &opts(vec!["sub/*"], vec![]), &mut sink).expect("anchored scan ok");
         assert_eq!(res.files.len(), 1);
-        assert!(display_path(&res.files[0]).ends_with("sub/top.agent-besties.md"));
+        assert!(display_path(&res.files[0]).ends_with("sub/top.agent-coexist.md"));
         let _ = fs::remove_dir_all(&root);
     }
 
     #[test]
     fn directory_pattern_excludes_subtree() {
         let root = scratch("dirpat");
-        touch(&root, "build/out.agent-besties.md");
-        touch(&root, "build/nested/deep.agent-besties.md");
-        touch(&root, "vendor/pkg/lib.agent-besties.md");
-        touch(&root, "src/main.agent-besties.md");
+        touch(&root, "build/out.agent-coexist.md");
+        touch(&root, "build/nested/deep.agent-coexist.md");
+        touch(&root, "vendor/pkg/lib.agent-coexist.md");
+        touch(&root, "src/main.agent-coexist.md");
 
         // `build/` is a slash-free directory pattern (any ancestor component
         // named build); `vendor/pkg/` is an anchored directory pattern (any
@@ -1061,15 +1060,15 @@ mod tests {
         )
         .expect("scan ok");
         assert_eq!(res.files.len(), 1);
-        assert!(display_path(&res.files[0]).ends_with("src/main.agent-besties.md"));
+        assert!(display_path(&res.files[0]).ends_with("src/main.agent-coexist.md"));
         let _ = fs::remove_dir_all(&root);
     }
 
     #[test]
     fn managed_suffix_matches_case_insensitively() {
         let root = scratch("suffixcase");
-        touch(&root, "UPPER.AGENT-BESTIES.MD");
-        touch(&root, "lower.agent-besties.md");
+        touch(&root, "UPPER.AGENT-COEXIST.MD");
+        touch(&root, "lower.agent-coexist.md");
         touch(&root, "unrelated.txt");
 
         let res = scan(&root, &opts(vec![], vec![]), &mut sink).expect("scan ok");
@@ -1084,8 +1083,8 @@ mod tests {
         assert_eq!(
             names,
             vec![
-                "UPPER.AGENT-BESTIES.MD".to_string(),
-                "lower.agent-besties.md".to_string(),
+                "UPPER.AGENT-COEXIST.MD".to_string(),
+                "lower.agent-coexist.md".to_string(),
             ]
         );
         let _ = fs::remove_dir_all(&root);
@@ -1177,10 +1176,10 @@ mod tests {
         assert_eq!(managed_path(&exact), exact);
 
         // Exact byte compare: a case variant is not already-managed.
-        let variant = PathBuf::from("X.AGENT-BESTIES.MD");
+        let variant = PathBuf::from("X.AGENT-COEXIST.MD");
         assert_eq!(
             managed_path(&variant).file_name().and_then(|n| n.to_str()),
-            Some("X.AGENT-BESTIES.MD.agent-besties.md")
+            Some("X.AGENT-COEXIST.MD.agent-coexist.md")
         );
     }
 
@@ -1194,7 +1193,7 @@ mod tests {
         assert_eq!(hit, exact.join(STATE_FILE_NAME));
 
         let cased = scratch("state-cased");
-        fs::write(cased.join("STATE.agent-besties.md"), b"").expect("write state file");
+        fs::write(cased.join("STATE.agent-coexist.md"), b"").expect("write state file");
         let got = state_file(&cased).expect("read_dir ok");
         if cfg!(any(windows, target_os = "macos")) {
             assert!(got.is_some());
@@ -1210,14 +1209,14 @@ mod tests {
         use std::ffi::OsStr;
 
         assert!(is_state_file_name(OsStr::new(STATE_FILE_NAME)));
-        assert!(!is_state_file_name(OsStr::new("state.agent-besties.mdx")));
-        assert!(!is_state_file_name(OsStr::new("other.agent-besties.md")));
+        assert!(!is_state_file_name(OsStr::new("state.agent-coexist.mdx")));
+        assert!(!is_state_file_name(OsStr::new("other.agent-coexist.md")));
         // A case variant matches only under the Windows/macOS rule — the
         // same platform predicate state_file locates with (§10.1.6).
         if cfg!(any(windows, target_os = "macos")) {
-            assert!(is_state_file_name(OsStr::new("STATE.Agent-Besties.MD")));
+            assert!(is_state_file_name(OsStr::new("STATE.Agent-Coexist.MD")));
         } else {
-            assert!(!is_state_file_name(OsStr::new("STATE.Agent-Besties.MD")));
+            assert!(!is_state_file_name(OsStr::new("STATE.Agent-Coexist.MD")));
         }
     }
 
@@ -1258,8 +1257,8 @@ mod tests {
     fn unreadable_dir_recorded_and_scan_continues() {
         use std::os::unix::fs::PermissionsExt;
         let root = scratch("unreadable");
-        touch(&root, "locked/x.agent-besties.md");
-        touch(&root, "open/y.agent-besties.md");
+        touch(&root, "locked/x.agent-coexist.md");
+        touch(&root, "open/y.agent-coexist.md");
         fs::set_permissions(root.join("locked"), fs::Permissions::from_mode(0o000))
             .expect("chmod locked dir");
 
@@ -1267,7 +1266,7 @@ mod tests {
 
         assert_eq!(res.unreadable_dirs, vec![root.join("locked")]);
         assert_eq!(res.files.len(), 1);
-        assert!(display_path(&res.files[0]).ends_with("open/y.agent-besties.md"));
+        assert!(display_path(&res.files[0]).ends_with("open/y.agent-coexist.md"));
 
         // Restore so the best-effort cleanup can remove the tree.
         let _ = fs::set_permissions(root.join("locked"), fs::Permissions::from_mode(0o755));
@@ -1280,8 +1279,8 @@ mod tests {
         let root = base.join("root");
         fs::create_dir_all(&root).expect("create scan root");
         fs::write(base.join(".gitignore"), "pruned/\n").expect("write gitignore");
-        touch(&root, "pruned/x.agent-besties.md");
-        touch(&root, "kept/y.agent-besties.md");
+        touch(&root, "pruned/x.agent-coexist.md");
+        touch(&root, "kept/y.agent-coexist.md");
 
         // Prefer a relative scan root: parent ignore files are read along
         // the canonicalized chain, which a relative root exercises hardest.
@@ -1294,7 +1293,7 @@ mod tests {
         let res = scan(&scan_root, &walk, &mut sink).expect("scan ok");
 
         assert_eq!(res.files.len(), 1);
-        assert!(display_path(&res.files[0]).ends_with("kept/y.agent-besties.md"));
+        assert!(display_path(&res.files[0]).ends_with("kept/y.agent-coexist.md"));
         assert!(res.ignore_sources.contains(&".gitignore".to_string()));
         let _ = fs::remove_dir_all(&base);
     }
@@ -1304,7 +1303,7 @@ mod tests {
     #[test]
     fn oversized_rule_set_names_its_file() {
         let root = scratch("rules-too-large");
-        touch(&root, "note.agent-besties.md");
+        touch(&root, "note.agent-coexist.md");
         let rule = |i: usize| format!("gen-{i}-{}\n", "?".repeat(50_000));
         fs::write(root.join(".ignore"), (0..10).map(rule).collect::<String>()).unwrap();
         let walk = Options::default();
@@ -1326,7 +1325,7 @@ mod tests {
     fn gitdir_pointing_at_a_file_names_the_git_file() {
         let base = scratch("gitdir-file");
         let root = base.join("work");
-        touch(&root, "note.agent-besties.md");
+        touch(&root, "note.agent-coexist.md");
         fs::write(base.join("gitdata"), "not a directory\n").unwrap();
         fs::write(root.join(".git"), "gitdir: ../gitdata\n").unwrap();
         let walk = Options::default();
@@ -1353,9 +1352,9 @@ mod tests {
         let root = scratch("dironly");
         // A regular file that merely carries the pattern's name must be
         // spared by the directory pattern `build/`.
-        touch(&root, "build.agent-besties.md");
-        touch(&root, "build/inner.agent-besties.md");
-        touch(&root, "keep.agent-besties.md");
+        touch(&root, "build.agent-coexist.md");
+        touch(&root, "build/inner.agent-coexist.md");
+        touch(&root, "keep.agent-coexist.md");
 
         let res = scan(&root, &opts(vec![], vec!["build/"]), &mut sink).expect("scan ok");
 
@@ -1368,8 +1367,8 @@ mod tests {
         assert_eq!(
             names,
             vec![
-                "build.agent-besties.md".to_string(),
-                "keep.agent-besties.md".to_string(),
+                "build.agent-coexist.md".to_string(),
+                "keep.agent-coexist.md".to_string(),
             ]
         );
         let _ = fs::remove_dir_all(&root);
@@ -1378,12 +1377,12 @@ mod tests {
     #[test]
     fn leading_slash_include_is_root_anchored() {
         let root = scratch("rootanchor");
-        touch(&root, "top.agent-besties.md");
-        touch(&root, "sub/top.agent-besties.md");
+        touch(&root, "top.agent-coexist.md");
+        touch(&root, "sub/top.agent-coexist.md");
 
         let res = scan(
             &root,
-            &opts(vec!["/top.agent-besties.md"], vec![]),
+            &opts(vec!["/top.agent-coexist.md"], vec![]),
             &mut sink,
         )
         .expect("scan ok");
@@ -1391,7 +1390,7 @@ mod tests {
         assert_eq!(res.files.len(), 1);
         let dirname = root.file_name().unwrap().to_string_lossy().into_owned();
         assert!(
-            display_path(&res.files[0]).ends_with(&format!("{}/top.agent-besties.md", dirname))
+            display_path(&res.files[0]).ends_with(&format!("{}/top.agent-coexist.md", dirname))
         );
         let _ = fs::remove_dir_all(&root);
     }
@@ -1434,18 +1433,18 @@ mod tests {
             return;
         }
         fs::create_dir_all(&fffd_dir).expect("create U+FFFD dir");
-        fs::write(raw_dir.join("note.agent-besties.md"), b"# note.post\n")
+        fs::write(raw_dir.join("note.agent-coexist.md"), b"# note.post\n")
             .expect("write non-Unicode note");
-        fs::write(fffd_dir.join("note.agent-besties.md"), b"# note.post\n")
+        fs::write(fffd_dir.join("note.agent-coexist.md"), b"# note.post\n")
             .expect("write U+FFFD note");
 
         let excluded =
             scan(&root, &opts(vec![], vec!["r\u{FFFD}/"]), &mut sink).expect("exclude scan ok");
-        assert_eq!(excluded.files, vec![raw_dir.join("note.agent-besties.md")]);
+        assert_eq!(excluded.files, vec![raw_dir.join("note.agent-coexist.md")]);
 
         let included =
             scan(&root, &opts(vec!["r\u{FFFD}/*"], vec![]), &mut sink).expect("include scan ok");
-        assert_eq!(included.files, vec![fffd_dir.join("note.agent-besties.md")]);
+        assert_eq!(included.files, vec![fffd_dir.join("note.agent-coexist.md")]);
 
         // Built-in sources use Gitignore's matcher, not the explicit-filter
         // adapter above. It must preserve the same two native identities.
@@ -1464,7 +1463,7 @@ mod tests {
     fn managed_directory_symlink_is_not_a_leaf() {
         let root = scratch("dirlink");
         fs::create_dir_all(root.join("real")).expect("create real dir");
-        std::os::unix::fs::symlink("real", root.join("link.agent-besties.md"))
+        std::os::unix::fs::symlink("real", root.join("link.agent-coexist.md"))
             .expect("create managed-suffix directory symlink");
 
         let res = scan(&root, &opts(vec![], vec![]), &mut sink).expect("scan ok");
@@ -1491,12 +1490,12 @@ mod tests {
         let base = scratch("linked-root");
         fs::create_dir_all(base.join("real")).expect("create real dir");
         fs::write(
-            base.join("real").join("note.agent-besties.md"),
+            base.join("real").join("note.agent-coexist.md"),
             b"# note.post\n",
         )
         .expect("write note");
 
-        let link = base.join("link.agent-besties.md");
+        let link = base.join("link.agent-coexist.md");
         #[cfg(unix)]
         std::os::unix::fs::symlink("real", &link).expect("create managed-suffix directory symlink");
         #[cfg(windows)]
@@ -1511,7 +1510,7 @@ mod tests {
                     "/C",
                     "mklink",
                     "/J",
-                    "link.agent-besties.md",
+                    "link.agent-coexist.md",
                     target.as_str(),
                 ])
                 .current_dir(&base)
@@ -1533,7 +1532,7 @@ mod tests {
             let res = scan(root, &opts(vec![], vec![]), &mut progress).expect("scan ok");
             assert_eq!(
                 res.files,
-                vec![root.join("note.agent-besties.md")],
+                vec![root.join("note.agent-coexist.md")],
                 "linked root {:?} must yield only the real descendant",
                 root
             );
@@ -1601,7 +1600,7 @@ mod tests {
             builder.require_git(false);
             assert!(builder.build().next().expect("global error item").is_err());
             let mut matcher = builder.build_matchers().pop().expect("root matcher");
-            let (_, error) = matcher.matched_with_errors("note.agent-besties.md", false);
+            let (_, error) = matcher.matched_with_errors("note.agent-coexist.md", false);
             assert!(error.is_some());
             let failed = std::sync::atomic::AtomicBool::new(false);
             builder.build_parallel().run(|| {
@@ -1630,14 +1629,14 @@ mod tests {
                 }
             })
             .expect("source was read before its removal");
-            assert_eq!(result.files, vec![root.join("note.agent-besties.md")]);
+            assert_eq!(result.files, vec![root.join("note.agent-coexist.md")]);
             assert!(result.ignore_sources.iter().any(|s| s == ".ignore"));
             assert!(result.ignore_sources.iter().any(|s| s == "global"));
             return;
         }
         let base = scratch("source-errors");
         let root = base.join("room");
-        touch(&root, "note.agent-besties.md");
+        touch(&root, "note.agent-coexist.md");
         fs::write(
             base.join("config"),
             "[core]\nexcludesFile = global-ignore\n",
@@ -1663,12 +1662,12 @@ mod tests {
             let root = PathBuf::from(root);
             assert!(scan(&root, &Options::default(), &mut sink).is_err());
             let result = scan(&root, &opts(vec![], vec![]), &mut sink).unwrap();
-            assert_eq!(result.files, vec![root.join("note.agent-besties.md")]);
+            assert_eq!(result.files, vec![root.join("note.agent-coexist.md")]);
             return;
         }
         let base = scratch("fifo-source");
         let root = base.join("room");
-        touch(&root, "note.agent-besties.md");
+        touch(&root, "note.agent-coexist.md");
         let fifo = std::ffi::CString::new(root.join(".ignore").as_os_str().as_bytes()).unwrap();
         assert_eq!(unsafe { libc::mkfifo(fifo.as_ptr(), 0o600) }, 0);
         let ok = run_env_isolated(
@@ -1703,7 +1702,7 @@ mod tests {
             let res = scan(&root, &walk, &mut sink).expect("scan ok");
             assert!(
                 res.files.is_empty(),
-                "global ignore must prune hidden.agent-besties.md, got {:?}",
+                "global ignore must prune hidden.agent-coexist.md, got {:?}",
                 res.files
             );
             assert!(
@@ -1722,13 +1721,13 @@ mod tests {
         fs::create_dir_all(&xdg).expect("create xdg");
         fs::create_dir_all(&room).expect("create room");
         let global_ignore = base.join("global-ignore");
-        fs::write(&global_ignore, "hidden.agent-besties.md\n").expect("write global ignore");
+        fs::write(&global_ignore, "hidden.agent-coexist.md\n").expect("write global ignore");
         fs::write(
             base.join("config"),
             format!("[core]\nexcludesFile = {}\n", global_ignore.display()),
         )
         .expect("write GIT_CONFIG_GLOBAL");
-        fs::write(room.join("hidden.agent-besties.md"), b"# hidden.post\n").expect("write hidden");
+        fs::write(room.join("hidden.agent-coexist.md"), b"# hidden.post\n").expect("write hidden");
 
         let ok = run_env_isolated(
             "fsx::walk::tests::git_config_global_prunes_and_reports_global",
@@ -1759,7 +1758,7 @@ mod tests {
             let res = scan(&root, &walk, &mut sink).expect("scan ok");
             assert_eq!(
                 res.files,
-                vec![root.join("hidden.agent-besties.md")],
+                vec![root.join("hidden.agent-coexist.md")],
                 "missing configured excludesFile must not load the default global ignore"
             );
             assert!(
@@ -1785,9 +1784,9 @@ mod tests {
             ),
         )
         .expect("write home gitconfig");
-        fs::write(xdg.join("git").join("ignore"), "hidden.agent-besties.md\n")
+        fs::write(xdg.join("git").join("ignore"), "hidden.agent-coexist.md\n")
             .expect("write default global ignore");
-        fs::write(room.join("hidden.agent-besties.md"), b"# hidden.post\n").expect("write hidden");
+        fs::write(room.join("hidden.agent-coexist.md"), b"# hidden.post\n").expect("write hidden");
 
         let ok = run_env_isolated(
             "fsx::walk::tests::configured_missing_excludesfile_does_not_claim_global",
@@ -1815,7 +1814,7 @@ mod tests {
                 no_ignore: false,
             };
             let res = scan(&root, &walk, &mut sink).expect("scan ok");
-            assert_eq!(res.files, vec![root.join("kept.agent-besties.md")]);
+            assert_eq!(res.files, vec![root.join("kept.agent-coexist.md")]);
             assert!(
                 res.ignore_sources.iter().any(|s| s == "global"),
                 "empty loaded global ignore must still be a present source, got {:?}",
@@ -1838,7 +1837,7 @@ mod tests {
             format!("[core]\nexcludesFile = {}\n", global_ignore.display()),
         )
         .expect("write GIT_CONFIG_GLOBAL");
-        fs::write(room.join("kept.agent-besties.md"), b"# kept.post\n").expect("write kept");
+        fs::write(room.join("kept.agent-coexist.md"), b"# kept.post\n").expect("write kept");
 
         let ok = run_env_isolated(
             "fsx::walk::tests::empty_global_ignore_still_reports_global",

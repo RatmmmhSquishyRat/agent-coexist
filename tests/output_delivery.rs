@@ -121,7 +121,7 @@ fn an_undelivered_write_report_keeps_the_committed_record() {
         .output()
         .unwrap();
     assert_eq!(output.status.code(), Some(1));
-    let record = std::fs::read_to_string(dir.path().join("thread.agent-besties.md")).unwrap();
+    let record = std::fs::read_to_string(dir.path().join("thread.agent-coexist.md")).unwrap();
     assert!(record.contains("## #1 alice"));
     assert!(record.contains("saved"));
 }

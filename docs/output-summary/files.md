@@ -9,13 +9,13 @@
 `agent-coexist brief onboarding --as alice --target src/parser/mod.rs --entry 'parser entry point' -m 'Start at parse_document; check its error mapping before changing callers.'`
 ```text
 ok  brief  onboarding
-  created       onboarding.agent-besties.md
+  created       onboarding.agent-coexist.md
   entry         parser entry point  added  src/parser/mod.rs
   hash          c399aff1248675b25447a94e5e2b618b8cba18985d5e5b2fe52ed174124cd367
   note          set
 ```
 
-file onboarding.agent-besties.md:
+file onboarding.agent-coexist.md:
 ````text
 # onboarding.brief
 
@@ -40,11 +40,11 @@ The directory exists and holds no state file yet.
 `agent-coexist state src/parser --as alice --status locked --for 30m`
 ```text
 ok  state  src/parser
-  created       src/parser/state.agent-besties.md
+  created       src/parser/state.agent-coexist.md
   set           locked  alice  2026-09-17T10:00:00Z..2026-09-17T10:30:00Z
 ```
 
-file src/parser/state.agent-besties.md:
+file src/parser/state.agent-coexist.md:
 ```text
 # .state
 
@@ -64,12 +64,12 @@ The post does not exist yet; current time: 2026-09-17T10:00:00Z.
 `agent-coexist post parser-review --as alice -m $'Decision: keep the parser API unchanged; adjust the error mapping.\nEvidence: src/parser/mod.rs and reports/parser-check.txt.\nRequest: @bob review the mapping before integration; reply here.'`
 ```text
 ok  post  parser-review
-  created       parser-review.agent-besties.md
+  created       parser-review.agent-coexist.md
   comment       #1  L3
   mentions      bob
 ```
 
-file parser-review.agent-besties.md:
+file parser-review.agent-coexist.md:
 ````text
 # parser-review.post
 
@@ -93,11 +93,11 @@ The `team/` directory does not exist yet.
 ok  profile  team/agents/alice
   created       team/
   created       team/agents/
-  created       team/agents/alice.agent-besties.md
+  created       team/agents/alice.agent-coexist.md
   section       scope  set
 ```
 
-file team/agents/alice.agent-besties.md:
+file team/agents/alice.agent-coexist.md:
 ````text
 # alice.agent-profile
 

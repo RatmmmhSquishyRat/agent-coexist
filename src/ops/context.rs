@@ -127,7 +127,7 @@ pub fn display_file(path: &Path) -> String {
 }
 
 /// First-line object for PATH commands: the display path without the
-/// `.agent-besties.md` suffix (spec §8.1.3; a PATH given with its suffix is
+/// `.agent-coexist.md` suffix (spec §8.1.3; a PATH given with its suffix is
 /// displayed without it).
 pub fn object_of_path(path: &Path) -> String {
     let displayed = fsx::walk::display_path(path);
@@ -169,7 +169,7 @@ pub fn diag_context_for_dir(ctx: &Ctx, command: &'static str, dir: &Path) -> dia
     } else {
         format!("{dir_display}/state")
     };
-    let reserved = dir.join(format!("state{}", consts::SUFFIX));
+    let reserved = dir.join(consts::STATE_FILE_NAME);
     let (path_arg, state_file_selected) = match command {
         // `state` reads and writes exactly the file the reserved-state
         // lookup selects, so its diagnostics describe that file.

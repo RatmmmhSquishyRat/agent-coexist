@@ -9,7 +9,7 @@
 //! (exit 130) or a real failure. `wait <PATH>` watches any of the four types;
 //! `wait-post <PATH> [--as <nick>]` watches a single post;
 //! `wait-state [DIR] [--status <name>]` watches exactly
-//! `DIR/state.agent-besties.md`. Without a projection filter any change ends
+//! `DIR/state.agent-coexist.md`. Without a projection filter any change ends
 //! the wait, including byte-only format changes; `--as <nick>` /
 //! `--status <name>` end the wait only on semantic changes qualifying for
 //! that nick or status. The ending report carries `bytes: changed` and
@@ -1945,7 +1945,7 @@ mod tests {
     /// (spec §8.1.3–§8.1.4; regression: WAIT-OBJECT-UNFOLDED).
     #[test]
     fn command_object_folds_like_base_commands() {
-        let path = Path::new("docs/foo  bar.agent-besties.md");
+        let path = Path::new("docs/foo  bar.agent-coexist.md");
         let (command, object) = command_object(path, &Filter::Any);
         assert_eq!(command, "wait");
         assert_eq!(object, "docs/foo bar");
@@ -1960,7 +1960,7 @@ mod tests {
         assert_eq!(command, "wait-post");
         assert_eq!(object, context::object_of_path(path));
 
-        let state_path = Path::new("foo  bar").join(format!("state{}", crate::consts::SUFFIX));
+        let state_path = Path::new("foo  bar").join(crate::consts::STATE_FILE_NAME);
         let (command, object) = command_object(&state_path, &Filter::State(None));
         assert_eq!(command, "wait-state");
         assert_eq!(object, "foo bar");
@@ -2002,7 +2002,7 @@ mod tests {
         let root = tempfile::tempdir().expect("tempdir");
         let dir = root.path().join("notdir");
         std::fs::write(&dir, b"regular file").expect("write file as dir");
-        let path = dir.join(format!("state{}", crate::consts::SUFFIX));
+        let path = dir.join(crate::consts::STATE_FILE_NAME);
         let cancel = Cancellation::new();
         let err = run(&path, Filter::State(None), &cancel, || {}).expect_err("dir is a file");
         match err {
@@ -2023,7 +2023,7 @@ mod tests {
     /// convention for `created` rows (regression: WAIT-OBJECT-UNFOLDED).
     #[test]
     fn created_and_removed_rows_use_folded_display() {
-        let path = Path::new("docs/foo  bar.agent-besties.md");
+        let path = Path::new("docs/foo  bar.agent-coexist.md");
         let parsed = doc::parse(post_bytes(), path, fixed_now()).expect("valid post");
         let created = build_report(
             path,
@@ -2034,7 +2034,7 @@ mod tests {
         );
         assert_eq!(
             field_values(&created, "created").expect("created row"),
-            &["docs/foo bar.agent-besties.md"]
+            &["docs/foo bar.agent-coexist.md"]
         );
         assert_eq!(created.object, "docs/foo bar");
         let removed = build_report(
@@ -2046,7 +2046,7 @@ mod tests {
         );
         assert_eq!(
             field_values(&removed, "removed").expect("removed row"),
-            &["docs/foo bar.agent-besties.md"]
+            &["docs/foo bar.agent-coexist.md"]
         );
     }
 
@@ -2054,7 +2054,7 @@ mod tests {
     /// type (kind is none), blocking diagnostics, exit 1. Not Absent.
     #[test]
     fn empty_present_file_reports_file_row_without_type() {
-        let path = Path::new("notes.agent-besties.md");
+        let path = Path::new("notes.agent-coexist.md");
         let report =
             blocked(admit_present(Vec::new(), path, &Filter::Any, fixed_now()).expect("admit"));
         assert_eq!(report.command, "wait");
@@ -2063,7 +2063,7 @@ mod tests {
         assert_eq!(report.exit, 1);
         assert_eq!(
             field_values(&report, "file").expect("file row"),
-            &["notes.agent-besties.md"]
+            &["notes.agent-coexist.md"]
         );
         assert!(
             field_values(&report, "type").is_none(),
@@ -2085,7 +2085,7 @@ mod tests {
     /// report has file + type + E-FENCE.
     #[test]
     fn unclosed_post_fence_reports_file_type_and_fence() {
-        let path = Path::new("standup.agent-besties.md");
+        let path = Path::new("standup.agent-coexist.md");
         let bytes =
             b"# standup.post\n\n## #1 alice (2026-09-17T09:12:00Z)\n\n```md\nnever closed\n"
                 .to_vec();
@@ -2096,7 +2096,7 @@ mod tests {
         assert_eq!(report.exit, 1);
         assert_eq!(
             field_values(&report, "file").expect("file row"),
-            &["standup.agent-besties.md"]
+            &["standup.agent-coexist.md"]
         );
         assert_eq!(field_values(&report, "type").expect("type row"), &["post"]);
         assert!(
@@ -2110,7 +2110,7 @@ mod tests {
     /// managed state path.
     #[test]
     fn wait_state_empty_file_keeps_dir_object_and_file_row() {
-        let path = Path::new("room/state.agent-besties.md");
+        let path = Path::new("room/state.agent-coexist.md");
         let report = blocked(
             admit_present(Vec::new(), path, &Filter::State(None), fixed_now()).expect("admit"),
         );
@@ -2118,7 +2118,7 @@ mod tests {
         assert_eq!(report.object, "room");
         assert_eq!(
             field_values(&report, "file").expect("file row"),
-            &["room/state.agent-besties.md"]
+            &["room/state.agent-coexist.md"]
         );
         assert!(field_values(&report, "type").is_none());
         assert_eq!(report.exit, 1);
@@ -2128,12 +2128,12 @@ mod tests {
     /// no type, E-UTF8.
     #[test]
     fn invalid_utf8_present_file_reports_file_row_without_type() {
-        let path = Path::new("notes.agent-besties.md");
+        let path = Path::new("notes.agent-coexist.md");
         let report =
             blocked(admit_present(vec![0xff], path, &Filter::Any, fixed_now()).expect("admit"));
         assert_eq!(
             field_values(&report, "file").expect("file row"),
-            &["notes.agent-besties.md"]
+            &["notes.agent-coexist.md"]
         );
         assert!(field_values(&report, "type").is_none());
         assert!(
@@ -2149,7 +2149,7 @@ mod tests {
     /// U+FFFD in title labels, nick identity stays raw.
     #[test]
     fn wait_state_entity_rows_sanitize_status_titles() {
-        let path = Path::new("room/state.agent-besties.md");
+        let path = Path::new("room/state.agent-coexist.md");
         let bytes =
             b"# .state\n\n## custom\x1b[2J\nbob 2026-09-25T11:00:00Z..2026-09-25T14:00:00Z\n"
                 .to_vec();
@@ -2192,7 +2192,7 @@ mod tests {
     /// stay two entities.
     #[test]
     fn wait_brief_entity_rows_sanitize_entry_titles_without_merging() {
-        let path = Path::new("notes.agent-besties.md");
+        let path = Path::new("notes.agent-coexist.md");
         let bytes = concat!(
             "# notes.brief\n\n",
             "## t\u{1b}itle\n",
@@ -2241,7 +2241,7 @@ mod tests {
     /// Profile section identities are display_text'd at wait output only.
     #[test]
     fn wait_profile_entity_rows_sanitize_section_titles_without_merging() {
-        let path = Path::new("a.agent-besties.md");
+        let path = Path::new("a.agent-coexist.md");
         let bytes = concat!(
             "# a.agent-profile\n\n",
             "## role\u{1b}\n\n",
@@ -2330,7 +2330,7 @@ mod tests {
     /// reorder of the selected declarations; add/remove/renewal still hit.
     #[test]
     fn filtered_state_pairs_by_nick_and_ignores_unrelated_or_order_only() {
-        let path = Path::new("room/state.agent-besties.md");
+        let path = Path::new("room/state.agent-coexist.md");
         let filter = Filter::State(Some("observing".to_string()));
         let baseline = admitted(state_two_observing("alice", "bob"), path);
 
@@ -2426,7 +2426,7 @@ mod tests {
     /// an order row.
     #[test]
     fn unfiltered_state_order_only_and_replacement_keep_file_order() {
-        let path = Path::new("room/state.agent-besties.md");
+        let path = Path::new("room/state.agent-coexist.md");
         let filter = Filter::Any;
         let baseline = admitted(state_two_observing("alice", "bob"), path);
         let reordered = admitted(state_two_observing("bob", "alice"), path);
@@ -2481,7 +2481,7 @@ mod tests {
     /// never qualify a nick filter.
     #[test]
     fn post_pairs_by_seq_and_subscriber_only_is_not_a_filtered_hit() {
-        let path = Path::new("standup.agent-besties.md");
+        let path = Path::new("standup.agent-coexist.md");
         let before = admitted(
             doc_bytes(&[
                 "# standup.post",
@@ -2594,7 +2594,7 @@ mod tests {
     /// position; a permutation of the same set is order-only.
     #[test]
     fn brief_and_profile_pair_by_raw_identity_across_reorder() {
-        let brief_path = Path::new("notes.agent-besties.md");
+        let brief_path = Path::new("notes.agent-coexist.md");
         let before_brief = admitted(
             doc_bytes(&[
                 "# notes.brief",
@@ -2644,7 +2644,7 @@ mod tests {
         assert_eq!(brief_orders.len(), 1);
         assert_eq!(brief_orders[0], ["entries".to_string()].as_slice());
 
-        let profile_path = Path::new("a.agent-besties.md");
+        let profile_path = Path::new("a.agent-coexist.md");
         let before_profile = admitted(
             doc_bytes(&[
                 "# a.agent-profile",

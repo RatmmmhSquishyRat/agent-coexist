@@ -676,7 +676,7 @@ fn concurrent_post_writers_land_each_body_once_with_clean_numbering() {
         assert_first_line(out, "ok", "post");
     }
 
-    let file = cwd.join("standup.agent-besties.md");
+    let file = cwd.join("standup.agent-coexist.md");
     let content = fs::read_to_string(&file).expect("read merged post");
     assert_eq!(first_line(&content), "# standup.post");
 
@@ -727,7 +727,7 @@ fn concurrent_post_writers_land_each_body_once_with_clean_numbering() {
 fn parent_native_exclusive_lock_bounds_access_then_recovers() {
     let dir = tempfile::tempdir().unwrap();
     let cwd = dir.path();
-    let file = cwd.join("standup.agent-besties.md");
+    let file = cwd.join("standup.agent-coexist.md");
 
     // Seed the busy managed file through the real create path, plus a
     // readable sibling collaboration file in the same directory.
@@ -886,7 +886,7 @@ fn parent_native_exclusive_lock_bounds_access_then_recovers() {
 fn no_sharing_external_handle_is_e_inuse_distinct_from_e_locked() {
     let dir = tempfile::tempdir().unwrap();
     let cwd = dir.path();
-    let file = cwd.join("standup.agent-besties.md");
+    let file = cwd.join("standup.agent-coexist.md");
 
     let out = run(
         cwd,
@@ -977,7 +977,7 @@ fn no_sharing_external_handle_is_e_inuse_distinct_from_e_locked() {
 fn delete_pending_file_is_os_failure_and_recreation_works() {
     let dir = tempfile::tempdir().unwrap();
     let cwd = dir.path();
-    let file = cwd.join("standup.agent-besties.md");
+    let file = cwd.join("standup.agent-coexist.md");
 
     let out = run(
         cwd,
@@ -1077,7 +1077,7 @@ fn list_does_not_enter_directory_symlink() {
     // The symlink is a genuinely traversable directory: reading through it
     // works, so any second `innerpost` hit below would prove the walk had
     // entered it.
-    assert!(fs::read(cwd.join("link").join("innerpost.agent-besties.md")).is_ok());
+    assert!(fs::read(cwd.join("link").join("innerpost.agent-coexist.md")).is_ok());
 
     let out = run(cwd, &["list"]);
     assert!(out.status.success(), "{}", describe(&out));
@@ -1141,7 +1141,7 @@ fn list_does_not_enter_junction() {
         "junction was not created"
     );
     // The junction is genuinely traversable at the OS level.
-    assert!(fs::read(cwd.join("link").join("innerpost.agent-besties.md")).is_ok());
+    assert!(fs::read(cwd.join("link").join("innerpost.agent-coexist.md")).is_ok());
 
     let out = run(cwd, &["list"]);
     assert!(out.status.success(), "{}", describe(&out));
@@ -1172,7 +1172,7 @@ fn list_does_not_enter_junction() {
 fn emitted_lock_retry_preserves_shell_syntax_bodies() {
     let dir = tempfile::tempdir().unwrap();
     let cwd = dir.path();
-    let file = cwd.join("standup.agent-besties.md");
+    let file = cwd.join("standup.agent-coexist.md");
 
     let out = run(
         cwd,
@@ -1236,7 +1236,7 @@ fn emitted_retry_preserves_empty_regex_value() {
     let dir = tempfile::tempdir().unwrap();
     let cwd = dir.path();
     fs::write(cwd.join("target.txt"), b"source\n").unwrap();
-    let file = cwd.join("notes.agent-besties.md");
+    let file = cwd.join("notes.agent-coexist.md");
     fs::write(
         &file,
         format!(
@@ -1295,7 +1295,7 @@ fn emitted_brief_refresh_consumes_literal_titles_and_keeps_esc_distinct() {
         fs::write(cwd.join(name), bytes).unwrap();
     }
     fs::write(
-        cwd.join("notes.agent-besties.md"),
+        cwd.join("notes.agent-coexist.md"),
         concat!(
             "# notes.brief\n\n",
             "## <file>\n",
@@ -1348,7 +1348,7 @@ fn emitted_brief_refresh_consumes_literal_titles_and_keeps_esc_distinct() {
         "a refresh suggestion must not truncate an unrelated redirection target"
     );
 
-    let content = fs::read_to_string(cwd.join("notes.agent-besties.md")).unwrap();
+    let content = fs::read_to_string(cwd.join("notes.agent-coexist.md")).unwrap();
     assert!(
         section_has_sha256(heading_section(&content, "<file>")),
         "<file> entry must refresh:\n{content}"
@@ -1381,7 +1381,7 @@ fn emitted_wbody_and_leading_dash_profile_repairs_consume() {
     let cwd = dir.path();
 
     fs::write(
-        cwd.join("standup.agent-besties.md"),
+        cwd.join("standup.agent-coexist.md"),
         format!("# standup.post\n\n## #1 alice ({NOW})\n"),
     )
     .unwrap();
@@ -1396,7 +1396,7 @@ fn emitted_wbody_and_leading_dash_profile_repairs_consume() {
         })
         .unwrap_or_else(|| panic!("missing post W-BODY repair:\n{stdout}"));
     consume_emitted_ok(cwd, wbody);
-    let posted = fs::read_to_string(cwd.join("standup.agent-besties.md")).unwrap();
+    let posted = fs::read_to_string(cwd.join("standup.agent-coexist.md")).unwrap();
     assert!(
         posted.contains("<text>"),
         "W-BODY consume must write the placeholder body:\n{posted}"
@@ -1412,7 +1412,7 @@ fn emitted_wbody_and_leading_dash_profile_repairs_consume() {
         .find(|fix| shell_command_from_fix(fix).contains("profile"))
         .unwrap_or_else(|| panic!("missing W-PROFILE-EMPTY repair:\n{stdout}"));
     consume_emitted_ok(cwd, repair);
-    let profile = fs::read_to_string(cwd.join("-alice.agent-besties.md")).unwrap();
+    let profile = fs::read_to_string(cwd.join("-alice.agent-coexist.md")).unwrap();
     assert!(
         profile.contains("## role"),
         "leading-dash profile must accept the emitted repair:\n{profile}"
@@ -1429,8 +1429,8 @@ fn emitted_repair_mutates_two_space_dir_not_folded_twin() {
     let cwd = dir.path();
     seed_two_space_and_one_space_twins(cwd);
 
-    let selected = cwd.join("a  b").join("alice.agent-besties.md");
-    let twin = cwd.join("a b").join("alice.agent-besties.md");
+    let selected = cwd.join("a  b").join("alice.agent-coexist.md");
+    let twin = cwd.join("a b").join("alice.agent-coexist.md");
     let twin_before = fs::read_to_string(&twin).unwrap();
 
     let out = run(cwd, &["check", "a  b/alice"]);
@@ -1489,7 +1489,7 @@ fn emitted_regex_repair_preserves_runtime_target() {
     fs::write(cwd.join("-target  file"), b"<pattern>\n").unwrap();
     fs::write(cwd.join("-target file"), b"different sibling\n").unwrap();
     fs::write(
-        cwd.join("notes.agent-besties.md"),
+        cwd.join("notes.agent-coexist.md"),
         format!(
             "# notes.brief\n\n## parser\n- path: -target  file\n- hash: {}\n- regex: (\n",
             "0".repeat(64)
@@ -1506,7 +1506,7 @@ fn emitted_regex_repair_preserves_runtime_target() {
         .unwrap_or_else(|| panic!("missing regex repair:\n{stdout}"));
     consume_emitted_ok(cwd, repair);
 
-    let content = fs::read_to_string(cwd.join("notes.agent-besties.md")).unwrap();
+    let content = fs::read_to_string(cwd.join("notes.agent-coexist.md")).unwrap();
     assert!(content.lines().any(|line| line == "- path: -target  file"));
     assert_eq!(
         fs::read(cwd.join("-target file")).unwrap(),
@@ -1533,7 +1533,7 @@ fn emitted_brace_refresh_addresses_literal_entry_not_expanded_sibling() {
     let cwd = dir.path();
     fs::write(cwd.join("wanted.txt"), b"wanted contents\n").unwrap();
     fs::write(cwd.join("other.txt"), b"other contents\n").unwrap();
-    let file = cwd.join("plan.agent-besties.md");
+    let file = cwd.join("plan.agent-coexist.md");
     let before = concat!(
         "# plan.brief\n\n",
         "## {1..1}\n- path: wanted.txt\n\n",
@@ -1581,8 +1581,8 @@ fn filename_diagnostics_fold_controls_without_changing_native_identity() {
             "post",
         ),
     ] {
-        let file = cwd.join(format!("{stem}.agent-besties.md"));
-        let twin = cwd.join(format!("{display}.agent-besties.md"));
+        let file = cwd.join(format!("{stem}.agent-coexist.md"));
+        let twin = cwd.join(format!("{display}.agent-coexist.md"));
         fs::write(&file, body).unwrap();
         fs::write(&twin, sibling).unwrap();
         let out = run(cwd, &["check", stem]);
@@ -1614,7 +1614,7 @@ fn filename_diagnostics_fold_controls_without_changing_native_identity() {
 fn invalid_profile_section_body_repair_is_manual() {
     let dir = tempfile::tempdir().unwrap();
     let cwd = dir.path();
-    let file = cwd.join("invalid-profile.agent-besties.md");
+    let file = cwd.join("invalid-profile.agent-coexist.md");
     let before = "# invalid-profile.agent-profile\n\n## my role\n";
     fs::write(&file, before).unwrap();
 
@@ -1681,7 +1681,7 @@ fn parser_errors_keep_clap_structured_stderr() {
             .any(|line| line.starts_with("For more information, try")),
         "the help hint must be its own line, not flattened into the error line:\n{stderr:?}"
     );
-    assert!(!cwd.join("standup.agent-besties.md").exists());
+    assert!(!cwd.join("standup.agent-coexist.md").exists());
 
     // A grammar error with a Usage block prints it as clap renders it:
     // the missing argument and the synopsis are separate lines.
@@ -1742,7 +1742,7 @@ fn explicit_help_and_version_keep_stdout() {
 fn emitted_ehead_header_is_copyable_file_content() {
     let dir = tempfile::tempdir().unwrap();
     let cwd = dir.path();
-    let file = cwd.join("broken.agent-besties.md");
+    let file = cwd.join("broken.agent-coexist.md");
     const CREATED: &str = "2026-09-17T09:00:00Z";
     const EDITED: &str = "2026-09-17T09:20:00Z";
     // (malformed header, original creation time the reader supplies for a
@@ -1859,7 +1859,7 @@ fn emitted_ehead_header_is_copyable_file_content() {
 fn emitted_section_heading_repairs_unicode_title() {
     let dir = tempfile::tempdir().unwrap();
     let cwd = dir.path();
-    let file = cwd.join("role-card.agent-besties.md");
+    let file = cwd.join("role-card.agent-coexist.md");
     let before = concat!(
         "# role-card.agent-profile\n\n",
         "## notes\n",
@@ -1929,7 +1929,7 @@ fn emitted_dirty_observing_retry_keeps_locked() {
     let dir = tempfile::tempdir().unwrap();
     let cwd = dir.path();
     fs::create_dir(cwd.join("tree")).unwrap();
-    let file = cwd.join("tree/state.agent-besties.md");
+    let file = cwd.join("tree/state.agent-coexist.md");
     let before = concat!(
         "# .state\n\n",
         "## observing\n",
@@ -1979,7 +1979,7 @@ fn emitted_dirty_observing_retry_keeps_locked() {
 fn invalid_stored_status_repairs_are_manual_not_status_commands() {
     let dir = tempfile::tempdir().unwrap();
     let cwd = dir.path();
-    let file = cwd.join("state.agent-besties.md");
+    let file = cwd.join("state.agent-coexist.md");
     let before = concat!(
         "# .state\n\n",
         "## Bad Name\n",
@@ -2062,7 +2062,7 @@ fn empty_brief_title_keeps_slash_columns_through_wait_diff() {
         "empty title must stay a slash column on create:\n{created_out}"
     );
 
-    let file = cwd.join("b.agent-besties.md");
+    let file = cwd.join("b.agent-coexist.md");
     let before = fs::read_to_string(&file).expect("read created brief");
     assert!(
         before.contains("## \n"),
@@ -2176,7 +2176,7 @@ fn empty_brief_title_keeps_slash_columns_through_wait_diff() {
 fn empty_list_stem_and_check_object_keep_slash_columns() {
     let dir = tempfile::tempdir().unwrap();
     let cwd = dir.path();
-    fs::write(cwd.join(".agent-besties.md"), b"not a heading\n").unwrap();
+    fs::write(cwd.join(".agent-coexist.md"), b"not a heading\n").unwrap();
 
     let list = run(cwd, &["list", "."]);
     assert!(list.status.success(), "{}", describe(&list));
@@ -2186,7 +2186,7 @@ fn empty_list_stem_and_check_object_keep_slash_columns() {
         "empty list stem must stay a slash column:\n{list_out}"
     );
 
-    let check = run(cwd, &["check", ".agent-besties.md"]);
+    let check = run(cwd, &["check", ".agent-coexist.md"]);
     let check_out = String::from_utf8_lossy(&check.stdout);
     assert_eq!(
         columns(first_line(&check_out)).get(2).copied(),
@@ -2195,14 +2195,14 @@ fn empty_list_stem_and_check_object_keep_slash_columns() {
     );
 }
 
-/// A valid suffix-only `.agent-besties.md` waits with empty object: both
+/// A valid suffix-only `.agent-coexist.md` waits with empty object: both
 /// the ready line and the final report keep `/` as that column. Wait does
 /// not rewrite stored bytes.
 #[test]
 fn suffix_only_wait_ready_and_report_keep_slash_object() {
     let dir = tempfile::tempdir().unwrap();
     let cwd = dir.path();
-    let file = cwd.join(".agent-besties.md");
+    let file = cwd.join(".agent-coexist.md");
     let baseline = "# .state\n";
     fs::write(&file, baseline).unwrap();
 
@@ -2210,7 +2210,7 @@ fn suffix_only_wait_ready_and_report_keep_slash_object() {
     let stderr_path = cwd.join("wait.err");
     let mut child = detached_cli(cwd);
     child
-        .args(["wait", ".agent-besties.md"])
+        .args(["wait", ".agent-coexist.md"])
         .stdin(Stdio::null())
         .stdout(fs::File::create(&stdout_path).expect("wait stdout file"))
         .stderr(fs::File::create(&stderr_path).expect("wait stderr file"));
@@ -2307,8 +2307,8 @@ fn absent_observing_recovery_keeps_locked_and_inspects_native_dir() {
     let cwd = dir.path();
     fs::create_dir(cwd.join("tree  raw")).unwrap();
     fs::create_dir(cwd.join("tree raw")).unwrap();
-    let file = cwd.join("tree  raw/state.agent-besties.md");
-    let twin = cwd.join("tree raw/state.agent-besties.md");
+    let file = cwd.join("tree  raw/state.agent-coexist.md");
+    let twin = cwd.join("tree raw/state.agent-coexist.md");
     let before = concat!(
         "# .state\n\n",
         "## locked\n",
@@ -2374,7 +2374,7 @@ fn absent_observing_recovery_keeps_locked_and_inspects_native_dir() {
 fn include_hint_columns_fold_without_changing_raw_glob_matching() {
     let dir = tempfile::tempdir().unwrap();
     let cwd = dir.path();
-    let raw_glob = "a  b.agent-besties.md";
+    let raw_glob = "a  b.agent-coexist.md";
     let out = run(
         cwd,
         &[
@@ -2402,7 +2402,7 @@ fn include_hint_columns_fold_without_changing_raw_glob_matching() {
         hints.iter().all(|row| row.len() == 3),
         "each include row needs a key, one glob column and one hint column:\n{stdout}"
     );
-    assert_eq!(hints[0][1], "a b.agent-besties.md");
+    assert_eq!(hints[0][1], "a b.agent-coexist.md");
     assert_eq!(hints[1][1], "missing \u{fffd}end");
     assert!(
         !stdout.contains('\u{1b}'),
@@ -2410,7 +2410,7 @@ fn include_hint_columns_fold_without_changing_raw_glob_matching() {
     );
 
     fs::write(cwd.join(raw_glob), "# raw.post\n").unwrap();
-    fs::write(cwd.join("a b.agent-besties.md"), "# folded.brief\n").unwrap();
+    fs::write(cwd.join("a b.agent-coexist.md"), "# folded.brief\n").unwrap();
     let selected = run(cwd, &["list", ".", "--include", raw_glob]);
     assert!(selected.status.success(), "{}", describe(&selected));
     let selected_out = assert_first_line(&selected, "ok", "list");
@@ -2458,8 +2458,8 @@ fn noncanonical_state_recovery_stays_manual_and_local() {
     let dir = tempfile::tempdir().unwrap();
     let cwd = dir.path();
     fs::create_dir(cwd.join("tree")).unwrap();
-    let draft = cwd.join("tree/draft.agent-besties.md");
-    let canonical = cwd.join("tree/state.agent-besties.md");
+    let draft = cwd.join("tree/draft.agent-coexist.md");
+    let canonical = cwd.join("tree/state.agent-coexist.md");
     let draft_before = concat!(
         "# .state\n\n",
         "## observing\n",
@@ -2552,8 +2552,8 @@ fn noncanonical_state_recovery_stays_manual_and_local() {
 fn cased_reserved_state_only_selected_emits_mutation_recipes() {
     let dir = tempfile::tempdir().unwrap();
     let cwd = dir.path();
-    let lower = cwd.join("state.agent-besties.md");
-    let upper = cwd.join("STATE.agent-besties.md");
+    let lower = cwd.join("state.agent-coexist.md");
+    let upper = cwd.join("STATE.agent-coexist.md");
     let lower_body = concat!(
         "# .state\n\n",
         "## observing\n",
@@ -2698,14 +2698,14 @@ fn canonical_state_recovery_recipes_mutate_selected_only() {
             fs::create_dir(cwd.join("tree")).unwrap();
         }
         let canonical = cwd.join(if nested {
-            "tree/state.agent-besties.md"
+            "tree/state.agent-coexist.md"
         } else {
-            "state.agent-besties.md"
+            "state.agent-coexist.md"
         });
         let sibling = cwd.join(if nested {
-            "tree/draft.agent-besties.md"
+            "tree/draft.agent-coexist.md"
         } else {
-            "draft.agent-besties.md"
+            "draft.agent-coexist.md"
         });
         let sibling_before = concat!(
             "# .state\n\n",
@@ -2818,7 +2818,7 @@ fn canonical_state_recovery_recipes_mutate_selected_only() {
 fn emitted_section_heading_collisions_stay_manual() {
     let dir = tempfile::tempdir().unwrap();
     let cwd = dir.path();
-    let file = cwd.join("role-card.agent-besties.md");
+    let file = cwd.join("role-card.agent-coexist.md");
     let before = concat!(
         "# role-card.agent-profile\n\n",
         "## notes\n",
@@ -2952,7 +2952,7 @@ fn emitted_conflict_removal_keeps_other_live_statuses() {
     let dir = tempfile::tempdir().unwrap();
     let cwd = dir.path();
     fs::create_dir(cwd.join("tree")).unwrap();
-    let file = cwd.join("tree/state.agent-besties.md");
+    let file = cwd.join("tree/state.agent-coexist.md");
     let before = concat!(
         "# .state\n\n",
         "## locked\n",
@@ -3014,20 +3014,20 @@ fn removed_wait_state_recovery_does_not_recreate_or_retarget() {
             "wait",
             &["wait", "state"] as &[&str],
             "state",
-            "state.agent-besties.md",
+            "state.agent-coexist.md",
         ),
         (
             "wait-state",
             &["wait-state", "."] as &[&str],
             ".",
-            "./state.agent-besties.md",
+            "./state.agent-coexist.md",
         ),
     ] {
         for with_sibling in [false, true] {
             let dir = tempfile::tempdir().unwrap();
             let cwd = dir.path();
-            let file = cwd.join("state.agent-besties.md");
-            let sibling = cwd.join("STATE.agent-besties.md");
+            let file = cwd.join("state.agent-coexist.md");
+            let sibling = cwd.join("STATE.agent-coexist.md");
             let baseline = concat!(
                 "# .state\n\n",
                 "## observing\n",
@@ -3340,7 +3340,7 @@ fn wait_replaced_by_directory_recovery_restores_not_corrects() {
         std::thread::sleep(Duration::from_millis(20));
     }
 
-    if let Err(error) = fs::create_dir(cwd.join("room").join("standup.agent-besties.md")) {
+    if let Err(error) = fs::create_dir(cwd.join("room").join("standup.agent-coexist.md")) {
         let _ = child.kill();
         let _ = child.wait();
         panic!("cannot occupy the watched path with a directory: {error}");
@@ -3400,8 +3400,8 @@ fn emitted_wbody_mutates_native_file_not_fffd_sibling() {
     let dir = tempfile::tempdir().unwrap();
     let cwd = dir.path();
     let (native_dir, lossy_dir) = native_room_and_fffd_sibling(cwd);
-    let native = native_dir.join("alice.agent-besties.md");
-    let lossy = lossy_dir.join("alice.agent-besties.md");
+    let native = native_dir.join("alice.agent-coexist.md");
+    let lossy = lossy_dir.join("alice.agent-coexist.md");
     fs::write(&native, "# alice.agent-profile\n\n## role\n").unwrap();
     let lossy_before = concat!(
         "# alice.agent-profile\n\n",
@@ -3447,7 +3447,7 @@ fn emitted_missing_dir_lists_native_parent_not_fffd_sibling() {
     let cwd = dir.path();
     let (native_dir, lossy_dir) = native_room_and_fffd_sibling(cwd);
     fs::write(
-        native_dir.join("onlyhere.agent-besties.md"),
+        native_dir.join("onlyhere.agent-coexist.md"),
         concat!(
             "# onlyhere.post\n\n",
             "## #1 alice (2026-09-17T10:00:00Z)\n\n",
@@ -3456,7 +3456,7 @@ fn emitted_missing_dir_lists_native_parent_not_fffd_sibling() {
     )
     .unwrap();
     fs::write(
-        lossy_dir.join("twin.agent-besties.md"),
+        lossy_dir.join("twin.agent-coexist.md"),
         concat!(
             "# twin.post\n\n",
             "## #1 bob (2026-09-17T10:00:00Z)\n\n",
@@ -3494,8 +3494,8 @@ fn emitted_dirty_retry_keeps_native_dir_and_observing_selection() {
     let dir = tempfile::tempdir().unwrap();
     let cwd = dir.path();
     let (native_dir, lossy_dir) = native_room_and_fffd_sibling(cwd);
-    let native = native_dir.join("state.agent-besties.md");
-    let lossy = lossy_dir.join("state.agent-besties.md");
+    let native = native_dir.join("state.agent-coexist.md");
+    let lossy = lossy_dir.join("state.agent-coexist.md");
     let before = concat!(
         "# .state\n\n",
         "## observing\n",
@@ -3563,8 +3563,8 @@ fn emitted_lf_native_operand_stays_manual_not_lossy_command() {
     let folded_dir = cwd.join("room- x");
     fs::create_dir(&native_dir).unwrap();
     fs::create_dir(&folded_dir).unwrap();
-    let native = native_dir.join("alice.agent-besties.md");
-    let folded = folded_dir.join("alice.agent-besties.md");
+    let native = native_dir.join("alice.agent-coexist.md");
+    let folded = folded_dir.join("alice.agent-coexist.md");
     let native_before = "# alice.agent-profile\n\n## role\n";
     let folded_before = concat!(
         "# alice.agent-profile\n\n",
@@ -3591,7 +3591,7 @@ fn emitted_lf_native_operand_stays_manual_not_lossy_command() {
     // the fix payload, so nothing copied from it can reach the folded twin.
     let fix = repairs[0];
     assert!(
-        !fix.contains("room- x") && !fix.contains("alice.agent-besties.md"),
+        !fix.contains("room- x") && !fix.contains("alice.agent-coexist.md"),
         "LF operand must stay manual, not a lossy command:\n{stdout}"
     );
     assert_eq!(fs::read_to_string(&native).unwrap(), native_before);
@@ -3740,7 +3740,7 @@ fn malformed_ignore_state_scan_keeps_columns_and_write_commits() {
             .any(|line| columns(line).starts_with(&["set", "observing", "carol"])),
         "the declaration itself must be reported as written:\n{stdout}"
     );
-    let state = fs::read_to_string(room.join("state.agent-besties.md"))
+    let state = fs::read_to_string(room.join("state.agent-coexist.md"))
         .expect("declaration must be committed to disk");
     assert!(
         state.contains("carol 2026-09-17T10:00:00Z..2026-09-17T18:00:00Z"),
@@ -3757,7 +3757,7 @@ fn specification_diagnostics_coverage_unexercised_catalog_codes() {
     // 1. E-TARGET-MISSING: target file does not exist
     let out = run(
         cwd,
-        &["brief", "doc.agent-besties.md", "--target", "missing.md"],
+        &["brief", "doc.agent-coexist.md", "--target", "missing.md"],
     );
     assert_eq!(out.status.code(), Some(1), "{}", describe(&out));
     let stdout = assert_first_line(&out, "error", "brief");
@@ -3773,7 +3773,7 @@ fn specification_diagnostics_coverage_unexercised_catalog_codes() {
         cwd,
         &[
             "brief",
-            "doc.agent-besties.md",
+            "doc.agent-coexist.md",
             "--target",
             "real.md",
             "--entry",
@@ -3786,7 +3786,7 @@ fn specification_diagnostics_coverage_unexercised_catalog_codes() {
         cwd,
         &[
             "brief",
-            "doc.agent-besties.md",
+            "doc.agent-coexist.md",
             "--entry",
             "nonexistent entry",
             "--remove",
@@ -3805,7 +3805,7 @@ fn specification_diagnostics_coverage_unexercised_catalog_codes() {
         cwd,
         &[
             "read-brief",
-            "doc.agent-besties.md",
+            "doc.agent-coexist.md",
             "--entry",
             "nonexistent entry",
         ],
@@ -3820,7 +3820,7 @@ fn specification_diagnostics_coverage_unexercised_catalog_codes() {
         cwd,
         &[
             "profile",
-            "agent.agent-besties.md",
+            "agent.agent-coexist.md",
             "--section",
             "role",
             "-m",
@@ -3833,7 +3833,7 @@ fn specification_diagnostics_coverage_unexercised_catalog_codes() {
         cwd,
         &[
             "profile",
-            "agent.agent-besties.md",
+            "agent.agent-coexist.md",
             "--section",
             "nonexistent-section",
             "--remove",
@@ -3896,7 +3896,7 @@ fn specification_diagnostics_coverage_unexercised_catalog_codes() {
         cwd,
         &[
             "post",
-            "standup.agent-besties.md",
+            "standup.agent-coexist.md",
             "--as",
             "alice",
             "-m",
@@ -3909,7 +3909,7 @@ fn specification_diagnostics_coverage_unexercised_catalog_codes() {
         cwd,
         &[
             "post",
-            "standup.agent-besties.md",
+            "standup.agent-coexist.md",
             "--as",
             "bob",
             "--edit",
@@ -3931,7 +3931,7 @@ fn specification_diagnostics_coverage_unexercised_catalog_codes() {
         cwd,
         &[
             "post",
-            "standup.agent-besties.md",
+            "standup.agent-coexist.md",
             "--as",
             "alice",
             "--edit",
@@ -3953,13 +3953,13 @@ fn specification_diagnostics_coverage_unexercised_catalog_codes() {
     let post_content = format!(
         "# thread.post\n\n## #{max_seq} alice (2026-09-17T10:00:00Z)\n\n```md\nfinal comment\n```\n"
     );
-    fs::write(cwd.join("thread.agent-besties.md"), post_content.as_bytes()).unwrap();
+    fs::write(cwd.join("thread.agent-coexist.md"), post_content.as_bytes()).unwrap();
 
     let out = run(
         cwd,
         &[
             "post",
-            "thread.agent-besties.md",
+            "thread.agent-coexist.md",
             "--as",
             "bob",
             "-m",

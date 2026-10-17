@@ -60,7 +60,7 @@ fn declare(ctx: &mut Ctx, p: &super::StateDeclare) -> Result<Report, Fault> {
 
     let target = match fsx::walk::state_file(&p.dir)? {
         Some(f) => f,
-        None => p.dir.join(format!("state{}", consts::SUFFIX)),
+        None => p.dir.join(consts::STATE_FILE_NAME),
     };
     let file_for_parse = target.clone();
     let nick = p.nick.clone();
@@ -830,7 +830,7 @@ fn refusal_report(
     report
 }
 
-/// E-TYPE reason report: `state.agent-besties.md` holds another type. The
+/// E-TYPE reason report: `state.agent-coexist.md` holds another type. The
 /// renderer's expected-state branch asks to rename it and retry `{argv}`.
 fn e_type_report(dctx: &diag::Context, object: &str, actual: &'static str) -> Report {
     reason_report(
@@ -1120,7 +1120,7 @@ mod tests {
     fn plan(src: &str, nick: &str, filter: Option<&str>) -> Result<RemovePlan, Fault> {
         plan_remove(
             src.as_bytes(),
-            Path::new("state.agent-besties.md"),
+            Path::new("state.agent-coexist.md"),
             now(),
             nick,
             filter,
@@ -1152,7 +1152,7 @@ mod tests {
     #[test]
     fn declaration_before_unterminated_next_heading_locks_the_requested_status() {
         let dir = scratch("section-boundary");
-        let file = dir.join("state.agent-besties.md");
+        let file = dir.join("state.agent-coexist.md");
         std::fs::write(&file, b"# .state\n\n## locked\n## observing").unwrap();
         let mut ctx = context::test_ctx(now());
         let report = run(
@@ -1171,7 +1171,7 @@ mod tests {
             b"# .state\n\n## locked\n\nalice 2026-09-17T10:00:00Z..2026-09-17T12:00:00Z\n## observing"
         );
 
-        let target = dir.join("probe.agent-besties.md");
+        let target = dir.join("probe.agent-coexist.md");
         let blocked = crate::ops::profile::run(
             &mut ctx,
             &ProfileParams {
@@ -1191,7 +1191,7 @@ mod tests {
     #[test]
     fn removing_last_entry_preserves_cr_tainted_reader_comment() {
         let dir = scratch("cr-comment");
-        let file = dir.join("state.agent-besties.md");
+        let file = dir.join("state.agent-coexist.md");
         std::fs::write(
             &file,
             concat!(
@@ -1222,7 +1222,7 @@ mod tests {
     #[test]
     fn removing_last_entry_deletes_skeleton_with_unicode_h1_padding() {
         let dir = scratch("h1-padding");
-        let file = dir.join("state.agent-besties.md");
+        let file = dir.join("state.agent-coexist.md");
         std::fs::write(
             &file,
             concat!(
@@ -1250,7 +1250,7 @@ mod tests {
     #[test]
     fn state_write_reports_sanitize_retained_status_titles_only_for_display() {
         let dir = scratch("status-display");
-        let file = dir.join("state.agent-besties.md");
+        let file = dir.join("state.agent-coexist.md");
         std::fs::write(
             &file,
             concat!(
@@ -1333,7 +1333,7 @@ mod tests {
         let child = dir.join("child");
         std::fs::create_dir(&child).unwrap();
         std::fs::write(
-            child.join("state.agent-besties.md"),
+            child.join("state.agent-coexist.md"),
             concat!(
                 "# .state\n\n## locked\n",
                 "alice 2026-09-25T11:00:00Z..2026-09-25T14:00:00Z\n",
@@ -1380,7 +1380,7 @@ mod tests {
             command.starts_with("agent-coexist check-state "),
             "{command}"
         );
-        let written = std::fs::read_to_string(dir.join("state.agent-besties.md")).unwrap();
+        let written = std::fs::read_to_string(dir.join("state.agent-coexist.md")).unwrap();
         assert!(
             written.contains("bob 2026-09-25T12:00:00Z..2026-09-25T20:00:00Z"),
             "committed observing line missing: {written:?}"
@@ -1416,7 +1416,7 @@ mod tests {
             "# .state\n\n## locked\n",
             "alice 2026-09-25T11:00:00Z..2026-09-25T14:00:00Z\n",
         );
-        std::fs::write(sub.join("state.agent-besties.md"), alice).unwrap();
+        std::fs::write(sub.join("state.agent-coexist.md"), alice).unwrap();
         let gone = dir.join("gone");
         std::fs::create_dir(&gone).unwrap();
         std::env::set_current_dir(&gone).unwrap();
@@ -1454,13 +1454,13 @@ mod tests {
                 diag::path_operand(dir.as_os_str()).unwrap()
             )
         );
-        let written = std::fs::read_to_string(dir.join("state.agent-besties.md")).unwrap();
+        let written = std::fs::read_to_string(dir.join("state.agent-coexist.md")).unwrap();
         assert!(
             written.contains("bob 2026-09-25T12:00:00Z..2026-09-25T14:00:00Z"),
             "committed locked line missing: {written:?}"
         );
         assert_eq!(
-            std::fs::read_to_string(sub.join("state.agent-besties.md")).unwrap(),
+            std::fs::read_to_string(sub.join("state.agent-coexist.md")).unwrap(),
             alice
         );
     }
@@ -1688,7 +1688,7 @@ mod tests {
     #[test]
     fn opaque_cr_heading_cannot_capture_a_declared_lock() {
         let dir = scratch("opaque-cr-heading");
-        let file = dir.join("state.agent-besties.md");
+        let file = dir.join("state.agent-coexist.md");
         std::fs::write(&file, b"# .state\n\n## locked\n## observing\r").unwrap();
         let mut ctx = context::test_ctx(now());
         let report = run(
@@ -1717,7 +1717,7 @@ mod tests {
             vec![("locked", "alice")]
         );
 
-        let target = dir.join("probe.agent-besties.md");
+        let target = dir.join("probe.agent-coexist.md");
         let blocked = crate::ops::profile::run(
             &mut ctx,
             &ProfileParams {
@@ -1748,7 +1748,7 @@ mod tests {
         src.push(b'\r');
         match plan_remove(
             &src,
-            Path::new("state.agent-besties.md"),
+            Path::new("state.agent-coexist.md"),
             now(),
             "alice",
             None,

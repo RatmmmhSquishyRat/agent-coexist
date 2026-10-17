@@ -426,7 +426,7 @@ mod tests {
         );
         let doc = crate::doc::parse(
             src.as_bytes().to_vec(),
-            std::path::Path::new("state.agent-besties.md"),
+            std::path::Path::new("state.agent-coexist.md"),
             crate::time::parse("2026-09-17T10:00:00Z").unwrap(),
         )
         .unwrap();
@@ -483,7 +483,7 @@ mod tests {
         let now = crate::time::parse("2026-09-17T10:00:00Z").unwrap();
         let doc = crate::doc::parse(
             src.as_bytes().to_vec(),
-            std::path::Path::new("state.agent-besties.md"),
+            std::path::Path::new("state.agent-coexist.md"),
             now,
         )
         .expect("parses");
@@ -593,7 +593,7 @@ mod tests {
         let now = crate::time::parse("2026-09-17T10:00:00Z").unwrap();
         let doc = crate::doc::parse(
             src.as_bytes().to_vec(),
-            std::path::Path::new("state.agent-besties.md"),
+            std::path::Path::new("state.agent-coexist.md"),
             now,
         )
         .expect("parses");
@@ -620,7 +620,7 @@ mod tests {
         let now = crate::time::parse("2026-09-17T10:00:00Z").unwrap();
         let doc = crate::doc::parse(
             src.as_bytes().to_vec(),
-            std::path::Path::new("state.agent-besties.md"),
+            std::path::Path::new("state.agent-coexist.md"),
             now,
         )
         .expect("parses");

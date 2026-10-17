@@ -1125,7 +1125,7 @@ mod tests {
     }
 
     fn read_state(dir: &Path, content: &str) -> StateFileInfo {
-        let file = dir.join("state.agent-besties.md");
+        let file = dir.join("state.agent-coexist.md");
         std::fs::write(&file, content).unwrap();
         let mut ctx = test_ctx(time::parse(NOW).unwrap());
         read_state_file(&mut ctx, &file)
@@ -1135,13 +1135,13 @@ mod tests {
     fn reserved_state_selection_accepts_bare_filename_without_case_folding() {
         const CHILD: &str = "COEXIST_SHARED_RESERVED_STATE_CHILD";
         if std::env::var_os(CHILD).is_some() {
-            assert!(is_reserved_state_file(Path::new("state.agent-besties.md")).unwrap());
-            assert!(is_reserved_state_file(Path::new("./state.agent-besties.md")).unwrap());
-            assert!(!is_reserved_state_file(Path::new("STATE.agent-besties.md")).unwrap());
+            assert!(is_reserved_state_file(Path::new("state.agent-coexist.md")).unwrap());
+            assert!(is_reserved_state_file(Path::new("./state.agent-coexist.md")).unwrap());
+            assert!(!is_reserved_state_file(Path::new("STATE.agent-coexist.md")).unwrap());
             return;
         }
         let dir = scratch("reserved-state-bare-name");
-        std::fs::write(dir.join("state.agent-besties.md"), b"# .state\n").unwrap();
+        std::fs::write(dir.join("state.agent-coexist.md"), b"# .state\n").unwrap();
         let result = std::process::Command::new(std::env::current_exe().unwrap())
             .args([
                 "--exact",
@@ -1373,7 +1373,7 @@ mod tests {
             }
         )));
         let mut ctx = test_ctx(time::parse(NOW).unwrap());
-        let verdict = functional_lock(&mut ctx, &dir.join("note.agent-besties.md"), Some("bob"));
+        let verdict = functional_lock(&mut ctx, &dir.join("note.agent-coexist.md"), Some("bob"));
         assert!(verdict.holders.is_empty());
         assert!(verdict.scope.issues.iter().any(|(_, issue)| matches!(
             issue,
@@ -1484,7 +1484,7 @@ mod tests {
             vec!["bob"]
         );
         let mut ctx = test_ctx(now);
-        let verdict = functional_lock(&mut ctx, &dir.join("note.agent-besties.md"), Some("bob"));
+        let verdict = functional_lock(&mut ctx, &dir.join("note.agent-coexist.md"), Some("bob"));
         assert!(!verdict.holders.iter().any(|holder| holder.nick == "alice"));
         assert!(verdict.scope.issues.iter().any(|(_, issue)| matches!(
             issue,
@@ -1505,10 +1505,10 @@ mod tests {
             &sub,
             "# .state\n\n## locked\nbob 2026-09-25T11:00:00Z..2026-09-25T14:00:00Z\n",
         );
-        std::fs::write(sub.join("note.agent-besties.md"), "# note.post\n").unwrap();
+        std::fs::write(sub.join("note.agent-coexist.md"), "# note.post\n").unwrap();
         let mut ctx = test_ctx(time::parse(NOW).unwrap());
         let excluded = fsx::walk::Options {
-            exclude: vec!["state.agent-besties.md".to_string()],
+            exclude: vec!["state.agent-coexist.md".to_string()],
             ..Default::default()
         };
         assert!(
@@ -1518,7 +1518,7 @@ mod tests {
                 .is_empty()
         );
         let included = fsx::walk::Options {
-            include: vec!["note.agent-besties.md".to_string()],
+            include: vec!["note.agent-coexist.md".to_string()],
             ..Default::default()
         };
         assert!(
@@ -1527,7 +1527,7 @@ mod tests {
                 .descendants
                 .is_empty()
         );
-        std::fs::write(dir.join(".ignore"), "state.agent-besties.md\n").unwrap();
+        std::fs::write(dir.join(".ignore"), "state.agent-coexist.md\n").unwrap();
         assert!(
             collect(&mut ctx, &dir, &fsx::walk::Options::default())
                 .expect("valid ignore walk")
@@ -1555,7 +1555,7 @@ mod tests {
             );
             files.push(read_state_file(
                 &mut ctx,
-                &hop.join("..").join("state.agent-besties.md"),
+                &hop.join("..").join("state.agent-coexist.md"),
             ));
         }
         let scope = assemble(&dir, files, Vec::new());
@@ -1578,10 +1578,10 @@ mod tests {
     #[test]
     fn dangling_state_is_unreadable_but_a_vanished_entry_is_absent() {
         let dir = scratch("dangling-state");
-        let file = dir.join("state.agent-besties.md");
-        std::os::unix::fs::symlink("missing.agent-besties.md", &file).unwrap();
+        let file = dir.join("state.agent-coexist.md");
+        std::os::unix::fs::symlink("missing.agent-coexist.md", &file).unwrap();
         let mut ctx = test_ctx(time::parse(NOW).unwrap());
-        let verdict = functional_lock(&mut ctx, &dir.join("note.agent-besties.md"), Some("bob"));
+        let verdict = functional_lock(&mut ctx, &dir.join("note.agent-coexist.md"), Some("bob"));
         assert!(verdict.scope.issues.iter().any(|(path, issue)| {
             path == &dir && matches!(issue, ScanIssue::Blocking("unreadable"))
         }));
@@ -1599,7 +1599,7 @@ mod tests {
     #[test]
     fn busy_state_file_reports_busy() {
         let dir = scratch("busy");
-        let file = dir.join("state.agent-besties.md");
+        let file = dir.join("state.agent-coexist.md");
         std::fs::write(
             &file,
             "# .state\n\n## locked\n\nalice 2026-09-25T11:00:00Z..2026-09-25T13:00:00Z\n",

@@ -247,7 +247,7 @@ mod tests {
     #[test]
     fn create_rejects_invalid_stem_without_leaving_a_file() {
         let dir = scratch("ename");
-        let target = dir.join("bad stem.agent-besties.md");
+        let target = dir.join("bad stem.agent-coexist.md");
         let p = SubscribeParams {
             path: target.clone(),
             nick: "me".to_string(),
@@ -277,7 +277,7 @@ mod tests {
     #[test]
     fn cancel_last_authoritative_reports_surviving_duplicate() {
         let dir = scratch("dup-cancel");
-        let target = dir.join("foo.agent-besties.md");
+        let target = dir.join("foo.agent-coexist.md");
         std::fs::write(
             &target,
             b"# foo.post\n\n- subscribers: alice\n- subscribers: bob\n",

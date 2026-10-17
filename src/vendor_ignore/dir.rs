@@ -1709,8 +1709,8 @@ mod tests {
         mkdirp(common.join("info"));
         wfile(git_dir.join("HEAD"), "ref: refs/heads/main\n");
         wfile(git_dir.join("commondir"), "../../common\n");
-        wfile(common.join("info/exclude"), "note.agent-besties.md\n");
-        wfile(room.join("note.agent-besties.md"), "# note.post\n");
+        wfile(common.join("info/exclude"), "note.agent-coexist.md\n");
+        wfile(room.join("note.agent-coexist.md"), "# note.post\n");
 
         let (ignore, err) = IgnoreBuilder::new()
             .git_global(false)
@@ -1718,7 +1718,7 @@ mod tests {
             .build()
             .add_child(&room);
         assert!(err.is_none());
-        assert!(ignore.matched("note.agent-besties.md", false).is_ignore());
+        assert!(ignore.matched("note.agent-coexist.md", false).is_ignore());
         assert!(ignore.local_sources().git_exclude);
     }
 
@@ -1987,8 +1987,8 @@ mod tests {
         gitfile.push(b'\n');
         std::fs::write(worktree.join(".git"), &gitfile).unwrap();
         wfile(decoy.join("info/exclude"), "");
-        wfile(actual.join("info/exclude"), "note.agent-besties.md\n");
-        wfile(worktree.join("note.agent-besties.md"), "# note.post\n");
+        wfile(actual.join("info/exclude"), "note.agent-coexist.md\n");
+        wfile(worktree.join("note.agent-coexist.md"), "# note.post\n");
 
         let (ignore, err) = IgnoreBuilder::new()
             .git_global(false)
@@ -1996,7 +1996,7 @@ mod tests {
             .build()
             .add_child(&worktree);
         assert!(err.is_none());
-        assert!(ignore.matched("note.agent-besties.md", false).is_ignore());
+        assert!(ignore.matched("note.agent-coexist.md", false).is_ignore());
         assert!(ignore.local_sources().git_exclude);
     }
 
@@ -2018,8 +2018,8 @@ mod tests {
         commondir.push(b'\n');
         std::fs::write(git_dir.join("commondir"), &commondir).unwrap();
         wfile(decoy.join("info/exclude"), "");
-        wfile(actual.join("info/exclude"), "note.agent-besties.md\n");
-        wfile(room.join("note.agent-besties.md"), "# note.post\n");
+        wfile(actual.join("info/exclude"), "note.agent-coexist.md\n");
+        wfile(room.join("note.agent-coexist.md"), "# note.post\n");
 
         let (ignore, err) = IgnoreBuilder::new()
             .git_global(false)
@@ -2027,7 +2027,7 @@ mod tests {
             .build()
             .add_child(&room);
         assert!(err.is_none());
-        assert!(ignore.matched("note.agent-besties.md", false).is_ignore());
+        assert!(ignore.matched("note.agent-coexist.md", false).is_ignore());
         assert!(ignore.local_sources().git_exclude);
     }
 }

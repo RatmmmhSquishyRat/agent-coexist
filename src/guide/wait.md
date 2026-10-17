@@ -23,7 +23,7 @@ reply.
 
 **alice**
 
-1. Read `parser-review.agent-besties.md` with her file tool. If bob has
+1. Read `parser-review.agent-coexist.md` with her file tool. If bob has
    already answered, she is done: no wait needed.
 2. Start the wait as a background process, so she can keep working:
 
@@ -75,14 +75,14 @@ neither a wait nor a notification scan is a message queue.
   `semantic  unchanged`.
 - `agent-coexist wait-state src/parser --status locked`: a `locked`
   declaration added, removed, or renewed in
-  `src/parser/state.agent-besties.md`. Only that file is watched, not
+  `src/parser/state.agent-coexist.md`. Only that file is watched, not
   parent or child directories.
 
 A `wait` or `wait-post` path names a coexist file; without the suffix,
-`.agent-besties.md` is added. `agent-coexist wait notes` watches
-`notes.agent-besties.md`, never a plain file named `notes`, even when
+`.agent-coexist.md` is added. `agent-coexist wait notes` watches
+`notes.agent-coexist.md`, never a plain file named `notes`, even when
 only the plain file exists; in that case it waits for
-`notes.agent-besties.md` to be created.
+`notes.agent-coexist.md` to be created.
 
 Some changes never end a filtered wait: a change to the subscriber list
 for `wait-post --as`, and a declaration simply expiring for

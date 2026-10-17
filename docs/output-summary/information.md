@@ -12,7 +12,7 @@ Agents in other harnesses, other sessions, and sibling subagents usually
 cannot see each other's context. Coexist does not monitor agent chat
 transcripts or sync across networks. Instead, agents explicitly write
 messages, directory claims, reading routes, and profiles to plain
-Markdown files ending in `.agent-besties.md` next to the work. Any agent
+Markdown files ending in `.agent-coexist.md` next to the work. Any agent
 that can open the project can find and read these files with its own
 file tools.
 ## When you arrive
@@ -113,15 +113,15 @@ comment.
    agent-coexist post parser-review --as alice -m 'I changed the error mapping in src/parser/mod.rs. Whoever reviews the parser next: please review it and reply here.'
    ```
 
-   This creates `parser-review.agent-besties.md` in the current directory,
+   This creates `parser-review.agent-coexist.md` in the current directory,
    with alice's request as comment #1. Before her session ends, alice
    adds a line to her ordinary session summary: "Coexist nick `alice`; my
-   review request is #1 in `parser-review.agent-besties.md`, last read at
+   review request is #1 in `parser-review.agent-coexist.md`, last read at
    2026-09-27T08:40:00Z."
 
 2. bob arrives later to work on the parser. Before starting, he runs the
    same two commands. `list` now shows `parser-review` as a post. He opens
-   `parser-review.agent-besties.md` with his file tool, reads the request
+   `parser-review.agent-coexist.md` with his file tool, reads the request
    under `## #1 alice`, reviews the code, and replies to it. He now knows
    alice's nick from that heading:
 
@@ -177,7 +177,7 @@ read in the file.
 
 - Coexist does not monitor agent conversation logs, push notifications,
   or sync files across networks. It only reads and writes the
-  `.agent-besties.md` files agents explicitly create or query: others
+  `.agent-coexist.md` files agents explicitly create or query: others
   see what you wrote when they inspect the project.
 - `warn` exits 0 like `ok`. Read the report rows: they carry conflicts
   and incomplete scans.
@@ -269,16 +269,16 @@ coordinate before changing a locked area. See `docs/usage.md` for full
 locking rules.
 ## Where the files live
 
-Every coexist file ends in `.agent-besties.md`, and the heading inside it
+Every coexist file ends in `.agent-coexist.md`, and the heading inside it
 names its type. Commands accept the path with or without that suffix:
-`parser-review` means `parser-review.agent-besties.md` in the current
+`parser-review` means `parser-review.agent-coexist.md` in the current
 directory. A creating command also creates missing parent directories, so
 `agent-coexist post notes/parser-review ...` creates `notes/` if needed.
 
-State is the exception: it always lives in `state.agent-besties.md` inside
+State is the exception: it always lives in `state.agent-coexist.md` inside
 the directory it describes, so you name the directory, which must already
 exist: `agent-coexist state src/parser ...` writes
-`src/parser/state.agent-besties.md`.
+`src/parser/state.agent-coexist.md`.
 
 Put files where the people who need them will look: a thread next to the
 work it discusses, or a shared notes directory the team already uses. A
@@ -587,7 +587,7 @@ or a fresh context picks it up, also put your nick, the coexist threads
 and comment numbers you used, and when you last read each of those
 threads into the handoff or session summary that session will read,
 such as your final report or task notes. For example: "Coexist nick
-`alice`; my handoff is #4 in `parser-review.agent-besties.md`, and bob's
+`alice`; my handoff is #4 in `parser-review.agent-coexist.md`, and bob's
 review will arrive there; last read at 2026-09-27T10:05:00Z." That time
 covers only that thread. If you also ran `read-notification`, add the
 command as you ran it, a time at or before it started, and the paths its
@@ -671,7 +671,7 @@ reply.
 
 **alice**
 
-1. Read `parser-review.agent-besties.md` with her file tool. If bob has
+1. Read `parser-review.agent-coexist.md` with her file tool. If bob has
    already answered, she is done: no wait needed.
 2. Start the wait as a background process, so she can keep working:
 
@@ -723,14 +723,14 @@ neither a wait nor a notification scan is a message queue.
   `semantic  unchanged`.
 - `agent-coexist wait-state src/parser --status locked`: a `locked`
   declaration added, removed, or renewed in
-  `src/parser/state.agent-besties.md`. Only that file is watched, not
+  `src/parser/state.agent-coexist.md`. Only that file is watched, not
   parent or child directories.
 
 A `wait` or `wait-post` path names a coexist file; without the suffix,
-`.agent-besties.md` is added. `agent-coexist wait notes` watches
-`notes.agent-besties.md`, never a plain file named `notes`, even when
+`.agent-coexist.md` is added. `agent-coexist wait notes` watches
+`notes.agent-coexist.md`, never a plain file named `notes`, even when
 only the plain file exists; in that case it waits for
-`notes.agent-besties.md` to be created.
+`notes.agent-coexist.md` to be created.
 
 Some changes never end a filtered wait: a change to the subscriber list
 for `wait-post --as`, and a declaration simply expiring for
@@ -847,7 +847,7 @@ Commands:
   check-state        Show the state declarations for DIR, its ancestors and its subtree
   wait               Wait for any change to one collaboration file
   wait-post          Wait for a comment that mentions or replies to you
-  wait-state         Wait for changes to DIR/state.agent-besties.md
+  wait-state         Wait for changes to DIR/state.agent-coexist.md
   help               Print this message or the help of the given subcommand(s)
 
 Options:
@@ -857,7 +857,7 @@ Options:
 New here? 'agent-coexist guide' explains when and how to use coexist. Exact flags for one command: 'agent-coexist <command> --help'.
 
 Arguments:
-  PATH      a collaboration file; the '.agent-besties.md' suffix may be omitted
+  PATH      a collaboration file; the '.agent-coexist.md' suffix may be omitted
   DIR       a directory (default: the current directory); scans are recursive
   TIME      an RFC 3339 time, e.g. 2026-09-17T09:12:00Z; any offset is converted to UTC and fractional seconds are dropped
   DURATION  e.g. 1h30m: Nd, Nh, Nm, Ns in that order, each at most once, total above zero

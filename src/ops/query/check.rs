@@ -312,13 +312,13 @@ mod tests {
 
     fn state_report(src: &str, now: &str) -> Report {
         let now = crate::time::parse(now).unwrap();
-        let path = Path::new("state.agent-besties.md");
+        let path = Path::new("state.agent-coexist.md");
         let document = doc::parse(src.as_bytes().to_vec(), path, now).expect("parses");
         report_for(
             &context::test_ctx(now),
             path,
             "state",
-            "state.agent-besties.md",
+            "state.agent-coexist.md",
             doc::Kind::State,
             document,
         )
@@ -523,7 +523,7 @@ mod tests {
             )
             .as_bytes()
             .to_vec(),
-            Path::new("notes.agent-besties.md"),
+            Path::new("notes.agent-coexist.md"),
             crate::time::parse("2026-09-17T10:00:00Z").unwrap(),
         )
         .expect("parses");
@@ -531,7 +531,7 @@ mod tests {
             .brief
             .entries
             .iter()
-            .map(|entry| hash::verify(Path::new("notes.agent-besties.md"), entry))
+            .map(|entry| hash::verify(Path::new("notes.agent-coexist.md"), entry))
             .collect();
         let mut report = Report::new("check", "notes");
         brief_rows(&mut report, &document, &verifications);
@@ -576,7 +576,7 @@ mod tests {
             )
             .as_bytes()
             .to_vec(),
-            Path::new("a.agent-besties.md"),
+            Path::new("a.agent-coexist.md"),
             crate::time::parse("2026-09-17T10:00:00Z").unwrap(),
         )
         .expect("parses");
@@ -629,7 +629,7 @@ mod tests {
             )
             .as_bytes()
             .to_vec(),
-            Path::new("foo.agent-besties.md"),
+            Path::new("foo.agent-coexist.md"),
             crate::time::parse("2026-09-17T10:00:00Z").unwrap(),
         )
         .expect("parses");
@@ -675,25 +675,25 @@ mod tests {
             let root = tempfile::tempdir().unwrap();
             std::fs::create_dir(root.path().join("room")).unwrap();
             std::fs::write(
-                root.path().join("room").join("standup.agent-besties.md"),
+                root.path().join("room").join("standup.agent-coexist.md"),
                 "# standup.post\n",
             )
             .unwrap();
-            let typed = root.path().join("ROOM").join("STANDUP.agent-besties.md");
+            let typed = root.path().join("ROOM").join("STANDUP.agent-coexist.md");
             let report = check_at(typed);
             assert_eq!(wname_stems(&report), Vec::<String>::new());
             assert_eq!(report.status, Status::Ok);
             let file = field_values(&report, "file");
-            assert!(file[0][0].ends_with("STANDUP.agent-besties.md"), "{file:?}");
+            assert!(file[0][0].ends_with("STANDUP.agent-coexist.md"), "{file:?}");
 
             // A real mismatch still warns, naming the on-disk stem so the
             // offered H1 is the one that silences the canonical spelling.
             std::fs::write(
-                root.path().join("room").join("standup.agent-besties.md"),
+                root.path().join("room").join("standup.agent-coexist.md"),
                 "# retro.post\n",
             )
             .unwrap();
-            let typed = root.path().join("ROOM").join("STANDUP.agent-besties.md");
+            let typed = root.path().join("ROOM").join("STANDUP.agent-coexist.md");
             assert_eq!(wname_stems(&check_at(typed)), vec!["standup".to_string()]);
         }
 
@@ -701,20 +701,20 @@ mod tests {
         fn on_disk_case_mismatch_warns_even_when_the_operand_matches_the_h1() {
             let root = tempfile::tempdir().unwrap();
             std::fs::write(
-                root.path().join("Standup.agent-besties.md"),
+                root.path().join("Standup.agent-coexist.md"),
                 "# standup.post\n",
             )
             .unwrap();
-            let typed = root.path().join("standup.agent-besties.md");
+            let typed = root.path().join("standup.agent-coexist.md");
             assert_eq!(wname_stems(&check_at(typed)), vec!["Standup".to_string()]);
         }
 
         #[test]
         fn symlink_alias_keeps_its_own_name() {
             let root = tempfile::tempdir().unwrap();
-            let target = root.path().join("standup.agent-besties.md");
+            let target = root.path().join("standup.agent-coexist.md");
             std::fs::write(&target, "# standup.post\n").unwrap();
-            let alias = root.path().join("alias.agent-besties.md");
+            let alias = root.path().join("alias.agent-coexist.md");
             #[cfg(unix)]
             std::os::unix::fs::symlink(&target, &alias).unwrap();
             #[cfg(windows)]
@@ -722,7 +722,7 @@ mod tests {
                 // Creating symlinks needs Developer Mode or elevation.
                 return;
             }
-            let typed = root.path().join("ALIAS.agent-besties.md");
+            let typed = root.path().join("ALIAS.agent-coexist.md");
             assert_eq!(wname_stems(&check_at(typed)), vec!["alias".to_string()]);
         }
     }

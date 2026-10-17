@@ -12,6 +12,12 @@ All notable changes to this project are documented here. The format follows
 
 ### Changed
 
+- **Breaking:** collaboration files now end in `.agent-coexist.md`, matching
+  the tool name; the directory state file is `state.agent-coexist.md`. Files
+  ending in `.agent-besties.md` are no longer recognized: `list` and scans
+  skip them, and a path given with the old suffix gets the new suffix
+  appended. To keep existing records, rename each `<name>.agent-besties.md`
+  to `<name>.agent-coexist.md`; file contents and H1 lines are unchanged.
 - Modernized public README to elevate `cargo install agent-coexist --locked` as the primary installation path, added live crates.io and CI badges, and streamlined prebuilt binary instructions.
 - Cleaned Cargo packaging: pruned unused `thiserror` dependency, excluded local toolchain files from `package.include`, and added Linux GNU `cargo-binstall` overrides pointing to static musl archives.
 - Supply chain hardening: re-enabled `[sources]` and `[bans]` in `deny.toml` with multi-version compatibility exception for `syn`.

@@ -41,7 +41,7 @@ warn  list  .
 `agent-coexist check docs/standup` · topic is the first comment; latest is the last one.
 ```text
 ok  check  docs/standup
-  file          docs/standup.agent-besties.md
+  file          docs/standup.agent-coexist.md
   type          post
   comments      3
   authors       alice, bob, carol
@@ -127,7 +127,7 @@ warn  check-state  src/parser
 `agent-coexist check docs/stanup` · exit code 1
 ```text
 error  check  docs/stanup
-  reason        docs/stanup.agent-besties.md does not exist
+  reason        docs/stanup.agent-coexist.md does not exist
   fix           correct the path and rerun (this command never creates the file); collaboration files under that directory: agent-coexist list docs
 ```
 
@@ -140,10 +140,10 @@ error  check  docs/stanup
 warn  post  parser-review
   comment       #2  L10
   reply-to      #5  (not found)
-  fix           if you meant another comment, edit this one so the reply names a number this post carries: agent-coexist post parser-review.agent-besties.md --as=bob --edit=2 -m '<the whole body, with the reference corrected>'
+  fix           if you meant another comment, edit this one so the reply names a number this post carries: agent-coexist post parser-review.agent-coexist.md --as=bob --edit=2 -m '<the whole body, with the reference corrected>'
 ```
 
-`AGENT_COEXIST_NOW=2026-09-17T10:06:00Z agent-coexist post parser-review.agent-besties.md --as=bob --edit=2 -m $'@#1 Mapping looks right.\nNext: cover the empty-input case.'` · bob resends his whole comment #2, changing only @#5 to @#1.
+`AGENT_COEXIST_NOW=2026-09-17T10:06:00Z agent-coexist post parser-review.agent-coexist.md --as=bob --edit=2 -m $'@#1 Mapping looks right.\nNext: cover the empty-input case.'` · bob resends his whole comment #2, changing only @#5 to @#1.
 ```text
 ok  post  parser-review
   comment       #2  L10  edited
@@ -160,7 +160,7 @@ warn  brief  onboarding
   entry         parser entry point  refreshed  src/parser/mod.rs
   entry         renderer  skipped  target missing
   entry         design notes  skipped  no path
-  fix           skipped entries and remaining errors in this file need check on this file. Follow the suggestions check prints: agent-coexist check onboarding.agent-besties.md
+  fix           skipped entries and remaining errors in this file need check on this file. Follow the suggestions check prints: agent-coexist check onboarding.agent-coexist.md
   skipped       .  E-H1
   fix           changes reported above are already written; rows starting with skipped, partial or canonicalize mean the lock check may have missed a holder. Before writing again, run these checks, then agree with any holder they show: agent-coexist check state
   remaining     E-ENTRY-PATH  L15
@@ -174,7 +174,7 @@ warn  brief  onboarding
 `AGENT_COEXIST_NOW=2026-09-17T10:05:00Z agent-coexist state src/parser --as bob --status locked --for 30m`
 ```text
 warn  state  src/parser
-  created       src/parser/state.agent-besties.md
+  created       src/parser/state.agent-coexist.md
   set           locked  bob  2026-09-17T10:05:00Z..2026-09-17T10:35:00Z
   conflict      locked  alice  2026-09-17T10:00:00Z..2026-09-17T11:00:00Z  src
 ```
@@ -184,7 +184,7 @@ warn  state  src/parser
 warn  state  src
   removed       review  carol
   removed-lines  L5..L7
-  deleted       src/state.agent-besties.md
+  deleted       src/state.agent-coexist.md
   removed-other  carol
 ```
 
@@ -195,7 +195,7 @@ warn  state  src
 `agent-coexist profile team/agents/alice --as alice --section role -m 'Parser reviewer.'`
 ```text
 warn  profile  team/agents/alice
-  created       team/agents/alice.agent-besties.md
+  created       team/agents/alice.agent-coexist.md
   section       role  set
   partial       team  W-STATE-ENTRY  L5
   fix           changes reported above are already written; rows starting with skipped, partial or canonicalize mean the lock check may have missed a holder. Before writing again, run these checks, then agree with any holder they show: agent-coexist check team/state
