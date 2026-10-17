@@ -5,6 +5,8 @@ All notable changes to this project are documented here. The format follows
 [SemVer](https://semver.org/spec/2.0.0.html).
 ## [Unreleased]
 
+## [0.4.0] - 2026-10-17
+
 ### Added
 
 - Automated Dependabot tracking for GitHub Actions dependencies (`.github/dependabot.yml`).
@@ -29,7 +31,7 @@ All notable changes to this project are documented here. The format follows
 - Eliminated Linux-only gating in `tests/output_delivery.rs` using a portable broken-pipe mechanism so output delivery error handling is natively verified on Windows and macOS.
 - Unblocked Windows concurrency execution in `tests/write_clock.rs` by replacing raw Unix `flock` with portable shared locking and preserving Windows system environment variables.
 - Dynamic wall-clock refresh in `wait::run`: sample `time::now()?` on byte changes so lease expirations and conflict evaluations reflect real wall-clock time instead of frozen startup timestamps.
-- Enforced `NO_DEFENSE_CODE_RULE` in `src/ops/query/read_brief.rs` by replacing defensive `.unwrap_or_default()` with explicit pattern matching.
+- `read-brief` no longer hides an unexpected state behind `.unwrap_or_default()` in `src/ops/query/read_brief.rs`; it is matched explicitly.
 - Prevented monotonic clock arithmetic overflow in `src/wait.rs` by using checked elapsed duration subtraction.
 - Authenticated GitHub REST API metadata lookups in `release_state.py` with `GH_TOKEN`/`GITHUB_TOKEN` to prevent rate-limiting failures on shared CI runners.
 - Unified Unix broken-pipe testing in `tests/output_delivery.rs` under `#[cfg(unix)]` using closed `libc::pipe` descriptors.
@@ -988,7 +990,8 @@ It was not tagged, and builds from later commits still report version
   diagnostics with `why`/`fix`, stderr-only progress, and exit codes
   0/1/2/3 (+130 for cancelled waits).
 
-[Unreleased]: https://github.com/RatmmmhSquishyRat/agent-coexist/compare/v0.3.0...main
+[Unreleased]: https://github.com/RatmmmhSquishyRat/agent-coexist/compare/v0.4.0...main
+[0.4.0]: https://github.com/RatmmmhSquishyRat/agent-coexist/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/RatmmmhSquishyRat/agent-coexist/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/RatmmmhSquishyRat/agent-coexist/compare/8d98cc73a2714a9931172bf4ac6b9fbf417d7853...v0.2.0
 [0.1.0]: https://github.com/RatmmmhSquishyRat/agent-coexist/commit/8d98cc73a2714a9931172bf4ac6b9fbf417d7853
