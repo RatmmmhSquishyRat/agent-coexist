@@ -134,7 +134,7 @@ jobs:
           persist-credentials: false
 
       - name: Install Rust 1.89.0
-        uses: dtolnay/rust-toolchain@e2a55d2ffb04f378e9626c28d38b36d230d1e12f # master head (README pin rule)
+        uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master head (README pin rule)
         with:
           toolchain: 1.89.0
           targets: ${{ matrix.target }}
@@ -323,7 +323,7 @@ jobs:
           persist-credentials: false
 
       - name: Install Rust 1.89.0
-        uses: dtolnay/rust-toolchain@e2a55d2ffb04f378e9626c28d38b36d230d1e12f # master head (README pin rule)
+        uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master head (README pin rule)
         with:
           toolchain: 1.89.0
 
