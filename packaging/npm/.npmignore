@@ -1,0 +1,6 @@
+# package.json "files" is the allowlist for this package; this file exists so
+# npm does not fall back to .gitignore and warn when the repository root packs
+# a clone for the `npx github:` path.
+vendor/
+node_modules/
+*.tgz

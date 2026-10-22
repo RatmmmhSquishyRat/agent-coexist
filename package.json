@@ -6,6 +6,13 @@
   "bin": {
     "agent-coexist": "packaging/npm/bin/agent-coexist.js"
   },
+  "files": [
+    "packaging/npm/bin/",
+    "packaging/npm/lib/",
+    "packaging/npm/package.json",
+    "LICENSE",
+    "README.md"
+  ],
   "engines": {
     "node": ">=18"
   },
