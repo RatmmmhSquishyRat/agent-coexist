@@ -1,0 +1,23 @@
+# Only the git-install path reads this file: npm packs a clone of this
+# repository when someone runs `npx github:RatmmmhSquishyRat/agent-coexist`,
+# and without an .npmignore it falls back to .gitignore and warns. The root
+# package.json is private and never published, and the registry artifact in
+# packaging/npm/ selects its own contents through package.json "files", so
+# nothing here affects either registry.
+#
+# Keep packaging/ and drop everything only the Rust build needs.
+/src/
+/tests/
+/vendor/
+/target/
+/docs/
+/.github/
+/.cargo/
+/.agents/
+Cargo.toml
+Cargo.lock
+deny.toml
+rust-toolchain.toml
+CHANGELOG.md
+CONTRIBUTING.md
+SECURITY.md
