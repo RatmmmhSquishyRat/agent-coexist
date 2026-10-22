@@ -246,6 +246,30 @@ jobs:
           AGENT_COEXIST_SKIP_NETWORK: "1"
         run: python packaging/pypi/test/test_wrapper.py
 
+      # The suites above invoke node explicitly, so they would not notice a
+      # launcher whose shebang the kernel cannot read: a stray carriage
+      # return makes it look for an interpreter that does not exist. Run
+      # the launcher through its shebang and require that it was not
+      # rejected as a bad interpreter (126/127);
+      # any other status is the launcher's own, including a download of a
+      # release that may not exist yet for this version.
+      - name: Launcher is executable through its shebang
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          set -u
+          chmod +x packaging/npm/bin/agent-coexist.js
+          set +e
+          ./packaging/npm/bin/agent-coexist.js --version
+          status=$?
+          set -e
+          if [ "$status" -eq 126 ] || [ "$status" -eq 127 ]; then
+            echo "::error::the launcher's shebang was rejected (exit $status); check its line endings"
+            head -c 20 packaging/npm/bin/agent-coexist.js | od -c | head -2
+            exit 1
+          fi
+          echo "shebang resolved; launcher exited $status"
+
   supply-chain:
     name: supply-chain (cargo-deny)
     timeout-minutes: 10

@@ -1,1 +1,9 @@
 src/guide/*.md text eol=lf
+
+# The wrapper launchers are executed through their shebang on Unix, where a
+# CRLF line ending makes the kernel look for an interpreter named "node\r"
+# and fail with a bad-interpreter error. Windows editors and some scripting
+# APIs translate on write, so pin these to LF in the working tree rather than
+# relying on that not happening.
+packaging/** text eol=lf
+package.json text eol=lf

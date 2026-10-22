@@ -169,6 +169,40 @@ test('a missing entry is reported against the archive name', () => {
   );
 });
 
+test('no wrapper source carries CRLF, which would break the shebang on Unix', () => {
+  // `npx` runs bin/agent-coexist.js through its shebang on Linux and macOS.
+  // With CRLF the kernel looks for an interpreter named "node\r" and fails,
+  // and Windows never notices because npm generates .cmd/.ps1 shims that
+  // invoke node directly. Guard the whole wrapper tree, not just the shebang.
+  // Repository root: the launcher's own tree plus the root manifest that
+  // the `npx github:` path reads.
+  const root = path.join(__dirname, '..', '..', '..');
+  const pruned = new Set(['vendor', 'node_modules', 'dist', '__pycache__']);
+  const suffixes = ['.js', '.py', '.json', '.toml', '.md'];
+
+  const offenders = [];
+  const walk = (dir) => {
+    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+      if (dir === root && !['packaging', 'package.json'].includes(entry.name)) continue;
+      if (pruned.has(entry.name)) continue;
+      const full = path.join(dir, entry.name);
+      if (entry.isDirectory()) {
+        walk(full);
+        continue;
+      }
+      if (!suffixes.some((s) => entry.name.endsWith(s))) continue;
+      if (fs.readFileSync(full).includes('\r\n')) {
+        offenders.push(path.relative(root, full).split(path.sep).join('/'));
+      }
+    }
+  };
+  walk(root);
+  assert.deepEqual(offenders, [], `CRLF found in: ${offenders.join(', ')}`);
+
+  const bin = fs.readFileSync(path.join(__dirname, '..', 'bin', 'agent-coexist.js'));
+  assert.equal(bin.subarray(0, 20).toString(), '#!/usr/bin/env node\n');
+});
+
 test('an unmapped platform names the supported set and the source build', () => {
   const platform = process.platform;
   Object.defineProperty(process, 'platform', { value: 'sunos', configurable: true });
