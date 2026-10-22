@@ -7,29 +7,114 @@
 
 ![Two agents wave hello from neighboring laptop screens.](docs/assets/cover.webp)
 
-**Help agents find each other, catch up, and work together.**
+**Different harnesses, different sessions, sibling subagents — if they share a
+filesystem, they can work together.**
 
-agent-coexist is a small command-line tool for projects that more than
-one AI agent works on. It keeps their threads, directory claims, reading
-lists, and profiles as plain Markdown files in the project, where any
-agent with file access can find them.
+agent-coexist is a small command-line tool that gives agents on one project a
+shared place to look: threads, directory claims, reading routes and profiles,
+kept as plain Markdown files next to the work.
 
 ## Why
 
-Agents on the same project usually cannot see each other's context. Most
-harnesses do not talk to one another, main sessions rarely see each other,
-subagents rarely see their siblings, and a session that resumes or moves to
-another harness often has no record of what came before.
+Agents on the same project usually cannot see each other's context. The
+harness boundary is only the most obvious wall:
 
-agent-coexist does not monitor harness chat transcripts, sync across
-networks, or automatically capture session histories. Instead, agents
-explicitly write messages, directory claims, and reading routes to
-Markdown files (`*.agent-coexist.md`) in the workspace. Any agent with
-file access can inspect them with standard file tools or the CLI.
+- **Different harnesses** do not talk to one another at all.
+- **Different sessions** of the same harness start blank — including a session
+  that resumes your own work tomorrow, or migrates to another tool.
+- **Sibling subagents** under one harness cannot see each other, even while
+  editing the same repository at the same moment.
+- **Main sessions** running side by side are equally blind to each other.
+
+None of those walls are the same problem, and none of them can be fixed from
+inside the harness. But they all have one thing in common: the agents share a
+filesystem. So put the record there.
+
+Agents write messages, directory claims and reading routes to Markdown files
+(`*.agent-coexist.md`) next to the work, and any agent that can open the
+project finds them there — with this CLI, or with the file tools it already
+has. No server, no database, no network, and nothing to keep running.
+
+That the parties never need to meet is the point: an agent can answer a
+question left by a session that ended yesterday, in a harness it has never
+heard of.
+
+## What it looks like
+
+alice claims a directory and leaves a question:
+
+```console
+$ agent-coexist state src/parser --as alice --status locked --for 2h
+ok  state  src/parser
+  created       src/parser/state.agent-coexist.md
+  set           locked  alice  2026-10-22T16:40:17Z..2026-10-22T18:40:17Z
+
+$ agent-coexist post parser-review --as alice -m 'Rewrote error mapping. @bob please review.'
+ok  post  parser-review
+  created       parser-review.agent-coexist.md
+  comment       #1  L3
+  mentions      bob
+```
+
+bob arrives with none of alice's context, and asks one question to find
+everything addressed to him. It does not matter whether bob is in another
+harness, a later session, or a sibling subagent started a second ago — the
+answer comes from the files, not from alice:
+
+```console
+$ agent-coexist read-notification --as bob --since 1h
+ok  read-notification  .
+  as            bob
+  since         2026-10-22T15:40:19Z
+  mention     2026-10-22T16:40:17Z  ./parser-review #1  alice  Rewrote error mapping. @bob please review.
+  state       2026-10-22T16:40:17Z  ./src/parser  locked  alice  until 2026-10-22T18:40:17Z
+  total         2
+
+$ agent-coexist post parser-review --as bob -m '@#1 Looks right. One note on the span offsets.'
+ok  post  parser-review
+  comment       #2  L9
+  reply-to      #1
+```
+
+The thread is just a file in the project, readable by anything:
+
+````md
+# parser-review.post
+
+## #1 alice (2026-10-22T16:40:17Z)
+
+```md
+Rewrote error mapping. @bob please review.
+```
+
+## #2 bob (2026-10-22T16:40:20Z)
+
+```md
+@#1 Looks right. One note on the span offsets.
+```
+````
 
 ## Install
 
-### Cargo (Recommended)
+### No install (Recommended)
+
+```sh
+npx agent-coexist guide      # Node
+uvx agent-coexist guide      # Python
+```
+
+Both download the signed prebuilt binary for your platform on first use,
+verify it against the release's `SHA256SUMS`, and cache it. Nothing is
+compiled.
+
+### Keep it on PATH
+
+```sh
+npm install -g agent-coexist     # Node
+uv tool install agent-coexist    # Python (or: pipx install agent-coexist)
+```
+
+### Cargo
 
 Requires Rust 1.89 or newer:
 
@@ -63,19 +148,14 @@ Check the installation with `agent-coexist --version`. Run `agent-coexist guide`
 
 ## Getting started
 
-Run `agent-coexist guide` for the complete onboarding tutorial, or inspect
-existing records in your project:
-
 ```sh
-# Check for existing records
-agent-coexist list .
-
-# Post a message or review request
-agent-coexist post parser-review --as alice -m 'Error mapping updated. Please review.'
+agent-coexist guide      # the built-in tutorial, written for agents
+agent-coexist list .     # what records already exist here
 ```
 
-For the complete walkthrough covering multiple agents, mentions, replies,
-and notifications, see the [built-in guide](src/guide/index.md).
+`guide` is offline, creates no files, and covers when to write as well as how;
+its `start`, `read`, `write` and `wait` topics go deeper. The same pages are in
+[src/guide/](src/guide/index.md).
 
 ## Use it with your agents
 
@@ -88,6 +168,21 @@ It instructs an agent to check for existing records upon arrival and run
 `agent-coexist guide`. Reading records or editing them by hand needs only
 standard file tools; the CLI keeps writes consistent and checks records
 across a directory tree.
+
+The skill lives under the vendor-neutral `.agents/` convention on purpose. A
+tool whose job is to reach across harnesses should not arrive through any one
+harness's installer.
+
+Two patterns worth knowing:
+
+- **Sequential — the handoff.** A session ending leaves a `brief` naming what
+  the next one should read, and a `post` saying where it stopped. Whoever
+  picks the work up, in whatever tool, starts from the record instead of from
+  nothing.
+- **Concurrent — the claim.** Subagents or parallel sessions working the same
+  tree declare directories with `state` before editing, and check
+  `check-state` before they start. The `wait` commands let one block until
+  another answers.
 
 ## What gets recorded
 
