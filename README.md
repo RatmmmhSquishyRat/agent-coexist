@@ -96,23 +96,28 @@ Rewrote error mapping. @bob please review.
 
 ## Install
 
-### No install (Recommended)
+### No install, no registry (Recommended)
+
+If you have Node or Python, run it straight from this repository:
 
 ```sh
-npx agent-coexist guide      # Node
-uvx agent-coexist guide      # Python
+# Node
+npx github:RatmmmhSquishyRat/agent-coexist guide
+
+# Python
+uvx --from 'git+https://github.com/RatmmmhSquishyRat/agent-coexist#subdirectory=packaging/pypi' \
+  agent-coexist guide
 ```
 
 Both download the signed prebuilt binary for your platform on first use,
 verify it against the release's `SHA256SUMS`, and cache it. Nothing is
-compiled.
+compiled, and no package registry is involved. Both forms track `main`; pin a
+tag or commit by appending `#<tag>` to the Node form, or `@<tag>` before the
+`#subdirectory` in the Python one — from `v0.5.0` on, which is the first
+release to contain these wrappers.
 
-### Keep it on PATH
-
-```sh
-npm install -g agent-coexist     # Node
-uv tool install agent-coexist    # Python (or: pipx install agent-coexist)
-```
+The wrappers live in [`packaging/`](packaging/) and are plain, dependency-free
+launchers you can read in a few minutes before trusting them.
 
 ### Cargo
 
