@@ -5,6 +5,54 @@ All notable changes to this project are documented here. The format follows
 [SemVer](https://semver.org/spec/2.0.0.html).
 ## [Unreleased]
 
+## [0.5.0] - 2026-10-23
+
+### Added
+
+- npm and PyPI wrappers (`packaging/npm`, `packaging/pypi`), so installing no
+  longer requires a Rust toolchain. Each is a dependency-free launcher that
+  downloads the release archive for its own version, verifies it against that
+  release's `SHA256SUMS`, caches the executable and executes it with
+  arguments, streams and exit code passing through unchanged. Neither uses an
+  install hook, so `npx` and `uvx` work and `--ignore-scripts` is harmless.
+- Running straight from the repository with no package registry:
+  `npx github:RatmmmhSquishyRat/agent-coexist` and
+  `uvx --from 'git+https://github.com/RatmmmhSquishyRat/agent-coexist#subdirectory=packaging/pypi'`.
+  A minimal private root `package.json` makes the first form reachable, since
+  npm cannot read a `package.json` from a subdirectory of a git repository.
+- A `wrappers` CI job covering target mapping, `SHA256SUMS` parsing, archive
+  extraction and version agreement with `Cargo.toml` on all three platforms,
+  and, on Linux and macOS, execution of the launcher through its own shebang.
+- A test over every tracked text file that fails on CRLF, with
+  `.gitattributes` pinning the same set to LF.
+
+### Changed
+
+- Documentation states the full scope instead of leading with harnesses. The
+  harness boundary is only the most visible wall: sibling subagents under one
+  harness cannot see each other even while editing one tree at the same
+  moment, different sessions start blank including the session that resumes
+  the same work later, and parallel main sessions are equally blind. What
+  those cases share is a filesystem, and the parties never need to meet. The
+  README tagline, `Why` section and demo captions say that, and gain the
+  sequential handoff and concurrent claim patterns.
+- The README carries a `What it looks like` section built from real captured
+  output of a two-agent exchange, and `Install` leads with the registry-free
+  forms.
+- Crate description and keywords follow the same scope; `filesystem` gives way
+  to `multi-agent`.
+- The bundled skill's `description` names the three cases so an agent can
+  recognize its own situation, with the trigger conditions leading.
+
+### Fixed
+
+- The wrapper launcher's shebang line ended with a carriage return, so
+  `#!/usr/bin/env node` asked for an interpreter named `node` and every
+  non-Windows `npx` run would have failed with a bad-interpreter error.
+  Windows did not show it, because npm generates `.cmd` and `.ps1` shims that
+  invoke node directly. Line endings are now LF throughout and guarded from
+  both sides.
+
 ## [0.4.0] - 2026-10-17
 
 ### Added
@@ -990,7 +1038,8 @@ It was not tagged, and builds from later commits still report version
   diagnostics with `why`/`fix`, stderr-only progress, and exit codes
   0/1/2/3 (+130 for cancelled waits).
 
-[Unreleased]: https://github.com/RatmmmhSquishyRat/agent-coexist/compare/v0.4.0...main
+[Unreleased]: https://github.com/RatmmmhSquishyRat/agent-coexist/compare/v0.5.0...main
+[0.5.0]: https://github.com/RatmmmhSquishyRat/agent-coexist/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/RatmmmhSquishyRat/agent-coexist/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/RatmmmhSquishyRat/agent-coexist/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/RatmmmhSquishyRat/agent-coexist/compare/8d98cc73a2714a9931172bf4ac6b9fbf417d7853...v0.2.0

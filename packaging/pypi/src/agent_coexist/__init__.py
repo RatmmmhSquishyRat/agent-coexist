@@ -27,7 +27,7 @@ import urllib.request
 import zipfile
 from pathlib import Path
 
-__version__ = "0.4.0"
+__version__ = "0.5.0"
 
 REPO = "RatmmmhSquishyRat/agent-coexist"
 BASE = f"https://github.com/{REPO}/releases/download/v{__version__}"
