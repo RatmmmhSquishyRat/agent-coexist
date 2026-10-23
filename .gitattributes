@@ -1,9 +1,20 @@
 src/guide/*.md text eol=lf
 
-# The wrapper launchers are executed through their shebang on Unix, where a
-# CRLF line ending makes the kernel look for an interpreter named "node\r"
-# and fail with a bad-interpreter error. Windows editors and some scripting
-# APIs translate on write, so pin these to LF in the working tree rather than
-# relying on that not happening.
-packaging/** text eol=lf
-package.json text eol=lf
+# Line endings are LF throughout, and one file must have them: the wrapper
+# launcher is executed through its shebang on Unix, where a stray carriage
+# return makes the kernel look for an interpreter that does not exist. Windows
+# editors and text-mode file APIs translate on write, so pin the working tree
+# rather than relying on that not happening. A test over every tracked text
+# file enforces the same thing from the other side.
+*.rs    text eol=lf
+*.toml  text eol=lf
+*.lock  text eol=lf
+*.md    text eol=lf
+*.yml   text eol=lf
+*.yaml  text eol=lf
+*.json  text eol=lf
+*.py    text eol=lf
+*.js    text eol=lf
+*.txt   text eol=lf
+LICENSE text eol=lf
+COPYING text eol=lf
