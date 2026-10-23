@@ -10,6 +10,14 @@
 const { spawnSync } = require('node:child_process');
 const { ensureBinary, LauncherError } = require('../lib/install.js');
 
+// Set the status and return, never process.exit(): a download leaves undici's
+// connection handles closing, and exiting underneath them trips a libuv
+// assertion on Windows that aborts the process with 127 and buries whatever
+// was being reported.
+function finish(status) {
+  process.exitCode = status;
+}
+
 async function main() {
   const bin = await ensureBinary();
   const run = spawnSync(bin, process.argv.slice(2), { stdio: 'inherit' });
@@ -18,12 +26,16 @@ async function main() {
   // child reports it as exit 130. A signal seen here instead means the
   // child was killed without reporting, so report it the way a shell does.
   if (run.signal !== null) {
-    process.exit(128 + (require('node:os').constants.signals[run.signal] ?? 0));
+    finish(128 + (require('node:os').constants.signals[run.signal] ?? 0));
+    return;
   }
-  process.exit(run.status);
+  finish(run.status);
 }
 
 main().catch((error) => {
+  // Only the launcher's own expected failures become one error line. A bug
+  // here keeps its stack rather than being reported as a launch problem.
+  if (!(error instanceof LauncherError)) throw error;
   process.stderr.write(`agent-coexist: ${error.message}\n`);
-  process.exit(1);
+  finish(1);
 });

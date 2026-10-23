@@ -23,6 +23,7 @@ import subprocess
 import sys
 import tarfile
 import tempfile
+import urllib.error
 import urllib.request
 import zipfile
 from pathlib import Path
@@ -104,8 +105,22 @@ def binary_path() -> Path:
 
 
 def get(url: str) -> bytes:
-    with urllib.request.urlopen(url) as response:  # noqa: S310 - fixed https host
-        return response.read()
+    try:
+        with urllib.request.urlopen(url) as response:  # noqa: S310 - fixed host
+            return response.read()
+    except urllib.error.HTTPError as error:
+        # A 404 nearly always means this version has no published release yet,
+        # which is exactly what installing from a development revision looks
+        # like. Say that, instead of leaving the reader with a status code.
+        if error.code != 404:
+            raise
+        raise LauncherError(
+            f"v{__version__} has no published release asset at {url}\n"
+            f"If you installed from a git revision, that commit is ahead of "
+            f"the last release; install from a published tag or from PyPI "
+            f"instead.\n"
+            f"Releases: https://github.com/{REPO}/releases"
+        ) from None
 
 
 def digest_for(sums: bytes, name: str) -> str:

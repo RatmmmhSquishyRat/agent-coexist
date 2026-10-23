@@ -198,6 +198,25 @@ test('no tracked text file carries CRLF, which would break the shebang on Unix',
   assert.equal(bin.subarray(0, 20).toString(), '#!/usr/bin/env node\n');
 });
 
+test('the launcher sets an exit status instead of calling process.exit', () => {
+  // After a download, undici's connection handles are still closing, and
+  // process.exit() underneath them trips a libuv assertion on Windows that
+  // aborts with 127 and buries the error being reported. Setting
+  // process.exitCode and returning lets the loop drain first.
+  const shimSource = fs.readFileSync(
+    path.join(__dirname, '..', 'bin', 'agent-coexist.js'),
+    'utf8',
+  );
+  // Drop line comments first: the shim explains this rule in a comment that
+  // names the call, and a guard that trips on its own rationale is useless.
+  const code = shimSource.replace(/^\s*\/\/.*$/gm, '');
+  assert.ok(
+    !/process\.exit\s*\(/.test(code),
+    'the launcher must not call process.exit(); set process.exitCode instead',
+  );
+  assert.match(code, /process\.exitCode/);
+});
+
 test('an unmapped platform names the supported set and the source build', () => {
   const platform = process.platform;
   Object.defineProperty(process, 'platform', { value: 'sunos', configurable: true });

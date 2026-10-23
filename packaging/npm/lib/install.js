@@ -57,6 +57,17 @@ function archiveName() {
 async function get(url) {
   const response = await fetch(url, { redirect: 'follow' });
   if (!response.ok) {
+    // A 404 nearly always means this version has no published release yet,
+    // which is exactly what installing from a development revision looks
+    // like. Say that, instead of leaving the reader with a status code.
+    if (response.status === 404) {
+      throw new LauncherError(
+        `v${version} has no published release asset at ${url}\n` +
+          `If you installed from a git revision, that commit is ahead of the ` +
+          `last release; install from a published tag or from npm instead.\n` +
+          `Releases: https://github.com/${REPO}/releases`,
+      );
+    }
     throw new LauncherError(`GET ${url} failed: ${response.status} ${response.statusText}`);
   }
   return Buffer.from(await response.arrayBuffer());
@@ -77,10 +88,12 @@ async function download() {
   const name = archiveName();
   process.stderr.write(`agent-coexist: fetching ${name} (v${version})\n`);
 
-  const [archive, sums] = await Promise.all([
-    get(`${BASE}/${name}`),
-    get(`${BASE}/SHA256SUMS`),
-  ]);
+  // Sequential, not Promise.all: a rejection there leaves its sibling request
+  // in flight, and exiting on the error trips a libuv assertion while that
+  // handle is still closing. It also fixes which asset a failure names — the
+  // archive, rather than whichever request happened to reject first.
+  const archive = await get(`${BASE}/${name}`);
+  const sums = await get(`${BASE}/SHA256SUMS`);
 
   const expected = digestFor(sums, name);
   const actual = crypto.createHash('sha256').update(archive).digest('hex');
