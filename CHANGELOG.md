@@ -5,6 +5,17 @@ All notable changes to this project are documented here. The format follows
 [SemVer](https://semver.org/spec/2.0.0.html).
 ## [Unreleased]
 
+### Fixed
+
+- GitHub classified the repository as "Other" / `NOASSERTION` rather than MIT,
+  because the root `LICENSE` carried two copyright blocks: this project's MIT
+  and an appended copy of the `ignore` crate's. Licence detection reads one
+  licence from that file, so the third-party notice moves to
+  `THIRD-PARTY-NOTICES.md` at the repository root, which is also included in
+  the published crate. Nothing is dropped: the notice keeps the root-level
+  visibility it was given in 0.4.0, and the upstream originals remain beside
+  the code in `src/vendor_ignore/` (`COPYING`, `LICENSE-MIT`, `UNLICENSE`).
+
 ## [0.4.1] - 2026-10-24
 
 ### Changed

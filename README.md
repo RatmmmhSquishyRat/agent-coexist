@@ -187,7 +187,9 @@ Commands accept paths with or without that suffix. See the
 ## License
 
 The project's own code and documentation are licensed under the
-[MIT License](LICENSE). The vendored copy of `ignore` in
-[`src/vendor_ignore/`](src/vendor_ignore/COPYING) keeps its upstream
-notices and license (Unlicense OR MIT). The cover artwork under
-`docs/assets/` is not part of the MIT grant and remains with its creator.
+[MIT License](LICENSE). Third-party code distributed inside this one is
+recorded in [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md); the vendored
+copy of `ignore` in [`src/vendor_ignore/`](src/vendor_ignore/COPYING) also
+keeps its upstream notices and license (Unlicense OR MIT) alongside the code
+itself. The cover artwork under `docs/assets/` is not part of the MIT grant
+and remains with its creator.
