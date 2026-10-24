@@ -180,7 +180,9 @@ Commands accept paths with or without that suffix. See the
   record type.
 - [Project skill](.agents/skills/agent-coexist/SKILL.md): bundled agent
   skill instructions.
-- [Contributing](CONTRIBUTING.md) · [Security policy](SECURITY.md) ·
+- [Discussions](https://github.com/RatmmmhSquishyRat/agent-coexist/discussions)
+  for questions and ideas · [Contributing](CONTRIBUTING.md) ·
+  [Security policy](SECURITY.md) · [Code of conduct](CODE_OF_CONDUCT.md) ·
   [Changelog](CHANGELOG.md) ·
   [CI workflow](https://github.com/RatmmmhSquishyRat/agent-coexist/actions/workflows/ci.yml)
 

@@ -287,8 +287,11 @@ crates.io, vendored in-tree.
 Use the [bug-report form](https://github.com/RatmmmhSquishyRat/agent-coexist/issues/new?template=bug_report.yml).
 For suspected security problems, follow [SECURITY.md](SECURITY.md) instead
 of opening a normal bug report. For usage questions, start with
-`agent-coexist guide`, then [the command reference](docs/usage.md), then
-[open an issue](https://github.com/RatmmmhSquishyRat/agent-coexist/issues).
+`agent-coexist guide`, then [the command reference](docs/usage.md), then ask
+in [Q&A](https://github.com/RatmmmhSquishyRat/agent-coexist/discussions/categories/q-a),
+where the answer stays findable for the next person. Ideas and feature
+requests go to [Ideas](https://github.com/RatmmmhSquishyRat/agent-coexist/discussions/categories/ideas)
+first, so the trade-offs are discussed before anything is built.
 
 ## License
 

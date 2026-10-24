@@ -1,0 +1,11 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Question or "does it work with ...?"
+    url: https://github.com/RatmmmhSquishyRat/agent-coexist/discussions/new?category=q-a
+    about: Ask in Q&A. Answers there stay findable for the next person with the same question.
+  - name: Idea or feature request
+    url: https://github.com/RatmmmhSquishyRat/agent-coexist/discussions/new?category=ideas
+    about: Propose it in Ideas first, so the trade-offs can be discussed before anything is built.
+  - name: Security problem
+    url: https://github.com/RatmmmhSquishyRat/agent-coexist/security/advisories/new
+    about: Report privately. Do not open a public issue for anything exploitable.
