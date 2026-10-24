@@ -96,50 +96,12 @@ Rewrote error mapping. @bob please review.
 
 ## Install
 
-**Trying it or installing it?** `npx` and `uvx` run the tool without
-installing anything, and each call keeps its prefix — nothing is added to your
-`PATH`. That is right for a first look. Agents are told to run `agent-coexist`
-as a bare command, so for actual use put it on `PATH` with one of the install
-forms below.
+Every route below leaves `agent-coexist` as a bare command on your `PATH`,
+which is what the bundled skill and the built-in guide tell agents to run.
+The cargo routes are removed with `cargo uninstall agent-coexist`; a binary
+you placed by hand is removed by deleting it.
 
-### Run it without installing
-
-If you have Node or Python, run it straight from this repository:
-
-```sh
-# Node
-npx github:RatmmmhSquishyRat/agent-coexist guide
-
-# Python
-uvx --from 'git+https://github.com/RatmmmhSquishyRat/agent-coexist#subdirectory=packaging/pypi' \
-  agent-coexist guide
-```
-
-Both download the signed prebuilt binary for your platform on first use,
-verify it against the release's `SHA256SUMS`, and cache it. Nothing is
-compiled, and no package registry is involved. Both forms track `main`; pin a
-tag or commit by appending `#<tag>` to the Node form, or `@<tag>` before the
-`#subdirectory` in the Python one — from `v0.5.0` on, which is the first
-release to contain these wrappers.
-
-The wrappers live in [`packaging/`](packaging/) and are plain, dependency-free
-launchers you can read in a few minutes before trusting them.
-
-### Put it on PATH (Recommended)
-
-```sh
-# Node
-npm install -g github:RatmmmhSquishyRat/agent-coexist
-
-# Python
-uv tool install 'git+https://github.com/RatmmmhSquishyRat/agent-coexist#subdirectory=packaging/pypi'
-```
-
-`agent-coexist` is then a bare command, which is what the bundled skill and the
-built-in guide tell agents to run. Both pull the same signed binary on first
-use; `pipx install` accepts the same Python argument.
-
-### Cargo
+### Cargo (Recommended)
 
 Requires Rust 1.89 or newer:
 
@@ -147,7 +109,14 @@ Requires Rust 1.89 or newer:
 cargo install agent-coexist --locked
 ```
 
-If you use [`cargo-binstall`](https://github.com/cargo-bins/cargo-binstall), you can install precompiled binaries directly:
+Around twenty seconds from a cold cache. Remove it with
+`cargo uninstall agent-coexist`.
+
+### Without a Rust toolchain
+
+[`cargo-binstall`](https://github.com/cargo-bins/cargo-binstall) fetches the
+prebuilt binary for your platform instead of compiling, and installs it where
+`cargo uninstall` still finds it:
 
 ```sh
 cargo binstall agent-coexist
