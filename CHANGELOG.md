@@ -5,6 +5,16 @@ All notable changes to this project are documented here. The format follows
 [SemVer](https://semver.org/spec/2.0.0.html).
 ## [Unreleased]
 
+## [0.4.2] - 2026-10-24
+
+### Added
+
+- A rendered terminal panel in the README showing a real two-agent exchange:
+  one agent claims a directory and mentions another, the second recovers both
+  the claim and the mention from a single `read-notification` with no shared
+  context, and the resulting thread is shown as the Markdown file it is. Every
+  line is captured output, not a mock-up.
+
 ### Fixed
 
 - GitHub classified the repository as "Other" / `NOASSERTION` rather than MIT,
@@ -1027,7 +1037,8 @@ It was not tagged, and builds from later commits still report version
   diagnostics with `why`/`fix`, stderr-only progress, and exit codes
   0/1/2/3 (+130 for cancelled waits).
 
-[Unreleased]: https://github.com/RatmmmhSquishyRat/agent-coexist/compare/v0.4.1...main
+[Unreleased]: https://github.com/RatmmmhSquishyRat/agent-coexist/compare/v0.4.2...main
+[0.4.2]: https://github.com/RatmmmhSquishyRat/agent-coexist/compare/v0.4.1...v0.4.2
 [0.4.1]: https://github.com/RatmmmhSquishyRat/agent-coexist/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/RatmmmhSquishyRat/agent-coexist/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/RatmmmhSquishyRat/agent-coexist/compare/v0.2.0...v0.3.0
