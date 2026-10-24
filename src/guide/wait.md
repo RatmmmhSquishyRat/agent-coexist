@@ -10,9 +10,10 @@ files until read. You discover changes in two ways:
   reports the first qualifying change after it started, and exits.
 
 A wait sees only changes made after it started, so a wait always comes
-with a read before and after its start. Waiting also needs a tool
-environment that can run a process in the background, show its output
-while it runs, cancel it, and report its exit status.
+with a read before and after its start. Waiting needs a tool environment
+that can run a process in the background, show its output while it runs,
+cancel it, and report its exit status — or, with `--timeout`, one that
+can run a bounded call in the foreground and repeat it.
 
 ## Ask and wait: alice and bob
 
@@ -45,6 +46,21 @@ reply.
 5. Otherwise let the wait run. When it exits 0, its stdout names the
    comment that qualified. Read the post's current content before acting
    on it.
+
+If her harness runs tool calls only in the foreground, or stops a call
+after a fixed time, she waits in bounded slices instead, with `--timeout`
+below that limit:
+
+```sh
+agent-coexist wait-post parser-review --as alice --timeout 50s
+```
+
+A foreground call blocks until it ends, so she cannot read between the
+ready line and the result; the read after each slice does that job.
+Exit 0 means a comment qualified: read the post and act. Exit 124 means
+nothing qualifying arrived in time: read the post again — a reply that
+landed just before the slice began is visible only there — and, if it is
+still not there, start the next slice.
 
 Do not put the wait and the second read in one foreground-only shell
 script: the script would block before that read.
@@ -86,8 +102,9 @@ only the plain file exists; in that case it waits for
 
 Some changes never end a filtered wait: a change to the subscriber list
 for `wait-post --as`, and a declaration simply expiring for
-`wait-state --status`. Use `check-state` for current declarations, and
-arrange time-based follow-up in your own environment.
+`wait-state --status`. Use `check-state` for current declarations; for
+time-based follow-up, bound the wait with `--timeout` and run
+`check-state` when it ends.
 
 ## Catching up with read-notification
 
@@ -135,16 +152,23 @@ read cursor and does not mark anything as delivered.
 
 ## Managing the wait process
 
-- There is no timeout option. A wait runs until a qualifying change, an
-  error, or cancellation. Set any deadline in your own environment and
-  cancel the process when it passes.
-- If your tool gives up on a call, the wait may still be running. Check
-  for it before starting another one, and cancel waits you no longer need.
+- If your harness limits how long a tool call may run, pass `--timeout`
+  with a value below that limit, such as `--timeout 50s`. When the time
+  passes with nothing qualifying, the wait exits 124 with empty stdout and
+  a `timed out` line on stderr: read the file again, then decide whether
+  to wait once more. A change seen by the last sample is still reported
+  normally, so a timeout never hides one.
+- Without `--timeout`, a wait runs until a qualifying change, an error,
+  or cancellation. A harness that gives up on such a call either stops
+  the process or leaves it running in the background, so check for a
+  leftover wait before starting another, and cancel waits you no longer
+  need.
 - Ctrl-C cancels a wait with exit 130 and empty stdout. A forced stop can
-  exit differently. Neither is a change report.
+  exit differently. Neither is a change report, and neither is a timeout.
 - A missing file is a valid starting point: the wait reports when the file
   is created, as long as its parent directory exists. A mistyped path
-  therefore waits forever, so check the path.
+  therefore never reports — it waits forever, or until `--timeout` — so
+  check the path.
 - Waits sample the file about once a second and may not see a change that
   is undone in between. Each change that does not qualify becomes the new
   starting point.

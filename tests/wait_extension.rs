@@ -12,7 +12,7 @@
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::mpsc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use agent_coexist::error::Fault;
 use agent_coexist::report::{Report, Row, Status};
@@ -44,7 +44,7 @@ fn spawn(path: &Path, filter: Filter) -> Waiting {
     let thread_cancel = Arc::clone(&cancel);
     let thread_path: PathBuf = path.to_path_buf();
     std::thread::spawn(move || {
-        let _ = result_tx.send(run(&thread_path, filter, &thread_cancel, || {
+        let _ = result_tx.send(run(&thread_path, filter, &thread_cancel, None, || {
             let _ = ready_tx.send(());
         }));
     });
@@ -131,6 +131,7 @@ fn fault_summary(fault: &Fault) -> String {
         }
         Fault::Source { path, cause, .. } => format!("source {}: {}", path.display(), cause),
         Fault::Cancelled => "cancelled".to_string(),
+        Fault::TimedOut => "timed out".to_string(),
     }
 }
 
@@ -1135,4 +1136,199 @@ fn plain_post_with_stem(stem: &str) -> String {
         "hello",
         "```",
     ])
+}
+
+// ---------------------------------------------------------------------------
+// --timeout
+// ---------------------------------------------------------------------------
+
+/// Run a wait to completion on this thread with a deadline, writing `change`
+/// from inside the ready callback. The callback runs once, after the baseline
+/// is admitted and before the first loop sample, so a change written there is
+/// observed by that sample deterministically — no timing involved.
+fn run_with_deadline(
+    path: &Path,
+    filter: Filter,
+    deadline: Instant,
+    change: Option<&str>,
+) -> Result<Report, Fault> {
+    let cancel = Cancellation::new();
+    run(path, filter, &cancel, Some(deadline), || {
+        if let Some(content) = change {
+            write_file(path, content);
+        }
+    })
+}
+
+#[test]
+fn timeout_ends_an_unchanged_wait_close_to_the_deadline() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("standup.agent-coexist.md");
+    write_file(&path, &plain_post());
+    let budget = Duration::from_millis(1500);
+    let started = Instant::now();
+    // Run on a thread and bound the receive: a wait that ignores its deadline
+    // never returns, and that regression must fail this test promptly with a
+    // reason rather than hang the suite until the CI job is killed.
+    let (tx, rx) = mpsc::channel();
+    let thread_path = path.clone();
+    std::thread::spawn(move || {
+        let _ = tx.send(run_with_deadline(
+            &thread_path,
+            Filter::Any,
+            started + budget,
+            None,
+        ));
+    });
+    let result = rx
+        .recv_timeout(budget + Duration::from_millis(4 * WAIT_POLL_MS))
+        .unwrap_or_else(|_| {
+            panic!(
+                "the wait was still running well past its {budget:?} deadline: it ignored --timeout"
+            )
+        });
+    let elapsed = started.elapsed();
+    match result {
+        Err(Fault::TimedOut) => {}
+        Err(fault) => panic!("expected timed out, got {}", fault_summary(&fault)),
+        Ok(report) => panic!("expected timed out, got a hit:\n{}", row_text(&report)),
+    }
+    assert!(
+        elapsed >= budget,
+        "ended {elapsed:?} in, before its {budget:?} deadline"
+    );
+    // Sampling never sleeps past the deadline, so the only overshoot is the
+    // final sample itself. A whole extra cycle would mean it slept past it.
+    assert!(
+        elapsed < budget + Duration::from_millis(WAIT_POLL_MS),
+        "ended {elapsed:?} in: overshot its {budget:?} deadline by a full sampling cycle"
+    );
+}
+
+#[test]
+fn timeout_still_reports_a_change_seen_by_the_last_sample() {
+    // The deadline has already passed when the loop starts, so its first
+    // sample is also its last. The change written at ready must be reported
+    // as a hit: a change landing at the deadline is never mistaken for
+    // silence.
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("standup.agent-coexist.md");
+    write_file(&path, &post_with_first_author("carol"));
+    let changed = post_with_first_author("alice");
+    let result = run_with_deadline(&path, Filter::Any, Instant::now(), Some(&changed));
+    match result {
+        Ok(report) => assert_eq!(report.status, Status::Ok, "{}", row_text(&report)),
+        Err(fault) => panic!(
+            "a change in the last sample must be reported, got {}",
+            fault_summary(&fault)
+        ),
+    }
+}
+
+#[test]
+fn timeout_after_an_unqualified_change_still_times_out() {
+    // A filtered wait whose last sample sees a change that does not concern
+    // the nick: the baseline advances and the wait then times out, rather
+    // than reporting a change that was never addressed to alice.
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("standup.agent-coexist.md");
+    write_file(&path, &post_with_first_author("carol"));
+    let unrelated = post_with_first_author("dave");
+    let result = run_with_deadline(
+        &path,
+        Filter::Post(Some("alice".to_string())),
+        Instant::now(),
+        Some(&unrelated),
+    );
+    match result {
+        Err(Fault::TimedOut) => {}
+        Err(fault) => panic!("expected timed out, got {}", fault_summary(&fault)),
+        Ok(report) => panic!(
+            "a change not concerning alice must not end the wait:\n{}",
+            row_text(&report)
+        ),
+    }
+}
+
+/// Run the built binary in `dir` and return its output.
+fn cli(dir: &Path, args: &[&str]) -> std::process::Output {
+    assert_cmd::Command::new(env!("CARGO_BIN_EXE_agent-coexist"))
+        .current_dir(dir)
+        .args(args)
+        .output()
+        .unwrap()
+}
+
+#[test]
+fn cli_timeout_exits_124_with_empty_stdout_and_a_notice() {
+    let dir = tempfile::tempdir().unwrap();
+    write_file(&dir.path().join("standup.agent-coexist.md"), &plain_post());
+    for args in [
+        &["wait", "standup", "--timeout", "1s"][..],
+        &["wait-post", "standup", "--as", "alice", "--timeout", "1s"][..],
+        &["wait-state", ".", "--timeout", "1s"][..],
+    ] {
+        let out = cli(dir.path(), args);
+        let stdout = String::from_utf8_lossy(&out.stdout);
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert_eq!(out.status.code(), Some(124), "{args:?}\nstderr: {stderr}");
+        assert!(
+            stdout.is_empty(),
+            "{args:?}: a timeout is not a report, stdout must be empty, got:\n{stdout}"
+        );
+        let command = args[0];
+        assert!(
+            stderr.contains(&format!("waiting  {command}")),
+            "{args:?}: the ready line must still precede the notice:\n{stderr}"
+        );
+        assert!(
+            stderr.contains(&format!("timed out  {command}")) && stderr.contains("after 1s"),
+            "{args:?}: expected the timed-out notice echoing --timeout:\n{stderr}"
+        );
+    }
+}
+
+#[test]
+fn cli_timeout_rejects_bad_durations_as_usage_errors() {
+    let dir = tempfile::tempdir().unwrap();
+    write_file(&dir.path().join("standup.agent-coexist.md"), &plain_post());
+    for bad in ["0s", "abc", "1.5s", "-5s", "30"] {
+        let out = cli(
+            dir.path(),
+            &["wait", "standup", &format!("--timeout={bad}")],
+        );
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert_eq!(
+            out.status.code(),
+            Some(2),
+            "--timeout {bad}\nstderr: {stderr}"
+        );
+        assert!(
+            out.stdout.is_empty(),
+            "--timeout {bad}: usage errors write no stdout"
+        );
+        assert!(
+            stderr.contains("--timeout"),
+            "--timeout {bad}: the message must name the option:\n{stderr}"
+        );
+        assert!(
+            !stderr.contains("waiting  "),
+            "--timeout {bad}: rejected before any wait began, yet a ready line appeared"
+        );
+    }
+}
+
+#[test]
+fn cli_timeout_too_long_is_a_usage_error_not_a_panic() {
+    let dir = tempfile::tempdir().unwrap();
+    write_file(&dir.path().join("standup.agent-coexist.md"), &plain_post());
+    // Grammatical, but far beyond what the monotonic clock can represent.
+    let out = cli(
+        dir.path(),
+        &["wait", "standup", "--timeout", "99999999999999999d"],
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(out.status.code(), Some(2), "stderr: {stderr}");
+    assert!(stderr.contains("too long"), "stderr: {stderr}");
+    assert!(!stderr.contains("panicked"), "must not panic:\n{stderr}");
 }

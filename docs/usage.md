@@ -98,6 +98,7 @@ All business commands emit a line-oriented report to stdout (LF line endings). T
 | `1` | Business or information stdout write/flush failure | Output stream broken. Inspect files before retrying writes. |
 | `2` | Usage error | Command line syntax or argument validation failure; output on stderr. |
 | `3` | `E-LOCKED`, `E-INUSE`, `E-FLOCKED` | Concurrency or functional lock refusal. Follow `fix` advice. |
+| `124`| Wait timed out | `--timeout` reached with no qualifying change; no stdout, one `timed out` line on stderr. Read the file again before deciding to wait once more. |
 | `130`| Wait cancelled | Interrupted by Ctrl-C; no stdout. |
 
 `warn` is exit 0. Scripts checking for conflicts must inspect the first line status (`ok` vs `warn`). Write operations commit file contents before printing reports; if stdout write fails with exit 1, the change may already exist on disk. Check with `check` before retrying. All business and information commands check both the stdout write and the final flush, and exit 1 if either fails; usage errors remain exit 2 even if their stderr destination fails. A successful write and flush mean the operating system accepted the output, not that a downstream reader processed it.
@@ -244,9 +245,9 @@ State files (`DIR/state.agent-coexist.md`) record agent intentions across direct
 ## Waiting for changes
 
 Wait commands block until changes occur without continuous busy polling:
-- `wait <PATH>`: any byte change to collaboration file.
-- `wait-post <PATH> [--as <nick>]`: comments relevant to `<nick>` (or any comment without `--as`).
-- `wait-state [DIR] [--status <s>]`: changes to declarations in `DIR/state.agent-coexist.md` under status `<s>` (or any change without `--status`).
+- `wait <PATH> [--timeout <d>]`: any byte change to collaboration file.
+- `wait-post <PATH> [--as <nick>] [--timeout <d>]`: comments relevant to `<nick>` (or any comment without `--as`).
+- `wait-state [DIR] [--status <s>] [--timeout <d>]`: changes to declarations in `DIR/state.agent-coexist.md` under status `<s>` (or any change without `--status`).
 
 ### Lifecycle
 
@@ -254,11 +255,12 @@ Wait commands block until changes occur without continuous busy polling:
   1. Read file or notifications.
   2. Start wait command and wait for stderr baseline line: `waiting <command> <object>`.
   3. Read file once more to catch modifications made before the baseline was established.
-  4. When wait exits 0, read current file content.
+  4. When wait exits 0, read current file content. When it exits 124 (`--timeout` reached), read the file again: a change made just before the baseline is visible only there. Then decide whether to wait once more.
 - Sampling cadence is ~1s. Missing files are valid baselines (waiting for creation).
 - Per-sample shared lock wait is 1s; timeout exits 3 (`E-LOCKED` or Windows `E-INUSE`). On restart, re-read after the ready line.
 - Invalid snapshots (parse errors, wrong file type) terminate the wait with exit 1.
-- No timeout flag; cancel with Ctrl-C (exit 130).
+- `--timeout <DURATION>` (same grammar as `--for`, e.g. `50s`, `1m30s`) bounds the whole command, measured from its start: when the time passes with no qualifying change it exits 124 with empty stdout and `timed out <command> <object> after <d>` on stderr. Sampling never sleeps past the deadline, and the sample taken at it is still evaluated, so a change at the deadline is reported rather than lost. An invalid or unrepresentably long value is a usage error (exit 2) before anything is read. Under an agent harness, set it below the harness's tool-call limit.
+- Without `--timeout` the wait has no limit; cancel with Ctrl-C (exit 130).
 
 ### The wait report
 

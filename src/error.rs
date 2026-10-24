@@ -88,6 +88,10 @@ pub enum Fault {
     },
     /// Cooperative cancellation (wait commands): exit 130.
     Cancelled,
+    /// A wait command's `--timeout` deadline passed with no qualifying
+    /// change: exit 124. Like [`Fault::Cancelled`], neither a change hit nor
+    /// a failure report, so it carries no report.
+    TimedOut,
 }
 
 /// Why an ignore or git config source failed (spec §8.3.5). Content errors

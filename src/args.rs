@@ -63,6 +63,7 @@ pub enum Invocation {
         kind: DiagKind,
         path: PathBuf,
         filter: wait::Filter,
+        timeout: Option<wait::Timeout>,
     },
 }
 
@@ -365,6 +366,9 @@ pub enum Commands {
     Wait {
         /// the file to watch; the suffix may be omitted
         path: PathBuf,
+        /// stop waiting after this long and exit 124 when nothing qualifying changed (default: no limit)
+        #[arg(long, value_name = "duration")]
+        timeout: Option<String>,
     },
     /// Wait for a comment that mentions or replies to you
     #[command(override_usage = U_WAIT_POST, after_help = H_WAIT_POST)]
@@ -374,6 +378,9 @@ pub enum Commands {
         /// the nick whose mentions and replies end the wait; without it, any change counts
         #[arg(long = "as", value_name = "nick")]
         as_nick: Option<String>,
+        /// stop waiting after this long and exit 124 when nothing qualifying changed (default: no limit)
+        #[arg(long, value_name = "duration")]
+        timeout: Option<String>,
     },
     /// Wait for changes to DIR/state.agent-coexist.md
     #[command(override_usage = U_WAIT_STATE, after_help = H_WAIT_STATE)]
@@ -383,6 +390,9 @@ pub enum Commands {
         /// count only changes to declarations under this status ('locked', 'observing' or another name)
         #[arg(long, value_name = "name")]
         status: Option<String>,
+        /// stop waiting after this long and exit 124 when nothing qualifying changed (default: no limit)
+        #[arg(long, value_name = "duration")]
+        timeout: Option<String>,
     },
 }
 
@@ -736,31 +746,45 @@ pub fn resolve(command: Commands, ctx: &Ctx) -> Result<Invocation, String> {
                 request: Request::CheckState(CheckStateParams { dir, walk }),
             })
         }
-        Commands::Wait { path } => {
+        Commands::Wait { path, timeout } => {
+            let timeout = opt_timeout(timeout)?;
             let path = suffixed(path);
             Ok(Invocation::Wait {
                 kind: DiagKind::File(path.clone()),
                 path,
                 filter: wait::Filter::Any,
+                timeout,
             })
         }
-        Commands::WaitPost { path, as_nick } => {
+        Commands::WaitPost {
+            path,
+            as_nick,
+            timeout,
+        } => {
             let as_nick = opt_nick(as_nick)?;
+            let timeout = opt_timeout(timeout)?;
             let path = suffixed(path);
             Ok(Invocation::Wait {
                 kind: DiagKind::File(path.clone()),
                 path,
                 filter: wait::Filter::Post(as_nick),
+                timeout,
             })
         }
-        Commands::WaitState { dir, status } => {
+        Commands::WaitState {
+            dir,
+            status,
+            timeout,
+        } => {
             let dir = dir.unwrap_or_else(|| PathBuf::from("."));
             let status = opt_status(status)?;
+            let timeout = opt_timeout(timeout)?;
             let path = dir.join(consts::STATE_FILE_NAME);
             Ok(Invocation::Wait {
                 kind: DiagKind::Dir(dir),
                 path,
                 filter: wait::Filter::State(status),
+                timeout,
             })
         }
     }
@@ -892,6 +916,19 @@ fn status_value(raw: String) -> Result<String, String> {
 
 fn opt_status(value: Option<String>) -> Result<Option<String>, String> {
     value.map(status_value).transpose()
+}
+
+/// `--timeout` on the wait commands. The deadline is fixed here, at parse
+/// time and before any file is opened, so the budget is measured from the
+/// start of the command — the same clock a harness uses for its tool-call
+/// limit.
+fn opt_timeout(value: Option<String>) -> Result<Option<wait::Timeout>, String> {
+    value
+        .map(|given| {
+            let at = time::timeout(&given).map_err(usage_message)?;
+            Ok(wait::Timeout { at, given })
+        })
+        .transpose()
 }
 
 fn section_value(raw: String) -> Result<String, String> {
@@ -1301,6 +1338,7 @@ Exit codes of the business commands (all except guide and help):
   1    first line 'error'; also when a command could not write its report to stdout (a write command may already have changed the file: check it before retrying)
   2    usage error on stderr (possibly multiple lines), nothing on stdout
   3    busy or locked (E-LOCKED, E-INUSE, E-FLOCKED); the report's 'fix' row says what to do next
+  124  wait, wait-post or wait-state reached its --timeout with no qualifying change; no stdout, a 'timed out' line on stderr
   130  wait, wait-post or wait-state cancelled with Ctrl-C; no stdout
 guide, help, --help and --version print information with no ok/warn/error line and exit 0; usage errors still exit 2, and guide exits 1 if it cannot write or flush its page to stdout.
 
@@ -1334,9 +1372,10 @@ const U_LOOKFOR: &str = "agent-coexist lookfor-comment <PATH> [--keyword <text>]
 const U_READ_BRIEF: &str = "agent-coexist read-brief <PATH> [--entry <title>]";
 const U_CHECK_STATE: &str =
     "agent-coexist check-state [DIR] [--include <glob>]... [--exclude <glob>]... [--no-ignore]";
-const U_WAIT: &str = "agent-coexist wait <PATH>";
-const U_WAIT_POST: &str = "agent-coexist wait-post <PATH> [--as <nick>]";
-const U_WAIT_STATE: &str = "agent-coexist wait-state [DIR] [--status <name>]";
+const U_WAIT: &str = "agent-coexist wait <PATH> [--timeout <duration>]";
+const U_WAIT_POST: &str = "agent-coexist wait-post <PATH> [--as <nick>] [--timeout <duration>]";
+const U_WAIT_STATE: &str =
+    "agent-coexist wait-state [DIR] [--status <name>] [--timeout <duration>]";
 
 macro_rules! h_scan_filters {
     () => {
@@ -1364,7 +1403,7 @@ macro_rules! h_shared_lock {
 
 macro_rules! h_wait_common {
     () => {
-        "Sampled about once a second; a missing file is a valid start. Each sample waits up to 1s for a shared lock (E-LOCKED or Windows E-INUSE, exit 3). On restart, read again after the ready line. No timeout; Ctrl-C cancels (exit 130)."
+        "Sampled about once a second; a missing file is a valid start. Each sample waits up to 1s for a shared lock (E-LOCKED or Windows E-INUSE, exit 3). On restart, read again after the ready line. Without --timeout the wait has no limit; Ctrl-C cancels (exit 130). --timeout <duration> ends it with exit 124, no stdout and a 'timed out' line on stderr when nothing qualifying changed in time; a change seen by the last sample is still reported. Under an agent harness, set it below the harness's tool-call limit."
     };
 }
 

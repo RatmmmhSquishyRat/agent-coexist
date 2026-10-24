@@ -194,6 +194,33 @@ pub fn duration(s: &str) -> Result<i64, Fault> {
     })
 }
 
+/// `--timeout` on the three wait commands: the same DURATION grammar as
+/// `--for` (§1), read as a wall-clock budget rather than a declaration
+/// length, so its errors name `--timeout`. The deadline is fixed against the
+/// monotonic clock at parse time, before any file is opened; a duration the
+/// clock cannot represent from now is a usage error rather than a panic or a
+/// silently unbounded wait.
+pub fn timeout(s: &str) -> Result<std::time::Instant, Fault> {
+    let secs = parse_duration(s).map_err(|error| match error {
+        DurationError::Invalid => Fault::Usage(format!(
+            "--timeout must be a duration such as 30s: {DURATION_RULE} {}",
+            names::got_raw(s, |v| parse_duration(v).is_ok())
+        )),
+        DurationError::TooLarge => too_long_timeout(s),
+    })?;
+    // parse_duration guarantees 0 < secs <= i64::MAX, so the cast is exact.
+    std::time::Instant::now()
+        .checked_add(std::time::Duration::from_secs(secs as u64))
+        .ok_or_else(|| too_long_timeout(s))
+}
+
+fn too_long_timeout(s: &str) -> Fault {
+    Fault::Usage(format!(
+        "--timeout '{}' is too long to wait for; use a shorter --timeout, or omit it to wait without a limit",
+        names::echo_raw(s)
+    ))
+}
+
 /// The grammar is checked to the end before size is reported, so a value
 /// that is both oversized and malformed gets the grammar message.
 fn parse_duration(s: &str) -> Result<i64, DurationError> {

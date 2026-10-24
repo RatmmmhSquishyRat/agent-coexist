@@ -87,6 +87,15 @@ pub enum Filter {
     State(Option<String>),
 }
 
+/// A parsed `--timeout`: the deadline [`run`] samples against, plus the
+/// value as the user typed it, which the CLI echoes in its stderr notice so
+/// the reader sees their own words rather than a normalised duration.
+#[derive(Clone, Debug)]
+pub struct Timeout {
+    pub at: Instant,
+    pub given: String,
+}
+
 /// Cooperative cancellation shared between the Ctrl-C handler, the timed
 /// wait between samples and the storage read's lock polling. Internal
 /// layout is an implementation detail; all methods take `&self`.
@@ -185,10 +194,19 @@ pub fn command_object(path: &Path, filter: &Filter) -> (&'static str, String) {
 /// for a specialized command stays `E-TYPE`. Unqualified but valid snapshots
 /// advance the whole baseline. Cancellation returns `Fault::Cancelled`
 /// (CLI exit 130). No lock is held while idle.
+///
+/// `deadline` is the `--timeout` instant, fixed when the command line was
+/// parsed. Sampling never sleeps past it, and the sample taken once it is
+/// reached is the last: a qualifying change in it is reported as usual,
+/// otherwise the wait returns `Fault::TimedOut` (CLI exit 124). At least one
+/// sample follows the ready line even when the deadline has already passed,
+/// so a timed-out wait has always looked at the file once after its
+/// baseline. Granularity is one sampling interval.
 pub fn run(
     path: &Path,
     filter: Filter,
     cancel: &Cancellation,
+    deadline: Option<Instant>,
     ready: impl FnOnce(),
 ) -> Result<Report, Fault> {
     let now = time::now()?;
@@ -205,9 +223,16 @@ pub fn run(
     ready();
 
     loop {
-        if cancel.sleep_poll(WAIT_POLL_MS) || cancel.is_cancelled() {
+        // Never sleep past the deadline, so the wait ends close to it.
+        let pause = deadline.map_or(WAIT_POLL_MS, |at| ms_until(at).min(WAIT_POLL_MS));
+        if cancel.sleep_poll(pause) || cancel.is_cancelled() {
             return Err(Fault::Cancelled);
         }
+        // Decided before sampling: once the deadline is reached, this sample
+        // is the last one. A change it sees is still reported in full — only
+        // a sample that finds nothing qualifying ends the wait as timed out,
+        // so a change landing at the deadline is never mistaken for silence.
+        let last = deadline.is_some_and(|at| Instant::now() >= at);
         let raw = match sample_raw(path, &filter, cancel)? {
             Ok(raw) => raw,
             Err(report) => return Ok(report),
@@ -220,6 +245,11 @@ pub fn run(
             _ => false,
         };
         if unchanged {
+            // The common path, so it must check the deadline too: falling
+            // through to the bottom of the loop never happens here.
+            if last {
+                return Err(Fault::TimedOut);
+            }
             continue;
         }
         let event_now = time::now()?;
@@ -245,7 +275,25 @@ pub fn run(
             }
         }
         baseline = next;
+        // A change that did not qualify (a filtered wait) still ends here.
+        if last {
+            return Err(Fault::TimedOut);
+        }
     }
+}
+
+/// Milliseconds until `at`, rounded up so that sleeping this long reaches the
+/// deadline instead of spinning on a sub-millisecond remainder; zero once it
+/// has passed.
+fn ms_until(at: Instant) -> u64 {
+    let left = at.saturating_duration_since(Instant::now());
+    let floor = left.as_millis();
+    let ceil = if Duration::from_millis(floor as u64) < left {
+        floor + 1
+    } else {
+        floor
+    };
+    ceil.min(u128::from(u64::MAX)) as u64
 }
 
 // ---------------------------------------------------------------------------
@@ -1978,7 +2026,7 @@ mod tests {
         let path = parent.join(format!("notes{}", crate::consts::SUFFIX));
         let cancel = Cancellation::new();
         for filter in [Filter::Any, Filter::Post(None)] {
-            let err = run(&path, filter, &cancel, || {}).expect_err("parent is a file");
+            let err = run(&path, filter, &cancel, None, || {}).expect_err("parent is a file");
             match err {
                 Fault::Io {
                     path: io_path,
@@ -2004,7 +2052,7 @@ mod tests {
         std::fs::write(&dir, b"regular file").expect("write file as dir");
         let path = dir.join(crate::consts::STATE_FILE_NAME);
         let cancel = Cancellation::new();
-        let err = run(&path, Filter::State(None), &cancel, || {}).expect_err("dir is a file");
+        let err = run(&path, Filter::State(None), &cancel, None, || {}).expect_err("dir is a file");
         match err {
             Fault::Reason { id, params } => {
                 assert_eq!(id, "E-NOT-DIR");

@@ -5,6 +5,31 @@ All notable changes to this project are documented here. The format follows
 [SemVer](https://semver.org/spec/2.0.0.html).
 ## [Unreleased]
 
+### Added
+
+- `--timeout <DURATION>` on `wait`, `wait-post` and `wait-state`, using the
+  same DURATION grammar as `--for`. When the time passes with no qualifying
+  change, the wait exits **124** with empty stdout and one stderr line,
+  `timed out  <command>  <object>  after <value>`, after its usual ready
+  line. Like Ctrl-C cancellation (130) it is neither a change report nor a
+  failure. The budget runs from command start, fixed before any file is
+  opened, so it lines up with a harness's tool-call limit. Sampling never
+  sleeps past the deadline, and the sample taken there is still evaluated:
+  a change at the deadline is reported rather than mistaken for silence.
+  Without `--timeout` the behaviour is unchanged.
+- Waiting no longer needs a harness that can run background processes: one
+  that only makes foreground calls can wait in bounded slices with
+  `--timeout`, reading the file again after each 124.
+
+### Changed
+
+- The `wait` guide page, the per-command help, the top-level exit-code
+  table and the command reference describe `--timeout` and exit 124, and no
+  longer say waits have no time limit.
+- Questions and ideas go to GitHub Discussions; the issue chooser routes
+  them there and security reports to the private reporting form, which is
+  now actually enabled — `SECURITY.md` had pointed to it while it was off.
+
 ## [0.4.2] - 2026-10-24
 
 ### Added

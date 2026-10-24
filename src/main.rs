@@ -128,10 +128,15 @@ fn main() -> ExitCode {
                     &source_report(command, &object, &path, problem, &cause, &ctx),
                     &dctx,
                 ),
-                // Base commands never install a cancellation source, so this
-                // is an internal inconsistency; report it as an error rather
-                // than pretending a result exists.
-                Err(Fault::Cancelled) => emit(&cancelled_report(command, &object), &dctx),
+                // Base commands never install a cancellation source or a
+                // deadline, so either ending is an internal inconsistency;
+                // report it as an error rather than pretending a result exists.
+                Err(Fault::Cancelled) => {
+                    emit(&wait_ending_report(command, &object, "cancelled"), &dctx)
+                }
+                Err(Fault::TimedOut) => {
+                    emit(&wait_ending_report(command, &object, "timed out"), &dctx)
+                }
                 Err(Fault::Reason { id, params }) => {
                     let report = reason_from_fault(&dctx, command, &object, id, params);
                     emit(&report, &dctx)
@@ -142,7 +147,12 @@ fn main() -> ExitCode {
                 }
             }
         }
-        Ok(args::Invocation::Wait { kind, path, filter }) => {
+        Ok(args::Invocation::Wait {
+            kind,
+            path,
+            filter,
+            timeout,
+        }) => {
             // Command and object come from the wait module so the ready
             // line, any fault report and wait's own reports always agree
             // (state object = dir; file objects = suffix-stripped display).
@@ -175,7 +185,8 @@ fn main() -> ExitCode {
                     render::column(&object)
                 );
             };
-            let result = wait::run(&path, filter, &cancel, ready);
+            let deadline = timeout.as_ref().map(|t| t.at);
+            let result = wait::run(&path, filter, &cancel, deadline, ready);
             // Bind recovery to the original inspected path after waiting: a
             // removed file or a changed reserved-state selection must not
             // inherit permission to emit directory-level mutation recipes.
@@ -186,6 +197,20 @@ fn main() -> ExitCode {
             match result {
                 Ok(report) => emit(&report, &dctx),
                 Err(Fault::Cancelled) => ExitCode::from(130),
+                // Like cancellation, a timeout is neither a change hit nor a
+                // failure report, so stdout stays empty. One notice on stderr
+                // mirrors the ready line and echoes --timeout as given, so a
+                // reader — an agent in particular — sees why the wait ended
+                // without having to know what exit 124 means.
+                Err(Fault::TimedOut) => {
+                    let given = timeout.as_ref().map_or("", |t| t.given.as_str());
+                    let _ = writeln!(
+                        std::io::stderr(),
+                        "timed out  {command}  {}  after {given}",
+                        render::column(&object)
+                    );
+                    ExitCode::from(124)
+                }
                 Err(Fault::Usage(msg)) => usage_stderr(&msg),
                 Err(Fault::Io {
                     action,
@@ -603,11 +628,13 @@ fn diagnostics_report(command: &'static str, object: &str, diagnostics: Vec<Diag
     report
 }
 
-/// Internal-error report for an unreachable `Fault::Cancelled` in a base
-/// command: nothing fake is written to stdout beyond this error form.
-fn cancelled_report(command: &'static str, object: &str) -> Report {
+/// Internal-error report for a wait-only ending (`Fault::Cancelled` or
+/// `Fault::TimedOut`) reaching a base command, which installs neither a
+/// cancellation source nor a deadline: nothing fake is written to stdout
+/// beyond this error form.
+fn wait_ending_report(command: &'static str, object: &str, reason: &str) -> Report {
     let mut report = Report::new(command, object);
-    report.kv("reason", vec!["cancelled".to_string()]);
+    report.kv("reason", vec![reason.to_string()]);
     report.status = Status::Error;
     report.exit = 1;
     report
