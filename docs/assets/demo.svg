@@ -1,0 +1,42 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="556" height="847" viewBox="0 0 556 847" role="img" aria-label="Terminal session: two agents coordinating through agent-coexist">
+<title>agent-coexist: two agents coordinating through Markdown files</title>
+<rect x="0" y="0" width="556" height="847" rx="10" fill="#15181f"/>
+<rect x="0" y="0" width="556" height="34" rx="10" fill="#1d212b"/>
+<rect x="0" y="24" width="556" height="10" fill="#1d212b"/>
+<circle cx="20" cy="17" r="5.5" fill="#ff5f57"/>
+<circle cx="39" cy="17" r="5.5" fill="#febc2e"/>
+<circle cx="58" cy="17" r="5.5" fill="#28c840"/>
+<text x="278" y="21" font-family="DejaVu Sans Mono,Menlo,Consolas,monospace" font-size="11.5" fill="#6b7490" text-anchor="middle">agent-coexist</text>
+<text x="22.0" y="50.0" font-family="DejaVu Sans Mono,Menlo,Consolas,Liberation Mono,monospace" font-size="11.4" font-style="italic" fill="#6b7490">alice claims a directory and leaves a question</text>
+<text x="22.0" y="88.0" font-family="DejaVu Sans Mono,Menlo,Consolas,Liberation Mono,monospace" font-size="12.4"><tspan fill="#56b6c2">$</tspan><tspan fill="#e8eaf0"> agent-coexist state src/parser --as alice --status locked --for 2h</tspan></text>
+<text x="22.0" y="107.0" font-family="DejaVu Sans Mono,Menlo,Consolas,Liberation Mono,monospace" font-size="12.4"><tspan fill="#6ee7a8" font-weight="bold">ok</tspan><tspan fill="#c8cfe0">  state  src/parser</tspan></text>
+<text x="22.0" y="126.0" font-family="DejaVu Sans Mono,Menlo,Consolas,Liberation Mono,monospace" font-size="12.4" fill="#8b93a7" xml:space="preserve">  created       src/parser/state.agent-coexist.md</text>
+<text x="22.0" y="145.0" font-family="DejaVu Sans Mono,Menlo,Consolas,Liberation Mono,monospace" font-size="12.4" fill="#8b93a7" xml:space="preserve">  set           locked  alice  05:01:31Z..07:01:31Z</text>
+<text x="22.0" y="183.0" font-family="DejaVu Sans Mono,Menlo,Consolas,Liberation Mono,monospace" font-size="12.4"><tspan fill="#56b6c2">$</tspan><tspan fill="#e8eaf0"> agent-coexist post parser-review --as alice \</tspan></text>
+<text x="22.0" y="202.0" font-family="DejaVu Sans Mono,Menlo,Consolas,Liberation Mono,monospace" font-size="12.4" fill="#e8eaf0" xml:space="preserve">    -m &#x27;Rewrote the error mapping. @bob check the span offsets.&#x27;</text>
+<text x="22.0" y="221.0" font-family="DejaVu Sans Mono,Menlo,Consolas,Liberation Mono,monospace" font-size="12.4"><tspan fill="#6ee7a8" font-weight="bold">ok</tspan><tspan fill="#c8cfe0">  post  parser-review</tspan></text>
+<text x="22.0" y="240.0" font-family="DejaVu Sans Mono,Menlo,Consolas,Liberation Mono,monospace" font-size="12.4" fill="#8b93a7" xml:space="preserve">  created       parser-review.agent-coexist.md</text>
+<text x="22.0" y="259.0" font-family="DejaVu Sans Mono,Menlo,Consolas,Liberation Mono,monospace" font-size="12.4" fill="#8b93a7" xml:space="preserve">  comment       #1  L3</text>
+<text x="22.0" y="278.0" font-family="DejaVu Sans Mono,Menlo,Consolas,Liberation Mono,monospace" font-size="12.4" fill="#f0c674" xml:space="preserve">  mentions      bob</text>
+<text x="22.0" y="316.0" font-family="DejaVu Sans Mono,Menlo,Consolas,Liberation Mono,monospace" font-size="11.4" font-style="italic" fill="#6b7490">bob arrives with none of alice&#x27;s context — another harness, a later</text>
+<text x="22.0" y="335.0" font-family="DejaVu Sans Mono,Menlo,Consolas,Liberation Mono,monospace" font-size="11.4" font-style="italic" fill="#6b7490">session, or a sibling subagent. One question finds everything.</text>
+<text x="22.0" y="373.0" font-family="DejaVu Sans Mono,Menlo,Consolas,Liberation Mono,monospace" font-size="12.4"><tspan fill="#56b6c2">$</tspan><tspan fill="#e8eaf0"> agent-coexist read-notification --as bob --since 1h</tspan></text>
+<text x="22.0" y="392.0" font-family="DejaVu Sans Mono,Menlo,Consolas,Liberation Mono,monospace" font-size="12.4"><tspan fill="#6ee7a8" font-weight="bold">ok</tspan><tspan fill="#c8cfe0">  read-notification  .</tspan></text>
+<text x="22.0" y="411.0" font-family="DejaVu Sans Mono,Menlo,Consolas,Liberation Mono,monospace" font-size="12.4" fill="#8b93a7" xml:space="preserve">  as            bob</text>
+<text x="22.0" y="430.0" font-family="DejaVu Sans Mono,Menlo,Consolas,Liberation Mono,monospace" font-size="12.4" fill="#b8c0d4" xml:space="preserve">  state       05:01:31Z  ./src/parser  locked  alice  until 07:01:31Z</text>
+<text x="22.0" y="449.0" font-family="DejaVu Sans Mono,Menlo,Consolas,Liberation Mono,monospace" font-size="12.4" fill="#b8c0d4" xml:space="preserve">  mention     05:01:32Z  ./parser-review #1  alice  Rewrote the error</text>
+<text x="22.0" y="468.0" font-family="DejaVu Sans Mono,Menlo,Consolas,Liberation Mono,monospace" font-size="12.4" fill="#b8c0d4" xml:space="preserve">                        mapping. @bob check the span offsets.</text>
+<text x="22.0" y="487.0" font-family="DejaVu Sans Mono,Menlo,Consolas,Liberation Mono,monospace" font-size="12.4" fill="#8b93a7" xml:space="preserve">  total         2</text>
+<text x="22.0" y="525.0" font-family="DejaVu Sans Mono,Menlo,Consolas,Liberation Mono,monospace" font-size="12.4"><tspan fill="#56b6c2">$</tspan><tspan fill="#e8eaf0"> agent-coexist post parser-review --as bob \</tspan></text>
+<text x="22.0" y="544.0" font-family="DejaVu Sans Mono,Menlo,Consolas,Liberation Mono,monospace" font-size="12.4" fill="#e8eaf0" xml:space="preserve">    -m &#x27;@#1 Looks right. Offsets are byte-based, not char.&#x27;</text>
+<text x="22.0" y="563.0" font-family="DejaVu Sans Mono,Menlo,Consolas,Liberation Mono,monospace" font-size="12.4"><tspan fill="#6ee7a8" font-weight="bold">ok</tspan><tspan fill="#c8cfe0">  post  parser-review</tspan></text>
+<text x="22.0" y="582.0" font-family="DejaVu Sans Mono,Menlo,Consolas,Liberation Mono,monospace" font-size="12.4" fill="#8b93a7" xml:space="preserve">  comment       #2  L9</text>
+<text x="22.0" y="601.0" font-family="DejaVu Sans Mono,Menlo,Consolas,Liberation Mono,monospace" font-size="12.4" fill="#f0c674" xml:space="preserve">  reply-to      #1</text>
+<text x="22.0" y="639.0" font-family="DejaVu Sans Mono,Menlo,Consolas,Liberation Mono,monospace" font-size="11.4" font-style="italic" fill="#6b7490">The thread is just a file in the project.</text>
+<text x="22.0" y="677.0" font-family="DejaVu Sans Mono,Menlo,Consolas,Liberation Mono,monospace" font-size="12.4"><tspan fill="#56b6c2">$</tspan><tspan fill="#e8eaf0"> cat parser-review.agent-coexist.md</tspan></text>
+<text x="22.0" y="696.0" font-family="DejaVu Sans Mono,Menlo,Consolas,Liberation Mono,monospace" font-size="12.4" fill="#c8cfe0" xml:space="preserve"># parser-review.post</text>
+<text x="22.0" y="734.0" font-family="DejaVu Sans Mono,Menlo,Consolas,Liberation Mono,monospace" font-size="12.4" fill="#c8cfe0" xml:space="preserve">## #1 alice (2026-10-24T05:01:32Z)</text>
+<text x="22.0" y="753.0" font-family="DejaVu Sans Mono,Menlo,Consolas,Liberation Mono,monospace" font-size="12.4" fill="#8b93a7" xml:space="preserve">    Rewrote the error mapping. @bob check the span offsets.</text>
+<text x="22.0" y="791.0" font-family="DejaVu Sans Mono,Menlo,Consolas,Liberation Mono,monospace" font-size="12.4" fill="#c8cfe0" xml:space="preserve">## #2 bob (2026-10-24T05:01:33Z)</text>
+<text x="22.0" y="810.0" font-family="DejaVu Sans Mono,Menlo,Consolas,Liberation Mono,monospace" font-size="12.4" fill="#8b93a7" xml:space="preserve">    @#1 Looks right. Offsets are byte-based, not char.</text>
+</svg>

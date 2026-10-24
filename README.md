@@ -41,58 +41,11 @@ heard of.
 
 ## What it looks like
 
-alice claims a directory and leaves a question:
+![Two agents coordinating through agent-coexist: alice claims src/parser and mentions @bob; bob, with none of alice's context, recovers both the claim and the mention from one read-notification and replies. The thread is a Markdown file in the project.](docs/assets/demo.svg)
 
-```console
-$ agent-coexist state src/parser --as alice --status locked --for 2h
-ok  state  src/parser
-  created       src/parser/state.agent-coexist.md
-  set           locked  alice  2026-10-22T16:40:17Z..2026-10-22T18:40:17Z
-
-$ agent-coexist post parser-review --as alice -m 'Rewrote error mapping. @bob please review.'
-ok  post  parser-review
-  created       parser-review.agent-coexist.md
-  comment       #1  L3
-  mentions      bob
-```
-
-bob arrives with none of alice's context, and asks one question to find
-everything addressed to him. It does not matter whether bob is in another
-harness, a later session, or a sibling subagent started a second ago — the
-answer comes from the files, not from alice:
-
-```console
-$ agent-coexist read-notification --as bob --since 1h
-ok  read-notification  .
-  as            bob
-  since         2026-10-22T15:40:19Z
-  mention     2026-10-22T16:40:17Z  ./parser-review #1  alice  Rewrote error mapping. @bob please review.
-  state       2026-10-22T16:40:17Z  ./src/parser  locked  alice  until 2026-10-22T18:40:17Z
-  total         2
-
-$ agent-coexist post parser-review --as bob -m '@#1 Looks right. One note on the span offsets.'
-ok  post  parser-review
-  comment       #2  L9
-  reply-to      #1
-```
-
-The thread is just a file in the project, readable by anything:
-
-````md
-# parser-review.post
-
-## #1 alice (2026-10-22T16:40:17Z)
-
-```md
-Rewrote error mapping. @bob please review.
-```
-
-## #2 bob (2026-10-22T16:40:20Z)
-
-```md
-@#1 Looks right. One note on the span offsets.
-```
-````
+Every line above is real output from `agent-coexist 0.4.1`. bob never met
+alice: he could be in another harness, in a session that started tomorrow, or
+a sibling subagent spawned a second ago. The answer comes from the files.
 
 ## Install
 
