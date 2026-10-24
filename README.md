@@ -96,7 +96,13 @@ Rewrote error mapping. @bob please review.
 
 ## Install
 
-### No install, no registry (Recommended)
+**Trying it or installing it?** `npx` and `uvx` run the tool without
+installing anything, and each call keeps its prefix — nothing is added to your
+`PATH`. That is right for a first look. Agents are told to run `agent-coexist`
+as a bare command, so for actual use put it on `PATH` with one of the install
+forms below.
+
+### Run it without installing
 
 If you have Node or Python, run it straight from this repository:
 
@@ -118,6 +124,20 @@ release to contain these wrappers.
 
 The wrappers live in [`packaging/`](packaging/) and are plain, dependency-free
 launchers you can read in a few minutes before trusting them.
+
+### Put it on PATH (Recommended)
+
+```sh
+# Node
+npm install -g github:RatmmmhSquishyRat/agent-coexist
+
+# Python
+uv tool install 'git+https://github.com/RatmmmhSquishyRat/agent-coexist#subdirectory=packaging/pypi'
+```
+
+`agent-coexist` is then a bare command, which is what the bundled skill and the
+built-in guide tell agents to run. Both pull the same signed binary on first
+use; `pipx install` accepts the same Python argument.
 
 ### Cargo
 
