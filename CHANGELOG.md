@@ -23,6 +23,12 @@ All notable changes to this project are documented here. The format follows
 
 ### Changed
 
+- The skill's description fits in 500 characters. dsh (DeepSeek harness)
+  shows its model only that much of a skill description, and the old
+  672-character one was cut off there, mid-sentence and before its last
+  sentence: the guard against creating files merely because the word
+  appears. The two sentences dropped to make room are both in the skill's
+  body, which the model reads once the skill loads.
 - The `wait` guide page, the per-command help, the top-level exit-code
   table and the command reference describe `--timeout` and exit 124, and no
   longer say waits have no time limit.

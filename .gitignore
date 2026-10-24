@@ -3,6 +3,9 @@ target/
 /dist/
 __pycache__/
 
+# dsh test projects, created per run
+/tests/dsh/work/
+
 # Local secrets
 .env
 .env.*

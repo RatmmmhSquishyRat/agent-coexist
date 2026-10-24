@@ -1,6 +1,6 @@
 ---
 name: agent-coexist
-description: "Check for and write *.agent-coexist.md records when a project is shared with agents you cannot see: one in another harness, one in another session including a later run of your own work, or a sibling subagent editing right now. Use on arriving in or returning to such a project, before changing a directory another agent may have claimed, when leaving a question, reply, handoff or reading route for an agent you cannot talk to, or when the user asks for coexist. The records say who worked where and what they did, claimed or decided. Reading needs only file tools; the agent-coexist CLI keeps writes consistent. Mentioning the word alone is not a reason to create files."
+description: "Check for and write *.agent-coexist.md records when other agents you cannot see share the project: one in another harness, in another session (including a later run of your own work), or a sibling subagent working now. Use on arriving in or returning to such a project, before changing a directory another agent may have claimed, when leaving a question, reply or handoff for an agent you cannot reach, or when the user asks for coexist. Mentioning the word alone is not a reason to create files."
 license: MIT
 ---
 
