@@ -65,13 +65,18 @@ static REPLY_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"@#([1-9][0-9]*)
 /// Mentions and replies of a body text (spec §3.4.2), each deduplicated
 /// preserving first-occurrence order.
 ///
-/// A mention is an `@` at start of text or preceded by any character that
-/// is not a Unicode letter/number/`_`/`@`, followed by a maximal run of
-/// NICK characters of length 1..=64 (longer runs are not mentions). A
-/// preceding `-` counts, including one that just ended a previous nick
-/// (`@alice-@bob` yields `alice-` and `bob`). A reply is `@#` followed by
-/// `[1-9][0-9]*`; a value that overflows `u64` is skipped, not truncated.
-pub fn references(text: &str) -> (Vec<String>, Vec<u64>) {
+/// Only prose counts (owner ruling D-100): a reference inside a fenced code
+/// block, a `>` quote line or an inline code span is not one; see
+/// [`prose`]. A mention is an `@` at start of text or preceded by any
+/// character that is not a Unicode letter/number/`_`/`@`, followed by a
+/// maximal run of NICK characters of length 1..=64 (longer runs are not
+/// mentions). A preceding `-` counts, including one that just ended a
+/// previous nick (`@alice-@bob` yields `alice-` and `bob`). A reply is `@#`
+/// followed by `[1-9][0-9]*`; a value that overflows `u64` is skipped, not
+/// truncated.
+pub fn references(body: &str) -> (Vec<String>, Vec<u64>) {
+    let text = prose(body);
+    let text = text.as_str();
     let mut mentions: Vec<String> = Vec::new();
     let mut seen_mentions: HashSet<&str> = HashSet::new();
     for caps in MENTION_RE.captures_iter(text) {
@@ -95,6 +100,124 @@ pub fn references(text: &str) -> (Vec<String>, Vec<u64>) {
         }
     }
     (mentions, replies)
+}
+
+/// `body` with everything that is not prose blanked to spaces, one per
+/// character, line breaks kept (spec §3.4.2). An `@` in prose keeps its
+/// mention boundary: a blanked neighbour was a backtick or `>` before, and
+/// is a space now, neither of which can start or continue a nick.
+///
+/// - a fenced code block: a line of three or more backticks or tildes,
+///   indented by at most three spaces, through the next line of the same
+///   character at least as long and carrying nothing else, or through the
+///   end of the body when no such line follows;
+/// - a quote line: one whose first character after at most three spaces is
+///   `>`;
+/// - an inline code span: a run of backticks through the next run of
+///   exactly the same length, within one paragraph. A run with no closing
+///   partner is ordinary text.
+///
+/// Indented code blocks are not recognised: telling one from a list item's
+/// continuation needs list structure, and a wrong guess would hide a real
+/// reply.
+fn prose(body: &str) -> String {
+    let mut out = String::with_capacity(body.len());
+    let mut fence: Option<(char, usize)> = None;
+    for line in body.split_inclusive('\n') {
+        let content = line.trim_end_matches(['\n', '\r']);
+        let indent = content.len() - content.trim_start_matches(' ').len();
+        let rest = &content[indent.min(content.len())..];
+        let hidden = if let Some((ch, len)) = fence {
+            let run = rest.chars().take_while(|c| *c == ch).count();
+            if indent <= 3
+                && run >= len
+                && rest[run * ch.len_utf8()..].trim_end_matches(' ').is_empty()
+            {
+                fence = None;
+            }
+            true
+        } else if indent <= 3 && (rest.starts_with("```") || rest.starts_with("~~~")) {
+            let ch = rest.chars().next().expect("starts with a fence character");
+            let run = rest.chars().take_while(|c| *c == ch).count();
+            // A backtick fence's info string may not contain a backtick.
+            if ch == '~' || !rest[run..].contains('`') {
+                fence = Some((ch, run));
+                true
+            } else {
+                false
+            }
+        } else {
+            indent <= 3 && rest.starts_with('>')
+        };
+        if hidden {
+            out.extend(
+                line.chars()
+                    .map(|c| if c == '\n' || c == '\r' { c } else { ' ' }),
+            );
+        } else {
+            out.push_str(line);
+        }
+    }
+    blank_code_spans(&mut out);
+    out
+}
+
+/// Blanks inline code spans in place (see [`prose`]). A span may cross
+/// line breaks but not a blank line, which ends the paragraph.
+fn blank_code_spans(text: &mut String) {
+    let bytes = text.as_bytes();
+    let mut spans: Vec<std::ops::Range<usize>> = Vec::new();
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] != b'`' {
+            i += 1;
+            continue;
+        }
+        let open = i;
+        while i < bytes.len() && bytes[i] == b'`' {
+            i += 1;
+        }
+        let len = i - open;
+        let mut j = i;
+        let mut close = None;
+        while j < bytes.len() {
+            if bytes[j] == b'\n' && paragraph_ends_after(bytes, j) {
+                break;
+            }
+            if bytes[j] == b'`' {
+                let start = j;
+                while j < bytes.len() && bytes[j] == b'`' {
+                    j += 1;
+                }
+                if j - start == len {
+                    close = Some(j);
+                    break;
+                }
+                continue;
+            }
+            j += 1;
+        }
+        if let Some(end) = close {
+            spans.push(open..end);
+            i = end;
+        }
+    }
+    for span in spans.into_iter().rev() {
+        let blank: String = text[span.clone()]
+            .chars()
+            .map(|c| if c == '\n' || c == '\r' { c } else { ' ' })
+            .collect();
+        text.replace_range(span, &blank);
+    }
+}
+
+/// Whether the line break at `at` is followed by a blank line.
+fn paragraph_ends_after(bytes: &[u8], at: usize) -> bool {
+    let next = &bytes[at + 1..];
+    let line_end = next.iter().position(|b| *b == b'\n').unwrap_or(next.len());
+    next[..line_end]
+        .iter()
+        .all(|b| matches!(b, b' ' | b'\t' | b'\r'))
 }
 
 /// Whether `@` at byte `at` has a mention boundary: start of text, or a
@@ -654,6 +777,48 @@ mod tests {
         ] {
             assert!(parse_header(bad).is_none(), "should reject {bad:?}");
         }
+    }
+
+    /// D-100: only prose counts. Code and quoted text carry other people's
+    /// syntax or words; counting them woke a wait-post in a dsh trial when an
+    /// agent explained the syntax as `@#2`.
+    #[test]
+    fn references_count_only_prose() {
+        let none = (Vec::<String>::new(), Vec::<u64>::new());
+        // inline code spans, of one and of two backticks
+        assert_eq!(references("the syntax is `@#2` and `@alice`"), none);
+        assert_eq!(references("write ``a ` @#2`` like this"), none);
+        // a span may cross a line break, not a blank line
+        assert_eq!(references("see `one\n@#2 two` here"), none);
+        let (_, replies) = references("odd ` tick\n\n@#2 real");
+        assert_eq!(replies, vec![2]);
+        // an unmatched backtick is ordinary text
+        let (mentions, replies) = references("a lone ` before @#3 and @bob");
+        assert_eq!((mentions, replies), (vec!["bob".to_string()], vec![3]));
+        // fenced blocks of backticks or tildes, indented up to three spaces
+        assert_eq!(references("Example:\n```\n@#1 sample @alice\n```"), none);
+        assert_eq!(references("   ~~~~ md\n@#1\n~~~~"), none);
+        // a shorter or different closing line does not close the fence
+        assert_eq!(references("````\n```\n@#1\n````"), none);
+        assert_eq!(references("```\n~~~\n@#1"), none);
+        // an unclosed fence runs to the end of the body
+        assert_eq!(references("```\n@#1\nmore @bob"), none);
+        // text after a closed fence counts again
+        let (_, replies) = references("```\n@#1\n```\nthen @#4");
+        assert_eq!(replies, vec![4]);
+        // a backtick fence whose info string holds a backtick is not a fence
+        let (_, replies) = references("``` a`b\n@#5");
+        assert_eq!(replies, vec![5]);
+        // quote lines, with up to three spaces before '>'
+        assert_eq!(references("> @#1 said this\n   >> @bob too"), none);
+        let (_, replies) = references("> @#1 quoted\n@#2 my answer");
+        assert_eq!(replies, vec![2]);
+        // four spaces is not a quote line (nor recognised as indented code)
+        let (_, replies) = references("    > @#6");
+        assert_eq!(replies, vec![6]);
+        // mid-sentence prose still counts, also right after a code span
+        let (mentions, replies) = references("As noted in @#2, `x`@carol agrees");
+        assert_eq!((mentions, replies), (vec!["carol".to_string()], vec![2]));
     }
 
     #[test]

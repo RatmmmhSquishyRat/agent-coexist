@@ -74,6 +74,7 @@ fn step(
 /// §3.5.1 create form: `# <stem>.post` + blank + comment #1.
 fn create_step(p: &PostParams, now: &str) -> Result<(Mutation, Step), Fault> {
     let stem = require_valid_stem(&p.path)?;
+    require_reply_targets(p, [1])?;
     let prefix = format!("# {stem}.post\n\n");
     let mut content = prefix.clone();
     content.push_str("## #1 ");
@@ -90,7 +91,7 @@ fn create_step(p: &PostParams, now: &str) -> Result<(Mutation, Step), Fault> {
             format!("L{}", line_of(content.as_bytes(), prefix.len())),
         ],
     );
-    add_reference_rows(&mut done, &p.body, (&p.nick, 1), [1]);
+    add_reference_rows(&mut done, &p.body);
     Ok((Mutation::Write(content.into_bytes()), Step::Done(done)))
 }
 
@@ -109,6 +110,7 @@ fn append_step(
             .with("nick", p.nick.clone()));
     }
     let seq = max_seq + 1;
+    require_reply_targets(p, doc.post.comments.iter().map(|c| c.seq).chain([seq]))?;
     let gap = text::append_gap(&doc.source);
     let header_off = doc.source.len() + gap.len();
     let mut replacement = String::with_capacity(gap.len() + 64 + p.nick.len() + p.body.len());
@@ -135,12 +137,7 @@ fn append_step(
                     format!("L{}", line_of(&new_bytes, header_off)),
                 ],
             );
-            add_reference_rows(
-                &mut done,
-                &p.body,
-                (&p.nick, seq),
-                doc.post.comments.iter().map(|c| c.seq).chain([seq]),
-            );
+            add_reference_rows(&mut done, &p.body);
             Ok((Mutation::Write(new_bytes), Step::Done(done)))
         }
         Applied::Refused(step) => Ok((Mutation::Unchanged, step)),
@@ -175,6 +172,7 @@ fn edit_step(
             .with("nick", p.nick.clone())
             .with("path_arg", p.path.as_os_str()));
     }
+    require_reply_targets(p, doc.post.comments.iter().map(|c| c.seq))?;
     let section = &doc.sections[comment.section];
     let mut splices = Vec::new();
     // Header: rewrite from the `##` through the `)` closing the time group;
@@ -226,12 +224,7 @@ fn edit_step(
                     "edited".to_string(),
                 ],
             );
-            add_reference_rows(
-                &mut done,
-                &p.body,
-                (&p.nick, comment.seq),
-                doc.post.comments.iter().map(|c| c.seq),
-            );
+            add_reference_rows(&mut done, &p.body);
             Ok((Mutation::Write(new_bytes), Step::Done(done)))
         }
         Applied::Refused(step) => Ok((Mutation::Unchanged, step)),
@@ -239,34 +232,46 @@ fn edit_step(
 }
 
 /// `mentions` / `reply-to` rows derived from the freshly written body
-/// (§3.4.2, §3.5.4, §8.1.14). `existing` is the seqs present after the
-/// write and is consumed only when the body contains replies; a missing
-/// target still gets written but downgrades to `warn`, recording `own`
-/// (the author and number of the comment this write announces) so the
-/// report can name the author's own repair as a `fix` row.
-fn add_reference_rows(
-    done: &mut Done,
-    body: &str,
-    own: (&str, u64),
-    existing: impl IntoIterator<Item = u64>,
-) {
+/// (§3.4.2, §8.1.14). Every reply target exists: [`require_reply_targets`]
+/// refused the write otherwise.
+fn add_reference_rows(done: &mut Done, body: &str) {
     let (mentions, replies) = crate::types::post::references(body);
     if !mentions.is_empty() {
         done.kv("mentions", vec![mentions.join(", ")]);
     }
-    if replies.is_empty() {
-        return;
-    }
-    let existing: HashSet<u64> = existing.into_iter().collect();
     for m in replies {
-        if existing.contains(&m) {
-            done.kv("reply-to", vec![format!("#{m}")]);
-        } else {
-            done.kv("reply-to", vec![format!("#{m}"), "(not found)".to_string()]);
-            done.warn = true;
-            done.reply_fix = Some((own.0.to_string(), own.1));
-        }
+        done.kv("reply-to", vec![format!("#{m}")]);
     }
+}
+
+/// §3.5.4 (owner ruling D-100): a reply names a comment of this same post,
+/// so a body replying to a number that no comment will carry after the
+/// write is refused and nothing is written. `existing` counts the comment
+/// being written. A comment in another post is referred to in words; there
+/// is no cross-post reply syntax.
+fn require_reply_targets(
+    p: &PostParams,
+    existing: impl IntoIterator<Item = u64>,
+) -> Result<(), Fault> {
+    let existing: HashSet<u64> = existing.into_iter().collect();
+    let (_, replies) = crate::types::post::references(&p.body);
+    let missing: Vec<String> = replies
+        .iter()
+        .filter(|n| !existing.contains(n))
+        .map(|n| format!("#{n}"))
+        .collect();
+    let Some((last, rest)) = missing.split_last() else {
+        return Ok(());
+    };
+    let numbers = if rest.is_empty() {
+        last.clone()
+    } else {
+        format!("{} or {last}", rest.join(", "))
+    };
+    let max = existing.iter().max().copied().unwrap_or(0);
+    Err(Fault::reason("E-REPLY-NOTFOUND")
+        .with("numbers", numbers)
+        .with("max", max.to_string()))
 }
 
 // ---------------------------------------------------------------------------
@@ -274,16 +279,10 @@ fn add_reference_rows(
 // ---------------------------------------------------------------------------
 
 /// Rows plus a warn flag computed inside the `fsx::mutate` closure for a
-/// completed step (successful write or no-op outcome); a post write that
-/// replied to a missing number also records its own repair.
+/// completed step (successful write or no-op outcome).
 pub(super) struct Done {
     pub rows: Vec<Row>,
     pub warn: bool,
-    /// A reply in the written body named a number no comment in this
-    /// post carries: the author's own repair (nick and number of the
-    /// comment this report announced), rendered as a `fix` row by
-    /// [`finish`].
-    pub reply_fix: Option<(String, u64)>,
 }
 
 impl Done {
@@ -291,7 +290,6 @@ impl Done {
         Done {
             rows: Vec::new(),
             warn: false,
-            reply_fix: None,
         }
     }
 
@@ -503,16 +501,6 @@ pub(super) fn finish(
                 report.rows.extend(body);
                 if done.warn {
                     report.warn();
-                }
-                if let Some((nick, seq)) = done.reply_fix {
-                    // The reply-to rows above end in `(not found)`; the
-                    // fix names the writer's own repair while the comment
-                    // is still the newest thing on their mind.
-                    let dctx = context::diag_context_for_file(ctx, command, path);
-                    report.kv(
-                        "fix",
-                        vec![diag::reply_target_missing_fix(&dctx, &nick, seq)],
-                    );
                 }
                 if !remaining.is_empty() {
                     report.kv("fix", vec![file_check_fix(path)]);
@@ -1227,26 +1215,26 @@ mod tests {
     }
 
     #[test]
-    fn add_reference_rows_keep_first_reply_order_and_missing_targets() {
+    fn add_reference_rows_keep_first_reply_order() {
         let mut done = Done::empty();
-        add_reference_rows(&mut done, "@carol @#5 @#1 @#5 @#9", ("bob", 2), [1, 5]);
+        add_reference_rows(&mut done, "@carol @#5 @#1 @#5");
         assert_eq!(
             field_lists(&done.rows, "mentions"),
             vec![vec!["carol".to_string()]]
         );
         assert_eq!(
             field_lists(&done.rows, "reply-to"),
-            vec![
-                vec!["#5".to_string()],
-                vec!["#1".to_string()],
-                vec!["#9".to_string(), "(not found)".to_string()],
-            ]
+            vec![vec!["#5".to_string()], vec!["#1".to_string()]]
         );
-        assert!(done.warn);
+        assert!(!done.warn);
     }
 
+    /// D-100: a reply to a number this post will not carry is refused and
+    /// nothing is written; a reply to the comment being written, or to one
+    /// that exists, is fine. In a dsh trial agents ignored the old `warn`
+    /// (exit 0) five times.
     #[test]
-    fn append_reply_includes_new_sequence_and_warns_on_missing() {
+    fn append_refuses_a_reply_to_a_missing_number() {
         let dir = scratch("reply-seq");
         let target = dir.join("foo.agent-coexist.md");
         std::fs::write(
@@ -1254,34 +1242,37 @@ mod tests {
             b"# foo.post\n\n## #1 alice (2026-09-25T10:00:00Z)\n\n```md\nhi\n```\n",
         )
         .unwrap();
-        let p = PostParams {
-            path: target.clone(),
-            nick: "bob".to_string(),
-            body: "@#1 @#2 @#9 @#2".to_string(),
-            edit: None,
-        };
+        let before = std::fs::read(&target).unwrap();
         let now = time::parse("2026-09-25T12:00:00Z").unwrap();
         let mut ctx = test_ctx(now);
-        let report = run(&mut ctx, &p).unwrap();
-        assert_eq!(report.status, Status::Warn);
+        let refused = PostParams {
+            path: target.clone(),
+            nick: "bob".to_string(),
+            body: "@#1 @#2 @#9 @#7 and `@#8` in code".to_string(),
+            edit: None,
+        };
+        let report = run(&mut ctx, &refused).unwrap();
+        assert_eq!(report.status, Status::Error);
+        let text = format!("{:?}", report.rows);
+        assert!(
+            text.contains("no comment in this post has the number #9 or #7"),
+            "{text}"
+        );
+        assert!(
+            !text.contains("#8"),
+            "a reply in code is not a reply: {text}"
+        );
+        assert_eq!(std::fs::read(&target).unwrap(), before, "nothing written");
+
+        let accepted = PostParams {
+            body: "@#1 @#2 @#2".to_string(),
+            ..refused
+        };
+        let report = run(&mut ctx, &accepted).unwrap();
+        assert_eq!(report.status, Status::Ok);
         assert_eq!(
             field_lists(&report.rows, "reply-to"),
-            vec![
-                vec!["#1".to_string()],
-                vec!["#2".to_string()],
-                vec!["#9".to_string(), "(not found)".to_string()],
-            ]
-        );
-        let bytes = std::fs::read(&target).unwrap();
-        let parsed = doc::parse(bytes, &target, now).unwrap();
-        assert_eq!(
-            parsed
-                .post
-                .comments
-                .iter()
-                .map(|c| c.seq)
-                .collect::<Vec<_>>(),
-            vec![1, 2]
+            vec![vec!["#1".to_string()], vec!["#2".to_string()]]
         );
         let _ = std::fs::remove_dir_all(&dir);
     }

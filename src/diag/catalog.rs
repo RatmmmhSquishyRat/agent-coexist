@@ -206,6 +206,13 @@ pub(crate) const CATALOG: &[Template] = &[
         fix: r#"find the number of the comment to edit, then rerun --edit with it: agent-coexist lookfor-comment {path_arg} --by={nick}"#,
     },
     Template {
+        id: "E-REPLY-NOTFOUND",
+        command_fix: false,
+        message: r#"no comment in this post has the number {numbers}"#,
+        why: r#"@#n replies to a comment of this same post, whose highest number, counting the comment being written, is #{max}; nothing was written"#,
+        fix: r#"write the number of the comment you meant in this post, or refer to a comment in another post in words, such as "see standup #4", then run the command again"#,
+    },
+    Template {
         id: "E-ENTRY-TITLE-TAKEN",
         command_fix: false,
         message: r#"entry "{title}" already points at {existing}, not {target}"#,
@@ -671,20 +678,6 @@ pub(crate) const FIX_WBODY_COMMENT: &str = r#"only {author}, the comment's autho
 
 /// W-BODY for a profile section whose heading `--section` cannot address.
 pub(crate) const FIX_WBODY_SECTION_NAME: &str = "rename the heading by hand to a valid, distinct section name and add a fenced body beneath it, then run check again";
-
-/// Fix row after a completed post write whose new body replies to a
-/// comment number no comment in this post carries (the `reply-to` row
-/// above says `(not found)`): the comment is already written and only
-/// its author may rewrite it (E-EDIT-AUTHOR), so the recipe edits the
-/// comment this report announced — keeping the reply and naming a
-/// number the post carries — instead of posting a new one. `--edit`
-/// replaces the whole body, so the `-m` marker stands for the comment's
-/// entire body with the reference corrected, not only the reply line.
-/// Composed by
-/// [`super::reply_target_missing_fix`]: `{path_arg}` is §8.3.4-quoted,
-/// `{nick}` / `{seq}` come from the write itself, and an unprintable
-/// operand takes the manual-command fallback.
-pub(crate) const FIX_WREPLYDANGLING_WRITE: &str = r#"if you meant another comment, edit this one so the reply names a number this post carries: agent-coexist post {path_arg} --as={nick} --edit={seq} -m '<the whole body, with the reference corrected>'"#;
 
 /// E-FILE-MISSING when the file's own directory is missing too: list the
 /// nearest existing ancestor (`dir_arg`) instead of a missing directory.

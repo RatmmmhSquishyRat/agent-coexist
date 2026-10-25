@@ -233,6 +233,14 @@ pub enum Commands {
         /// the section body, stored in a code fence
         #[arg(short = 'm', value_name = "content")]
         message: Option<String>,
+        /// read the text from this file instead of -m, keeping its line breaks ('-' reads standard input)
+        #[arg(
+            short = 'F',
+            long = "file",
+            value_name = "path",
+            conflicts_with = "message"
+        )]
+        file: Option<PathBuf>,
         /// delete the whole --section
         #[arg(long)]
         remove: bool,
@@ -246,8 +254,16 @@ pub enum Commands {
         #[arg(long = "as", value_name = "nick")]
         as_nick: String,
         /// the comment body, stored in a code fence
-        #[arg(short = 'm', value_name = "content")]
-        message: String,
+        #[arg(short = 'm', value_name = "content", required_unless_present = "file")]
+        message: Option<String>,
+        /// read the text from this file instead of -m, keeping its line breaks ('-' reads standard input)
+        #[arg(
+            short = 'F',
+            long = "file",
+            value_name = "path",
+            conflicts_with = "message"
+        )]
+        file: Option<PathBuf>,
         /// replace the whole body of your own comment #n (its author must be --as)
         #[arg(long, value_name = "n", value_parser = parse_comment_number)]
         edit: Option<u64>,
@@ -275,6 +291,14 @@ pub enum Commands {
         /// the description (no --target/--entry) or the entry's note (with --target/--entry)
         #[arg(short = 'm', value_name = "content")]
         message: Option<String>,
+        /// read the text from this file instead of -m, keeping its line breaks ('-' reads standard input)
+        #[arg(
+            short = 'F',
+            long = "file",
+            value_name = "path",
+            conflicts_with = "message"
+        )]
+        file: Option<PathBuf>,
         /// the file this entry points to, relative to the brief's directory
         #[arg(long, value_name = "path")]
         target: Option<String>,
@@ -442,8 +466,10 @@ pub fn resolve(command: Commands, ctx: &Ctx) -> Result<Invocation, String> {
             as_nick,
             section,
             message,
+            file,
             remove,
         } => {
+            let message = message_or_file(message, file)?;
             let path = suffixed(path);
             let as_nick = opt_nick(as_nick)?;
             let section = opt_section(section)?;
@@ -481,9 +507,12 @@ pub fn resolve(command: Commands, ctx: &Ctx) -> Result<Invocation, String> {
             path,
             as_nick,
             message,
+            file,
             edit,
         } => {
             let nick = nick_value(as_nick, "--as")?;
+            let message = message_or_file(message, file)?
+                .expect("clap requires -m unless -F is given, and reads -F into the text");
             let body = normalize_message(message)?;
             let path = suffixed(path);
             Ok(Invocation::Base {
@@ -514,12 +543,14 @@ pub fn resolve(command: Commands, ctx: &Ctx) -> Result<Invocation, String> {
             path,
             as_nick,
             message,
+            file,
             target,
             entry,
             regex,
             remove,
             refresh,
         } => {
+            let message = message_or_file(message, file)?;
             let as_nick = opt_nick(as_nick)?;
             let entry = opt_entry(entry)?;
             // Combination checks come before the --regex/--target value
@@ -964,6 +995,52 @@ fn opt_entry(value: Option<String>) -> Result<Option<String>, String> {
 
 /// `-m` normalization (spec §2.1.3): CRLF folded to LF, trailing
 /// whitespace/newlines stripped, must be non-empty afterwards.
+/// The text of `-m <content>`, or of the file `-F <path>` names (`-` reads
+/// standard input). clap makes the two exclusive, so the later checks that
+/// name `-m` apply to either. A file is read here, before any collaboration
+/// file is opened, so one that cannot be read or is not UTF-8 is a usage
+/// error (spec §7.1.7); its line breaks then go through the same
+/// normalization as `-m` text.
+fn message_or_file(
+    message: Option<String>,
+    file: Option<PathBuf>,
+) -> Result<Option<String>, String> {
+    let Some(file) = file else {
+        return Ok(message);
+    };
+    let shown = names::echo_raw(&file.to_string_lossy());
+    let bytes = if file.as_os_str() == "-" {
+        let mut bytes = Vec::new();
+        std::io::Read::read_to_end(&mut std::io::stdin(), &mut bytes)
+            .map_err(|error| format!("-F -: cannot read standard input: {error}"))?;
+        bytes
+    } else {
+        std::fs::read(&file)
+            .map_err(|error| format!("-F {shown}: cannot read the file: {error}"))?
+    };
+    String::from_utf8(bytes)
+        .map(Some)
+        .map_err(|_| format!("-F {shown}: the file is not UTF-8 text"))
+}
+
+/// The `fix` row for a `-m` text that holds `\n` as two characters and no
+/// line break (workspace D-101): a shell passed the escape through
+/// literally, as PowerShell and single-quoted POSIX strings do. The text is
+/// still written, since it may mean the escape, and the report turns `warn`
+/// with this advice. `None` for any other command or text, and for `-F`,
+/// whose file keeps real line breaks.
+pub fn literal_newline_fix(command: &Commands) -> Option<&'static str> {
+    const REWRITE_COMMENT: &str = "the -m text holds \\n as two characters and no line break, so it was written as one line; for line breaks, rewrite that comment from a file: agent-coexist post <PATH> --as <nick> --edit <n> -F <file> (-F - reads standard input)";
+    const RERUN: &str = "the -m text holds \\n as two characters and no line break, so it was written as one line; for line breaks, rerun the same command with -F <file> in place of -m (-F - reads standard input)";
+    let (message, fix) = match command {
+        Commands::Post { message, .. } => (message, REWRITE_COMMENT),
+        Commands::Profile { message, .. } | Commands::Brief { message, .. } => (message, RERUN),
+        _ => return None,
+    };
+    let text = message.as_deref()?;
+    (text.contains("\\n") && !text.contains('\n')).then_some(fix)
+}
+
 fn normalize_message(raw: String) -> Result<String, String> {
     names::normalize_body(&raw).map_err(usage_message)
 }
@@ -1368,7 +1445,7 @@ Exit codes of the business commands (all except guide and help):
   1    first line 'error'; also when a command could not write its report to stdout (a write command may already have changed the file: check it before retrying)
   2    usage error on stderr (possibly multiple lines), nothing on stdout
   3    busy or locked (E-LOCKED, E-INUSE, E-FLOCKED); the report's 'fix' row says what to do next
-  124  wait, wait-post or wait-state reached its --timeout with no qualifying change; no stdout, a 'timed out' line on stderr
+  124  wait, wait-post or wait-state reached its --timeout with no qualifying change; no stdout, a 'timed out' line on stderr saying what the wait saw
   130  wait, wait-post or wait-state cancelled with Ctrl-C; no stdout
 guide, help, --help and --version print information with no ok/warn/error line and exit 0; usage errors still exit 2, and guide exits 1 if it cannot write or flush its page to stdout.
 
@@ -1381,15 +1458,15 @@ Examples and 'fix' commands use POSIX shell quoting (Git Bash on Windows); adjus
 const U_GUIDE: &str = "agent-coexist guide [start|read|write|wait]";
 const U_LIST: &str = "agent-coexist list [DIR] [--type <type>]... [--include <glob>]... [--exclude <glob>]... [--no-ignore]";
 const U_CHECK: &str = "agent-coexist check <PATH>";
-const U_PROFILE: &str =
-    "agent-coexist profile <PATH> [--as <nick>] [--section <name> (-m <content> | --remove)]";
-const U_POST: &str = "agent-coexist post <PATH> --as <nick> -m <content> [--edit <n>]";
+const U_PROFILE: &str = "agent-coexist profile <PATH> [--as <nick>] [--section <name> (-m <content> | -F <path> | --remove)]";
+const U_POST: &str =
+    "agent-coexist post <PATH> --as <nick> (-m <content> | -F <path>) [--edit <n>]";
 const U_SUBSCRIBE: &str = "agent-coexist subscribe <PATH> --as <nick> [--cancel]";
 const U_BRIEF: &str = "\
 agent-coexist brief <PATH> [--as <nick>]
-   or: agent-coexist brief <PATH> [--as <nick>] -m <description>
-   or: agent-coexist brief <PATH> [--as <nick>] --target <path> [--entry <title>] [--regex <pattern>] [-m <note>]
-   or: agent-coexist brief <PATH> [--as <nick>] --entry <title> -m <note>
+   or: agent-coexist brief <PATH> [--as <nick>] (-m <description> | -F <path>)
+   or: agent-coexist brief <PATH> [--as <nick>] --target <path> [--entry <title>] [--regex <pattern>] [-m <note> | -F <path>]
+   or: agent-coexist brief <PATH> [--as <nick>] --entry <title> (-m <note> | -F <path>)
    or: agent-coexist brief <PATH> [--as <nick>] --entry <title> --remove
    or: agent-coexist brief <PATH> [--as <nick>] [--entry <title>] --refresh";
 const U_STATE: &str = "\
@@ -1631,6 +1708,7 @@ mod tests {
             path: PathBuf::from("plan"),
             as_nick: None,
             message: None,
+            file: None,
             target,
             entry: None,
             regex,
@@ -1713,6 +1791,7 @@ mod tests {
             path: PathBuf::from("plan"),
             as_nick: None,
             message: None,
+            file: None,
             target: Some("new.txt".into()),
             entry: Some("item".into()),
             regex: None,
@@ -1732,6 +1811,7 @@ mod tests {
             path: PathBuf::from("plan"),
             as_nick: None,
             message: None,
+            file: None,
             target: None,
             entry: Some("item".into()),
             regex: None,
@@ -1771,7 +1851,7 @@ mod tests {
             Ok(Cli {
                 command: TopCommand::Business(Commands::Post { message, path, .. }),
             }) => {
-                assert_eq!(message, "- item");
+                assert_eq!(message.as_deref(), Some("- item"));
                 assert_eq!(path, PathBuf::from("standup"));
             }
             other => panic!("attached form must parse as the -m value, got {other:?}"),

@@ -96,6 +96,7 @@ fn main() -> ExitCode {
         Err(fault) => return usage_stderr(&args::usage_message(fault)),
     };
 
+    let newline_fix = args::literal_newline_fix(&command);
     match args::resolve(command, &ctx) {
         Ok(args::Invocation::Base {
             command,
@@ -106,7 +107,15 @@ fn main() -> ExitCode {
             let result = ops::run(&mut ctx, request);
             progress.finish();
             match result {
-                Ok(report) => emit(&report, &dctx),
+                Ok(mut report) => {
+                    if let Some(fix) = newline_fix
+                        && report.status != Status::Error
+                    {
+                        report.warn();
+                        report.kv("fix", vec![fix.to_string()]);
+                    }
+                    emit(&report, &dctx)
+                }
                 Err(Fault::Usage(msg)) => usage_stderr(&msg),
                 Err(Fault::Io {
                     action,
@@ -134,7 +143,7 @@ fn main() -> ExitCode {
                 Err(Fault::Cancelled) => {
                     emit(&wait_ending_report(command, &object, "cancelled"), &dctx)
                 }
-                Err(Fault::TimedOut) => {
+                Err(Fault::TimedOut(_)) => {
                     emit(&wait_ending_report(command, &object, "timed out"), &dctx)
                 }
                 Err(Fault::Reason { id, params }) => {
@@ -199,15 +208,17 @@ fn main() -> ExitCode {
                 Err(Fault::Cancelled) => ExitCode::from(130),
                 // Like cancellation, a timeout is neither a change hit nor a
                 // failure report, so stdout stays empty. One notice on stderr
-                // mirrors the ready line and echoes --timeout as given, so a
-                // reader — an agent in particular — sees why the wait ended
-                // without having to know what exit 124 means.
-                Err(Fault::TimedOut) => {
+                // mirrors the ready line, echoes --timeout as given and says
+                // what the wait saw, so a reader — an agent in particular —
+                // sees why the wait ended and whether the file moved without
+                // having to know what exit 124 means.
+                Err(Fault::TimedOut(seen)) => {
                     let given = timeout.as_ref().map_or("", |t| t.given.as_str());
                     let _ = writeln!(
                         std::io::stderr(),
-                        "timed out  {command}  {}  after {given}",
-                        render::column(&object)
+                        "timed out  {command}  {}  after {given}  {}",
+                        render::column(&object),
+                        seen_notice(&seen)
                     );
                     ExitCode::from(124)
                 }
@@ -628,6 +639,21 @@ fn diagnostics_report(command: &'static str, object: &str, diagnostics: Vec<Diag
     report
 }
 
+/// The end of the timeout notice: `no change`, or how many changes did not
+/// qualify and, for a post, its latest comment
+/// (`2 changes, none qualifying  latest #9 bob`).
+fn seen_notice(seen: &wait::Seen) -> String {
+    if seen.changes == 0 {
+        return "no change".to_string();
+    }
+    let plural = if seen.changes == 1 { "" } else { "s" };
+    let mut text = format!("{} change{plural}, none qualifying", seen.changes);
+    if let Some((seq, nick)) = &seen.latest {
+        text.push_str(&format!("  latest #{seq} {nick}"));
+    }
+    text
+}
+
 /// Internal-error report for a wait-only ending (`Fault::Cancelled` or
 /// `Fault::TimedOut`) reaching a base command, which installs neither a
 /// cancellation source nor a deadline: nothing fake is written to stdout
@@ -643,6 +669,24 @@ fn wait_ending_report(command: &'static str, object: &str, reason: &str) -> Repo
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The end of the 124 notice: `no change`, or a count of changes that did
+    /// not qualify, with the latest comment of a post when there is one.
+    #[test]
+    fn timeout_notice_says_what_the_wait_saw() {
+        let notice = |changes, latest: Option<(u64, &str)>| {
+            seen_notice(&wait::Seen {
+                changes,
+                latest: latest.map(|(seq, nick)| (seq, nick.to_string())),
+            })
+        };
+        assert_eq!(notice(0, None), "no change");
+        assert_eq!(notice(1, None), "1 change, none qualifying");
+        assert_eq!(
+            notice(2, Some((9, "bob"))),
+            "2 changes, none qualifying  latest #9 bob"
+        );
+    }
     #[cfg(windows)]
     use std::ffi::OsStr;
     #[cfg(windows)]

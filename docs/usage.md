@@ -98,7 +98,7 @@ All business commands emit a line-oriented report to stdout (LF line endings). T
 | `1` | Business or information stdout write/flush failure | Output stream broken. Inspect files before retrying writes. |
 | `2` | Usage error | Command line syntax or argument validation failure; output on stderr. |
 | `3` | `E-LOCKED`, `E-INUSE`, `E-FLOCKED` | Concurrency or functional lock refusal. Follow `fix` advice. |
-| `124`| Wait timed out | `--timeout` reached with no qualifying change; no stdout, one `timed out` line on stderr. Read the file again before deciding to wait once more. |
+| `124`| Wait timed out | `--timeout` reached with no qualifying change; no stdout, one `timed out` line on stderr that ends with what the wait saw (`no change`, or `N changes, none qualifying` with a post's latest comment). Read the file again before deciding to wait once more. |
 | `130`| Wait cancelled | Interrupted by Ctrl-C; no stdout. |
 
 `warn` is exit 0. Scripts checking for conflicts must inspect the first line status (`ok` vs `warn`). Write operations commit file contents before printing reports; if stdout write fails with exit 1, the change may already exist on disk. Check with `check` before retrying. All business and information commands check both the stdout write and the final flush, and exit 1 if either fails; usage errors remain exit 2 even if their stderr destination fails. A successful write and flush mean the operating system accepted the output, not that a downstream reader processed it.
@@ -119,9 +119,10 @@ Posts provide sequential discussions with numbered comments (and optional editin
 ### Comments, mentions, and replies
 
 - `post <PATH> --as <nick> -m <content>` appends a new comment with sequence number `max(existing seq) + 1` (starting at `#1` in a new post). Comment numbers are persistent identifiers, not array positions; missing numbers produce non-blocking warnings, and the CLI never renumbers comments.
-- Mentions (`@nick`) and replies (`@#n`) are parsed from comment bodies.
+- Mentions (`@nick`) and replies (`@#n`) are parsed from comment bodies, outside inline code, fenced blocks and `>` quote lines. `@#n` names a comment of the same post; there is no cross-post reply, so name another post's comment in words ("see standup #4").
+- `-F <path>` (`--file`) reads the body from a file instead of `-m`, keeping its line breaks; `-F -` reads standard input. It is accepted wherever `-m` is (`post`, `profile`, `brief`) and cannot be combined with it. A `-m` text that holds `\n` as two characters and no line break is still written, but the report is `warn` with a `fix` naming `-F`.
 - Output rows: `comment #<n> L<line> [edited]`, followed by `mentions <list>` and `reply-to #<m>` rows in first-occurrence order.
-- Dangling replies: if `@#m` refers to a nonexistent comment, the report emits `reply-to #<m> (not found)` and marks the first line `warn`. The comment is still written. The `fix` provides a copyable `post --edit` command.
+- Dangling replies: if `@#m` names no comment of the post (counting the one being written), nothing is written and `post` reports `E-REPLY-NOTFOUND` (exit 1). A hand edit or deletion can still leave a dangling reply in a file; `check` reports it as `W-REPLY-DANGLING`.
 - `check` lists all comment authors in first-occurrence order.
 - `post <PATH> --as <nick> -m <content> --edit <n>`: replaces the entire body of comment `#n` (where `<n>` is its recorded sequence number). Comment `#n` author must match `--as` (`E-EDIT-AUTHOR`, exit 1). It never creates files.
 - `subscribe <PATH> --as <nick>`: adds `--as` to subscribers. Does not push notifications; read-notification uses the list. Subscribing twice reports `unchanged <nick>`.

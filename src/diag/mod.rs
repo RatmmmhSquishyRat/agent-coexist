@@ -759,20 +759,6 @@ fn command_fix(
     }
 }
 
-/// The `fix` row for a completed post write whose new body replied to a
-/// comment number that no comment in this post carries: the comment is
-/// already written and only its author may rewrite it, so the recipe
-/// edits the comment the report just announced, keeping the reply.
-/// `{path_arg}` is §8.3.4-quoted; an operand that cannot be printed
-/// takes the manual-command fallback ([`catalog::FIX_MANUAL_COMMAND`]).
-pub fn reply_target_missing_fix(ctx: &Context, nick: &str, seq: u64) -> String {
-    let params = [
-        ("nick", OsString::from(nick)),
-        ("seq", OsString::from(seq.to_string())),
-    ];
-    finish_fix(catalog::FIX_WREPLYDANGLING_WRITE, &params, ctx, true)
-}
-
 fn get<'a>(params: &'a [(&'static str, OsString)], key: &str) -> Option<&'a OsStr> {
     params
         .iter()

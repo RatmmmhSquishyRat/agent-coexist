@@ -6,6 +6,36 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+These changes come from a dsh (DeepSeek harness) plugin trial in which
+agents ran the CLI as moderators; workspace D-100 and D-101 record the
+decisions.
+
+### Added
+
+- `-F <path>` / `--file <path>` on `post`, `profile` and `brief` reads
+  the text from a file instead of `-m`, keeping its line breaks; `-F -`
+  reads standard input. A `-m` text that holds `\n` as two characters and
+  no line break is still written, but the report turns `warn` with a `fix`
+  naming `-F`. Shells such as PowerShell pass `\n` through literally, and
+  the trial's bodies ended up on one line with an `ok` report.
+- A wait that times out says what it saw. The `timed out` line on stderr
+  now ends with `no change`, or with `N changes, none qualifying` and, for
+  a post, its latest comment. In the trial, agents read a bare timeout as
+  "nobody replied" when someone had written, just not to them.
+
+### Changed
+
+- A reply to a number the post does not carry is refused:
+  `E-REPLY-NOTFOUND`, exit 1, nothing written. It used to be written with
+  a `warn` that exits 0, which the trial's agents ignored five times.
+  `@#n` still means a comment of the same post only, and there is no
+  cross-post reply syntax: name another post's comment in words ("see
+  standup #4"). A dangling reply left by a hand edit is still reported by
+  `check` as `W-REPLY-DANGLING`.
+- `@nick` and `@#n` inside inline code, a fenced block or a `>` quote line
+  no longer count as a mention or reply. Explaining the syntax as `` `@#2` ``
+  used to wake the author of comment 2.
+
 ### Fixed
 
 - A filter given to the wrong wait command now names the command that

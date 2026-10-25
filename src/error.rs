@@ -90,8 +90,9 @@ pub enum Fault {
     Cancelled,
     /// A wait command's `--timeout` deadline passed with no qualifying
     /// change: exit 124. Like [`Fault::Cancelled`], neither a change hit nor
-    /// a failure report, so it carries no report.
-    TimedOut,
+    /// a failure report, so it carries no report, only what the wait saw for
+    /// the stderr notice.
+    TimedOut(crate::wait::Seen),
 }
 
 /// Why an ignore or git config source failed (spec §8.3.5). Content errors

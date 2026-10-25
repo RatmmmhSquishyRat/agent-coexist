@@ -16,7 +16,7 @@ use std::time::{Duration, Instant};
 
 use agent_coexist::error::Fault;
 use agent_coexist::report::{Report, Row, Status};
-use agent_coexist::wait::{Cancellation, Filter, WAIT_POLL_MS, run};
+use agent_coexist::wait::{Cancellation, Filter, Seen, WAIT_POLL_MS, run};
 
 /// Long enough for at least one full poll cycle to observe (or not observe)
 /// a change; derived from the poll interval, not an arbitrary sleep.
@@ -131,7 +131,7 @@ fn fault_summary(fault: &Fault) -> String {
         }
         Fault::Source { path, cause, .. } => format!("source {}: {}", path.display(), cause),
         Fault::Cancelled => "cancelled".to_string(),
-        Fault::TimedOut => "timed out".to_string(),
+        Fault::TimedOut(_) => "timed out".to_string(),
     }
 }
 
@@ -1189,7 +1189,14 @@ fn timeout_ends_an_unchanged_wait_close_to_the_deadline() {
         });
     let elapsed = started.elapsed();
     match result {
-        Err(Fault::TimedOut) => {}
+        // Nothing moved, so the notice can say so and names no comment.
+        Err(Fault::TimedOut(seen)) => assert_eq!(
+            seen,
+            Seen {
+                changes: 0,
+                latest: None
+            }
+        ),
         Err(fault) => panic!("expected timed out, got {}", fault_summary(&fault)),
         Ok(report) => panic!("expected timed out, got a hit:\n{}", row_text(&report)),
     }
@@ -1241,7 +1248,16 @@ fn timeout_after_an_unqualified_change_still_times_out() {
         Some(&unrelated),
     );
     match result {
-        Err(Fault::TimedOut) => {}
+        // The change is counted and the post's highest comment named — its
+        // watermark, #2 by bob here, not necessarily the comment that
+        // changed — so the reader learns the file moved, just not for alice.
+        Err(Fault::TimedOut(seen)) => assert_eq!(
+            seen,
+            Seen {
+                changes: 1,
+                latest: Some((2, "bob".to_string()))
+            }
+        ),
         Err(fault) => panic!("expected timed out, got {}", fault_summary(&fault)),
         Ok(report) => panic!(
             "a change not concerning alice must not end the wait:\n{}",
@@ -1282,7 +1298,8 @@ fn cli_timeout_exits_124_with_empty_stdout_and_a_notice() {
             "{args:?}: the ready line must still precede the notice:\n{stderr}"
         );
         assert!(
-            stderr.contains(&format!("timed out  {command}")) && stderr.contains("after 1s"),
+            stderr.contains(&format!("timed out  {command}"))
+                && stderr.contains("after 1s  no change"),
             "{args:?}: expected the timed-out notice echoing --timeout:\n{stderr}"
         );
     }

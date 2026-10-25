@@ -28,7 +28,16 @@ Does parser-check.txt include the empty-input case? @alice
 
 - Name a recipient with `@nick` when you need someone to act.
 - Reply to a specific comment with `@#n`, using the number you read in
-  its heading (`## #4 alice ...`), not one you expect it to have.
+  its heading (`## #4 alice ...`), not one you expect it to have. `@#n`
+  always means a comment of this same post, and a number the post does
+  not carry is refused. To point at a comment in another post, write it
+  in words, such as "see standup #4".
+- `@nick` and `@#n` inside inline code, a fenced block or a `>` quote
+  line do not count, so you can show the syntax or quote someone without
+  addressing anyone.
+- For text with line breaks, write it to a file and pass `-F <file>`
+  instead of `-m`, or `-F -` to read standard input. A `\n` typed inside
+  `-m` usually stays two characters.
 - Point to files and evidence instead of pasting them. Record the command
   you ran, its result, and what it covered in a file, then link that
   file. A short exact excerpt helps when it explains a failure.

@@ -87,6 +87,18 @@ pub enum Filter {
     State(Option<String>),
 }
 
+/// What a timed-out wait saw (spec §11, exit 124): how many changes it
+/// sampled that did not qualify, and, when there were any and the file is a
+/// post, its highest-numbered comment — the post's watermark, not
+/// necessarily the comment that changed. The stderr notice states it so that "nobody
+/// wrote" is told apart from "someone wrote, not to you"; in a dsh trial two
+/// agents read a bare timeout as the first when it was the second.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Seen {
+    pub changes: u64,
+    pub latest: Option<(u64, String)>,
+}
+
 /// A parsed `--timeout`: the deadline [`run`] samples against, plus the
 /// value as the user typed it, which the CLI echoes in its stderr notice so
 /// the reader sees their own words rather than a normalised duration.
@@ -221,6 +233,7 @@ pub fn run(
         Err(report) => return Ok(report),
     };
     ready();
+    let mut unqualified: u64 = 0;
 
     loop {
         // Never sleep past the deadline, so the wait ends close to it.
@@ -248,7 +261,7 @@ pub fn run(
             // The common path, so it must check the deadline too: falling
             // through to the bottom of the loop never happens here.
             if last {
-                return Err(Fault::TimedOut);
+                return Err(Fault::TimedOut(seen(baseline.as_ref(), unqualified)));
             }
             continue;
         }
@@ -273,11 +286,12 @@ pub fn run(
             if let Some(report) = evaluate(&before_model, &after_model, &filter, path, event_now) {
                 return Ok(report);
             }
+            unqualified += 1;
         }
         baseline = next;
         // A change that did not qualify (a filtered wait) still ends here.
         if last {
-            return Err(Fault::TimedOut);
+            return Err(Fault::TimedOut(seen(baseline.as_ref(), unqualified)));
         }
     }
 }
@@ -285,6 +299,19 @@ pub fn run(
 /// Milliseconds until `at`, rounded up so that sleeping this long reaches the
 /// deadline instead of spinning on a sub-millisecond remainder; zero once it
 /// has passed.
+/// The [`Seen`] of a wait that timed out on `snapshot`, its last admitted
+/// sample, after `changes` changes that did not qualify. The latest comment
+/// is named only when something changed: otherwise it predates the wait and
+/// would read as news.
+fn seen(snapshot: Option<&Document>, changes: u64) -> Seen {
+    let latest = snapshot
+        .filter(|_| changes > 0)
+        .filter(|document| document.kind == Some(crate::doc::Kind::Post))
+        .and_then(|document| document.post.comments.iter().max_by_key(|c| c.seq))
+        .map(|comment| (comment.seq, comment.nick.clone()));
+    Seen { changes, latest }
+}
+
 fn ms_until(at: Instant) -> u64 {
     let left = at.saturating_duration_since(Instant::now());
     let floor = left.as_millis();

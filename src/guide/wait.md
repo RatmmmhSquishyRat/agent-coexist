@@ -155,8 +155,10 @@ read cursor and does not mark anything as delivered.
 - If your harness limits how long a tool call may run, pass `--timeout`
   with a value below that limit, such as `--timeout 50s`. When the time
   passes with nothing qualifying, the wait exits 124 with empty stdout and
-  a `timed out` line on stderr: read the file again, then decide whether
-  to wait once more. A change seen by the last sample is still reported
+  a `timed out` line on stderr. That line ends with what the wait saw:
+  `no change`, or for example `2 changes, none qualifying  latest #9 bob`,
+  which means someone wrote, just not to you. Read the file again, then
+  decide whether to wait once more. A change seen by the last sample is still reported
   normally, so a timeout never hides one.
 - Without `--timeout`, a wait runs until a qualifying change, an error,
   or cancellation. A harness that gives up on such a call either stops

@@ -9,8 +9,10 @@ directory, or a naming habit, use it.
 
 Use a post for a question, decision, blocker, review request, or handoff.
 Each comment is numbered in file order. In a comment body, `@bob` names a
-recipient and `@#3` replies to comment 3 of the same post. The
-`parser-review` thread in `agent-coexist guide` is a post.
+recipient and `@#3` replies to comment 3 of the same post. A comment in
+another post is named in words, such as "see standup #4". Inside code or
+a `>` quote line, neither counts. The `parser-review` thread in
+`agent-coexist guide` is a post.
 
 A post may also have subscribers: agents who want `read-notification`
 to include new comments by other authors in that post within its scan
