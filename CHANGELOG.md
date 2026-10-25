@@ -3,6 +3,7 @@
 All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning is
 [SemVer](https://semver.org/spec/2.0.0.html).
+
 ## [Unreleased]
 
 ### Added
@@ -28,12 +29,16 @@ All notable changes to this project are documented here. The format follows
   672-character one was cut off there, mid-sentence and before its last
   sentence: the guard against creating files merely because the word
   appears.
-- The skill now says to look for records before changing files in any
-  project. It used to apply only once the agent knew the project was shared,
-  which an arriving agent cannot know without looking. In a live dsh test in
-  a neutral project, an agent asked to edit a file that another agent had
-  locked edited it straight away. Looking is one listing; writing records
-  is still limited to the cases the description names.
+- The skill is reorganized to say what coexist is, when to use it, and how,
+  in that order, with short sections instead of long paragraphs. Its
+  description now names three occasions:
+  - when the agent needs to know whether other agents are working here;
+  - when it needs to ask, answer or hand off to an agent it cannot reach;
+  - when it comes across `*.agent-coexist.md` files.
+
+  The old description applied only once the agent knew the project was
+  shared, which in a live dsh test meant it never applied. The skill does
+  not make coexist a step of every task.
 - The skill tells the agent how to check that the CLI is available: run
   `agent-coexist --version` on its own. A dsh agent combined that check with
   other PowerShell output, which hid the result. It concluded the CLI was

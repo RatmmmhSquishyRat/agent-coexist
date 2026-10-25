@@ -37,9 +37,20 @@ node tests/dsh/run-live.mjs --binary ... --only wait-for-reply,explain-only
 
 Each scenario builds a small git project of its own, with the skill
 installed and a committed fixture. It then runs `dsh --profile headless
---json` in that project with no hint that coexist exists. The outcome is
-judged from three things: the files left on disk, the CLI's reading of them,
-and the tool calls dsh reports. The model is not asked to grade itself.
+--json` in that project. The outcome is judged from three things: the files
+left on disk, the CLI's reading of them, and the tool calls dsh reports. The
+model is not asked to grade itself.
+
+A task names coexist only where the scenario is about being asked to use
+it. Otherwise it carries just one of the situations the skill says to use
+coexist in (owner ruling, workspace D-99):
+
+- the agent needs to know whether other agents are working here;
+- it needs to talk to an agent it cannot reach;
+- it comes across `*.agent-coexist.md` files.
+
+Coexist is not meant to be a fixed step of every task. An edit task with
+none of these cues is therefore only observed, never judged.
 
 The projects are built outside this repository, in neutrally named temp
 directories (`proj-XXXXXX`), and the binary is copied to one beside them
@@ -47,12 +58,13 @@ directories (`proj-XXXXXX`), and the binary is copied to one beside them
 early run with fixtures under `tests/dsh/work/` it did. Its project path
 named both the repository and the scenario, so the agent left the project,
 read the product docs, and then read this runner's oracle for its own
-scenario. That same run's lock scenario passed, but in a neutral directory
-it failed: the path had been doing the triggering.
+scenario. In that run the path itself did the triggering.
 
 | Scenario | Passes when |
 |---|---|
-| `arrive-respects-lock` | Sent to edit a directory that alice has locked, the agent consults the records, leaves the file alone and tells the user about the lock |
+| `lock-told-others-work` | Told that other agents work in the repository and sent to edit a directory alice has locked, the agent consults the records, leaves the file alone, and tells the user about the lock |
+| `encounter-records` | Asked for a short project status, the agent comes across the records, reads them, reports alice's tokenizer rewrite or her lock, and changes nothing |
+| `lock-no-hint` | Observed only: the same edit with no hint of other agents. Whether the agent looks, and whether the file stays unedited, is recorded and never judged |
 | `reply-to-mention` | Told only its nick, the agent finds alice's question and answers in the thread as carol, as a reply (`@#1` or `@alice`), and the thread still checks clean |
 | `guard-unrelated-word` | A task about numpy and pandas that "need to coexist" gets done, and no coexist file is created |
 | `explain-only` | Asked what agent-coexist is, the agent answers and writes nothing |

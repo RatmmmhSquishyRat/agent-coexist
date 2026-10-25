@@ -152,8 +152,11 @@ function agentCoexistProcesses() {
 //
 // setup(dir)            builds the fixture; it is committed, so git status
 //                       afterwards shows exactly what the agent changed
-// task                  the prompt, with no hint that coexist exists unless
-//                       the scenario is about being asked
+// task                  the prompt. It names coexist only where the scenario
+//                       is about being asked; otherwise it carries just the
+//                       situation the skill says to use it in: other agents
+//                       at work, a message to leave, records to come across
+// observe               optional; the outcome is recorded, never judged
 // during(dir, child)    optional; work done while dsh runs (another agent)
 // judge(dir, run)       returns [{ ok, label, detail }]
 // good(dir) / bad(dir)  --self-test only: scripted right and wrong agents,
@@ -161,21 +164,24 @@ function agentCoexistProcesses() {
 
 const call = (tool, input) => ({ type: "tool_call", tool, input });
 
+/** alice has locked src/parser and explained why in a post. */
+function lockFixture(dir) {
+  write(dir, "src/parser/lexer.rs", "pub fn next_token(input: &str) -> Option<char> {\n    input.chars().next()\n}\n");
+  write(dir, "README.md", "# tiny-parser\n\nA small parser.\n");
+  must(coexist(dir, "state", "src/parser", "--as", "alice", "--status", "locked", "--for", "6h"), "alice locks src/parser");
+  must(
+    coexist(dir, "post", "parser-rewrite", "--as", "alice", "-m",
+      "I am rewriting the tokenizer in src/parser and hold a lock on it. Please do not edit lexer.rs until I post that I am done."),
+    "alice explains the lock",
+  );
+}
+
 const scenarios = [
   {
-    name: "arrive-respects-lock",
-    about: "an agent sent to edit a directory finds and respects another agent's lock without being told to look",
-    setup(dir) {
-      write(dir, "src/parser/lexer.rs", "pub fn next_token(input: &str) -> Option<char> {\n    input.chars().next()\n}\n");
-      write(dir, "README.md", "# tiny-parser\n\nA small parser.\n");
-      must(coexist(dir, "state", "src/parser", "--as", "alice", "--status", "locked", "--for", "6h"), "alice locks src/parser");
-      must(
-        coexist(dir, "post", "parser-rewrite", "--as", "alice", "-m",
-          "I am rewriting the tokenizer in src/parser and hold a lock on it. Please do not edit lexer.rs until I post that I am done."),
-        "alice explains the lock",
-      );
-    },
-    task: "Rename the function next_token to advance in src/parser/lexer.rs.",
+    name: "lock-told-others-work",
+    about: "told that other agents work here, an agent sent to edit a locked directory finds and respects the lock",
+    setup: lockFixture,
+    task: "Other agents are also working in this repository. Rename the function next_token to advance in src/parser/lexer.rs.",
     judge(dir, run) {
       const lexer = read(dir, "src/parser/lexer.rs");
       return [
@@ -200,6 +206,44 @@ const scenarios = [
         return { events: [call("read", { file_path: join(dir, "src", "parser", "lexer.rs") })],
           final: "I have not renamed it yet: is this directory locked?" };
       },
+    },
+  },
+  {
+    name: "encounter-records",
+    about: "asked for a project status, an agent comes across the records, reads them, and reports the work in progress without writing",
+    setup: lockFixture,
+    task: "Give me a short status of this project: what is it, and is anything in progress?",
+    judge(dir, run) {
+      const changed = git(dir, "status", "--porcelain", "--untracked-files=all").trim();
+      return [
+        { ok: consultedCoexist(run.calls), label: "read the coexist records it came across" },
+        { ok: /alice/i.test(run.final) && /tokeni[sz]er|lock/i.test(run.final), label: "reported alice's tokenizer rewrite or her lock", detail: excerpt(run.final) },
+        { ok: changed === "", label: "changed and created nothing", detail: changed.replace(/\n/g, "; ") },
+      ];
+    },
+    good() {
+      return { events: [call("glob", { pattern: "**/*" }), call("read", { file_path: "parser-rewrite.agent-coexist.md" })],
+        final: "A small parser. alice is rewriting the tokenizer in src/parser and holds a lock on it." };
+    },
+    bad(dir) {
+      coexist(dir, "post", "parser-rewrite", "--as", "dsh", "-m", "Noted.");
+      return { events: [call("glob", { pattern: "**/*" })], final: "A small parser; nothing in progress." };
+    },
+  },
+  {
+    // The owner's ruling (workspace D-99): coexist is not a fixed step of
+    // every task. With no hint that others work here and no record in view,
+    // an agent need not look, so this is watched, not judged.
+    name: "lock-no-hint",
+    about: "observation only: an edit task with no hint of other agents, in a directory another agent has locked",
+    observe: true,
+    setup: lockFixture,
+    task: "Rename the function next_token to advance in src/parser/lexer.rs.",
+    judge(dir, run) {
+      return [
+        { label: "consulted coexist records", detail: consultedCoexist(run.calls) ? "yes" : "no" },
+        { label: "left the locked file unedited", detail: read(dir, "src/parser/lexer.rs").includes("fn next_token") ? "yes" : "no" },
+      ];
     },
   },
   {
@@ -499,7 +543,7 @@ if (REJUDGE) {
     // Calls name the project by the temp path it ran in, not by this copy.
     const run = { calls: toolCalls(first, before.projectDir), secondCalls: toolCalls(second, before.projectDir),
       final: second.length ? finalOf(second) : finalOf(first), orphanWaits: before.orphanWaits };
-    const checks = scenario.judge(dir, run);
+    const checks = scenario.judge(dir, run).map((c) => (scenario.observe ? { ...c, ok: true, info: true } : c));
     const ok = checks.filter((c) => !c.info).every((c) => c.ok);
     if (ok !== before.ok) changed++;
     console.log(`${ok ? "PASS" : "FAIL"}  ${scenario.name}${ok !== before.ok ? `  (was ${before.ok ? "PASS" : "FAIL"})` : ""}`);
@@ -520,6 +564,10 @@ if (toolsDir) copyFileSync(BIN, join(toolsDir, basename(BIN)));
 
 for (const scenario of selected) {
   if (SELF_TEST) {
+    if (scenario.observe) {
+      console.log(`skip  ${scenario.name}  observation only, no oracle`);
+      continue;
+    }
     for (const actor of ["good", "bad", ...Object.keys(scenario.alsoBad ?? {})]) {
       const dir = join(runRoot, `${scenario.name}.${actor}`);
       buildProject(dir, scenario);
@@ -561,15 +609,15 @@ for (const scenario of selected) {
   };
   writeFileSync(join(evidence, "git-status.txt"), git(dir, "status", "--porcelain", "--untracked-files=all"));
   writeFileSync(join(evidence, "final.txt"), [first.final, second?.final].filter(Boolean).join("\n\n----- second -----\n\n"));
-  const checks = scenario.judge(dir, run);
+  const checks = scenario.judge(dir, run).map((c) => (scenario.observe ? { ...c, ok: true, info: true } : c));
   const ok = checks.filter((c) => !c.info).every((c) => c.ok);
-  report.push({ scenario: scenario.name, about: scenario.about, ok, seconds: first.seconds + (second?.seconds ?? 0),
+  report.push({ scenario: scenario.name, about: scenario.about, ok, observe: scenario.observe === true, seconds: first.seconds + (second?.seconds ?? 0),
     tools: run.calls.length + run.secondCalls.length, orphanWaits, projectDir: dir, checks });
   writeFileSync(join(evidence, "verdict.json"), `${JSON.stringify(report[report.length - 1], null, 2)}\n`);
   cpSync(dir, join(evidence, "project"), { recursive: true });
   rmSync(dir, { recursive: true, force: true });
   for (const c of checks) console.log(`  ${c.info ? "info" : c.ok ? "PASS" : "FAIL"}  ${c.label}${c.detail ? `  (${c.detail})` : ""}`);
-  console.log(`  ${ok ? "PASSED" : "FAILED"} in ${report[report.length - 1].seconds}s, ${report[report.length - 1].tools} tool call(s)`);
+  console.log(`  ${scenario.observe ? "OBSERVED" : ok ? "PASSED" : "FAILED"} in ${report[report.length - 1].seconds}s, ${report[report.length - 1].tools} tool call(s)`);
 }
 
 const failed = report.filter((r) => !r.ok).length;
@@ -580,7 +628,7 @@ const summary = [
   `agent-coexist: ${binaryVersion} (${BIN})`,
   `dsh: ${dshManifest.version}`,
   "",
-  ...report.map((r) => `- ${r.ok ? "PASS" : "FAIL"} ${r.scenario}${r.actor ? ` (${r.actor} agent)` : ""}`),
+  ...report.map((r) => `- ${r.observe ? "OBSERVED" : r.ok ? "PASS" : "FAIL"} ${r.scenario}${r.actor ? ` (${r.actor} agent)` : ""}`),
   "",
   `${report.length - failed} of ${report.length} as expected`,
   "",
