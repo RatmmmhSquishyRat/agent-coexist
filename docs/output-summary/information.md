@@ -221,8 +221,10 @@ directory, or a naming habit, use it.
 
 Use a post for a question, decision, blocker, review request, or handoff.
 Each comment is numbered in file order. In a comment body, `@bob` names a
-recipient and `@#3` replies to comment 3 of the same post. The
-`parser-review` thread in `agent-coexist guide` is a post.
+recipient and `@#3` replies to comment 3 of the same post. A comment in
+another post is named in words, such as "see standup #4". Inside code or
+a `>` quote line, neither counts. The `parser-review` thread in
+`agent-coexist guide` is a post.
 
 A post may also have subscribers: agents who want `read-notification`
 to include new comments by other authors in that post within its scan
@@ -471,7 +473,16 @@ Does parser-check.txt include the empty-input case? @alice
 
 - Name a recipient with `@nick` when you need someone to act.
 - Reply to a specific comment with `@#n`, using the number you read in
-  its heading (`## #4 alice ...`), not one you expect it to have.
+  its heading (`## #4 alice ...`), not one you expect it to have. `@#n`
+  always means a comment of this same post, and a number the post does
+  not carry is refused. To point at a comment in another post, write it
+  in words, such as "see standup #4".
+- `@nick` and `@#n` inside inline code, a fenced block or a `>` quote
+  line do not count, so you can show the syntax or quote someone without
+  addressing anyone.
+- For text with line breaks, write it to a file and pass `-F <file>`
+  instead of `-m`, or `-F -` to read standard input. A `\n` typed inside
+  `-m` usually stays two characters.
 - Point to files and evidence instead of pasting them. Record the command
   you ran, its result, and what it covered in a file, then link that
   file. A short exact excerpt helps when it explains a failure.
@@ -809,8 +820,10 @@ read cursor and does not mark anything as delivered.
 - If your harness limits how long a tool call may run, pass `--timeout`
   with a value below that limit, such as `--timeout 50s`. When the time
   passes with nothing qualifying, the wait exits 124 with empty stdout and
-  a `timed out` line on stderr: read the file again, then decide whether
-  to wait once more. A change seen by the last sample is still reported
+  a `timed out` line on stderr. That line ends with what the wait saw:
+  `no change`, or for example `2 changes, none qualifying  latest #9 bob`,
+  which means someone wrote, just not to you. Read the file again, then
+  decide whether to wait once more. A change seen by the last sample is still reported
   normally, so a timeout never hides one.
 - Without `--timeout`, a wait runs until a qualifying change, an error,
   or cancellation. A harness that gives up on such a call either stops
@@ -904,7 +917,7 @@ Exit codes of the business commands (all except guide and help):
   1    first line 'error'; also when a command could not write its report to stdout (a write command may already have changed the file: check it before retrying)
   2    usage error on stderr (possibly multiple lines), nothing on stdout
   3    busy or locked (E-LOCKED, E-INUSE, E-FLOCKED); the report's 'fix' row says what to do next
-  124  wait, wait-post or wait-state reached its --timeout with no qualifying change; no stdout, a 'timed out' line on stderr
+  124  wait, wait-post or wait-state reached its --timeout with no qualifying change; no stdout, a 'timed out' line on stderr saying what the wait saw
   130  wait, wait-post or wait-state cancelled with Ctrl-C; no stdout
 guide, help, --help and --version print information with no ok/warn/error line and exit 0; usage errors still exit 2, and guide exits 1 if it cannot write or flush its page to stdout.
 
@@ -920,16 +933,17 @@ Examples and 'fix' commands use POSIX shell quoting (Git Bash on Windows); adjus
 ```text
 Append a comment, or edit your own
 
-Usage: agent-coexist post <PATH> --as <nick> -m <content> [--edit <n>]
+Usage: agent-coexist post <PATH> --as <nick> (-m <content> | -F <path>) [--edit <n>]
 
 Arguments:
   <PATH>  the post file; the suffix may be omitted
 
 Options:
-      --as <nick>  the author nick written in the comment heading
-  -m <content>     the comment body, stored in a code fence
-      --edit <n>   replace the whole body of your own comment #n (its author must be --as)
-  -h, --help       Print help
+      --as <nick>    the author nick written in the comment heading
+  -m <content>       the comment body, stored in a code fence
+  -F, --file <path>  read the text from this file instead of -m, keeping its line breaks ('-' reads standard input)
+      --edit <n>     replace the whole body of your own comment #n (its author must be --as)
+  -h, --help         Print help
 
 Appends a comment with author --as and body -m (creates a missing file and parents; stored in a code fence; @nick mentions, @#n replies).
 --edit <n> replaces the whole body of your own comment #n (author must match --as; never creates a file); include everything to keep.
@@ -942,9 +956,9 @@ Example: agent-coexist post docs/standup --as bob -m '@#1 parser done, see src/p
 Create or update a brief and its entries
 
 Usage: agent-coexist brief <PATH> [--as <nick>]
-   or: agent-coexist brief <PATH> [--as <nick>] -m <description>
-   or: agent-coexist brief <PATH> [--as <nick>] --target <path> [--entry <title>] [--regex <pattern>] [-m <note>]
-   or: agent-coexist brief <PATH> [--as <nick>] --entry <title> -m <note>
+   or: agent-coexist brief <PATH> [--as <nick>] (-m <description> | -F <path>)
+   or: agent-coexist brief <PATH> [--as <nick>] --target <path> [--entry <title>] [--regex <pattern>] [-m <note> | -F <path>]
+   or: agent-coexist brief <PATH> [--as <nick>] --entry <title> (-m <note> | -F <path>)
    or: agent-coexist brief <PATH> [--as <nick>] --entry <title> --remove
    or: agent-coexist brief <PATH> [--as <nick>] [--entry <title>] --refresh
 
@@ -954,6 +968,7 @@ Arguments:
 Options:
       --as <nick>        your nick; not written, only exempts your own 'locked' declarations
   -m <content>           the description (no --target/--entry) or the entry's note (with --target/--entry)
+  -F, --file <path>      read the text from this file instead of -m, keeping its line breaks ('-' reads standard input)
       --target <path>    the file this entry points to, relative to the brief's directory
       --entry <title>    entry title; one space at either end is ignored, while repeated spaces anywhere and control characters are rejected (titles match with whitespace runs read as one space)
       --regex <pattern>  a regex the target must still match when the brief is read ('' deletes it; needs --target)
@@ -1008,6 +1023,7 @@ Options:
   -h, --help                Print help
 
 Waits for next change to a collaboration file, reports diff, and exits 0. Never writes.
+Takes no filter: for a comment addressed to you use wait-post --as <nick>; for a declaration by status use wait-state --status <name>.
 Writes 'waiting  wait  <object>' to stderr once baseline is recorded; re-read file after this line to catch changes made before baseline.
 Sampled about once a second; a missing file is a valid start. Each sample waits up to 1s for a shared lock (E-LOCKED or Windows E-INUSE, exit 3). On restart, read again after the ready line. Without --timeout the wait has no limit; Ctrl-C cancels (exit 130). --timeout <duration> ends it with exit 124, no stdout and a 'timed out' line on stderr when nothing qualifying changed in time; a change seen by the last sample is still reported. Under an agent harness, set it below the harness's tool-call limit.
 Example: agent-coexist wait docs/onboarding
@@ -1019,5 +1035,5 @@ Example: agent-coexist wait docs/onboarding
 
 `agent-coexist --version` · --version (-V prints the same).
 ```text
-agent-coexist 0.5.0
+agent-coexist 0.6.0
 ```

@@ -94,7 +94,7 @@ ok  list  big
 terminal frame (stderr went straight to the terminal, not captured separately; varies between runs: frame count and counters depend on scanning speed; escaped view; no trailing newline):
 <!-- output-summary:volatile:start -->
 ```text
-\rscanning dirs: 28222, files: 0...\rscanning dirs: 39622, files: 0...\rscanning dirs: 51160, files: 0...\r                                 \r
+\rscanning dirs: 30844, files: 0...\rscanning dirs: 43227, files: 0...\rscanning dirs: 55531, files: 0...\r                                 \r
 ```
 <!-- output-summary:volatile:end -->
 

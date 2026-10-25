@@ -135,18 +135,17 @@ error  check  docs/stanup
 
 ## post: reply target missing and resending
 
-`AGENT_COEXIST_NOW=2026-09-17T10:05:00Z agent-coexist post parser-review --as bob -m $'@#5 Mapping looks right.\nNext: cover the empty-input case.'` · Current time for this command: 2026-09-17T10:05:00Z.
+`AGENT_COEXIST_NOW=2026-09-17T10:05:00Z agent-coexist post parser-review --as bob -m $'@#5 Mapping looks right.\nNext: cover the empty-input case.'` · exit code 1 · Current time for this command: 2026-09-17T10:05:00Z.
 ```text
-warn  post  parser-review
-  comment       #2  L10
-  reply-to      #5  (not found)
-  fix           if you meant another comment, edit this one so the reply names a number this post carries: agent-coexist post parser-review.agent-coexist.md --as=bob --edit=2 -m '<the whole body, with the reference corrected>'
+error  post  parser-review
+  reason        no comment in this post has the number #5
+  fix           write the number of the comment you meant in this post, or refer to a comment in another post in words, such as "see standup #4", then run the command again
 ```
 
-`AGENT_COEXIST_NOW=2026-09-17T10:06:00Z agent-coexist post parser-review.agent-coexist.md --as=bob --edit=2 -m $'@#1 Mapping looks right.\nNext: cover the empty-input case.'` · bob resends his whole comment #2, changing only @#5 to @#1.
+`AGENT_COEXIST_NOW=2026-09-17T10:06:00Z agent-coexist post parser-review --as bob -m $'@#1 Mapping looks right.\nNext: cover the empty-input case.'` · bob resends the same comment, changing only @#5 to @#1; nothing was written the first time.
 ```text
 ok  post  parser-review
-  comment       #2  L10  edited
+  comment       #2  L10
   reply-to      #1
 ```
 

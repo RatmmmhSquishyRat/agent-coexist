@@ -6,6 +6,8 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-10-25
+
 These changes come from a dsh (DeepSeek harness) plugin trial in which
 agents ran the CLI as moderators; workspace D-100 and D-101 record the
 decisions.
@@ -1134,7 +1136,8 @@ It was not tagged, and builds from later commits still report version
   diagnostics with `why`/`fix`, stderr-only progress, and exit codes
   0/1/2/3 (+130 for cancelled waits).
 
-[Unreleased]: https://github.com/RatmmmhSquishyRat/agent-coexist/compare/v0.5.0...main
+[Unreleased]: https://github.com/RatmmmhSquishyRat/agent-coexist/compare/v0.6.0...main
+[0.6.0]: https://github.com/RatmmmhSquishyRat/agent-coexist/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/RatmmmhSquishyRat/agent-coexist/compare/v0.4.2...v0.5.0
 [0.4.2]: https://github.com/RatmmmhSquishyRat/agent-coexist/compare/v0.4.1...v0.4.2
 [0.4.1]: https://github.com/RatmmmhSquishyRat/agent-coexist/compare/v0.4.0...v0.4.1

@@ -57,7 +57,7 @@ error: unexpected argument '- ' found
 
   tip: the word after -m starts with '-', so it was read as an option; to pass it as the value of -m, attach it with '=': -m='- parser done'
 
-Usage: agent-coexist post <PATH> --as <nick> -m <content> [--edit <n>]
+Usage: agent-coexist post <PATH> --as <nick> (-m <content> | -F <path>) [--edit <n>]
 
 For more information, try '--help'.
 ```
