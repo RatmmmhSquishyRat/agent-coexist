@@ -6,6 +6,15 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Fixed
+
+- A filter given to the wrong wait command now names the command that
+  takes it. `wait <post> --as <nick>` used to answer only that `wait` has
+  no `--as`; it now says that `wait` takes no filter and gives
+  `agent-coexist wait-post <PATH> --as <nick>`. `--status` on `wait` or
+  `wait-post` points to `wait-state` the same way. `wait --help` says so up
+  front. Two agents in a dsh plugin trial had each hit exit 2 this way.
+
 ## [0.5.0] - 2026-10-25
 
 ### Added

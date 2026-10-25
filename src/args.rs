@@ -1160,6 +1160,9 @@ fn unknown_option_tip(words: &[OsString], reported: &str, has_similar: bool) -> 
                 ));
             }
         }
+        if let Some(tip) = sibling_wait_tip(command, &text) {
+            return Some(tip);
+        }
         if has_similar {
             return None;
         }
@@ -1204,6 +1207,33 @@ fn unknown_option_tip(words: &[OsString], reported: &str, has_similar: bool) -> 
             _ => help,
         })
     })
+}
+
+/// The wait commands differ only in their filter: `--as` belongs to
+/// `wait-post` and `--status` to `wait-state`, and plain `wait` takes
+/// neither. An agent that puts a filter on the wrong one is told which
+/// command takes it, not only that this one does not.
+fn sibling_wait_tip(command: &str, word: &str) -> Option<String> {
+    let option = word.strip_prefix("--")?;
+    let name = option.split_once('=').map_or(option, |(name, _)| name);
+    let what = match command {
+        "wait" => "'wait' takes no filter and reports any change to the file",
+        "wait-post" => "'wait-post' follows comments, not declarations",
+        "wait-state" => "'wait-state' follows declarations by status, not by nick",
+        _ => return None,
+    };
+    let instead = match (command, name) {
+        ("wait" | "wait-state", "as") => {
+            "to wait for a comment that mentions or replies to you, use: agent-coexist wait-post <PATH> --as <nick>"
+        }
+        ("wait" | "wait-post", "status") => {
+            "to wait for a declaration with a given status, use: agent-coexist wait-state [DIR] --status <name>"
+        }
+        _ => return None,
+    };
+    Some(format!(
+        "{what}; {instead} (other options such as --timeout carry over)"
+    ))
 }
 
 /// What a value option whose grammar never allows a leading `-` takes,
@@ -1517,6 +1547,7 @@ Example: agent-coexist check-state src",
 const H_WAIT: &str = concat!(
     "\
 Waits for next change to a collaboration file, reports diff, and exits 0. Never writes.
+Takes no filter: for a comment addressed to you use wait-post --as <nick>; for a declaration by status use wait-state --status <name>.
 Writes 'waiting  wait  <object>' to stderr once baseline is recorded; re-read file after this line to catch changes made before baseline.
 ",
     h_wait_common!(),
@@ -1754,6 +1785,53 @@ mod tests {
             !message.contains("--edit=-1") && !message.contains("use '--"),
             "{message}"
         );
+    }
+
+    /// A filter on the wrong wait command names the command that takes it,
+    /// and that command accepts the same words. Two dsh agents had run
+    /// `wait <post> --as <nick>` and been told only that `wait` has no --as.
+    #[test]
+    fn misplaced_wait_filter_names_the_sibling_that_takes_it() {
+        let cases: [(&[&str], &str, &[&str]); 5] = [
+            (
+                &["wait", "standup", "--as", "alice", "--timeout", "50s"],
+                "agent-coexist wait-post <PATH> --as <nick>",
+                &["wait-post", "standup", "--as", "alice", "--timeout", "50s"],
+            ),
+            (
+                &["wait", "standup", "--as=alice"],
+                "agent-coexist wait-post <PATH> --as <nick>",
+                &["wait-post", "standup", "--as=alice"],
+            ),
+            (
+                &["wait-state", "src", "--as", "alice"],
+                "agent-coexist wait-post <PATH> --as <nick>",
+                &["wait-post", "standup", "--as", "alice"],
+            ),
+            (
+                &["wait", "src/state", "--status", "locked"],
+                "agent-coexist wait-state [DIR] --status <name>",
+                &["wait-state", "src", "--status", "locked"],
+            ),
+            (
+                &["wait-post", "standup", "--status", "locked"],
+                "agent-coexist wait-state [DIR] --status <name>",
+                &["wait-state", "src", "--status", "locked"],
+            ),
+        ];
+        for (args, named, sibling) in cases {
+            let message = grammar_error_message(parse_args(args).unwrap_err(), &words(args));
+            assert!(message.contains(named), "{args:?}: {message}");
+            assert!(
+                !message.contains("lists its options"),
+                "{args:?}: {message}"
+            );
+            assert!(parse_args(sibling).is_ok(), "{sibling:?} must parse");
+        }
+        // A word that is not a sibling's filter keeps the generic advice.
+        let args = ["wait", "standup", "--nick", "alice"];
+        let message = grammar_error_message(parse_args(&args).unwrap_err(), &words(&args));
+        assert!(message.contains("lists its options"), "{message}");
     }
 
     /// A tip never carries a bidi override or escape the user typed: such
