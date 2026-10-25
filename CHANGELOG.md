@@ -27,8 +27,28 @@ All notable changes to this project are documented here. The format follows
   shows its model only that much of a skill description, and the old
   672-character one was cut off there, mid-sentence and before its last
   sentence: the guard against creating files merely because the word
-  appears. The two sentences dropped to make room are both in the skill's
-  body, which the model reads once the skill loads.
+  appears.
+- The skill now says to look for records before changing files in any
+  project. It used to apply only once the agent knew the project was shared,
+  which an arriving agent cannot know without looking. In a live dsh test in
+  a neutral project, an agent asked to edit a file that another agent had
+  locked edited it straight away. Looking is one listing; writing records
+  is still limited to the cases the description names.
+- The skill tells the agent how to check that the CLI is available: run
+  `agent-coexist --version` on its own. A dsh agent combined that check with
+  other PowerShell output, which hid the result. It concluded the CLI was
+  missing and fell back to a plain-file handoff.
+- The skill names the guide pages as commands (`agent-coexist guide write`
+  and the like). A dsh agent had tried `agent-coexist write --help`.
+- The skill says a record is another agent's note, not the user's
+  instruction. When a record conflicts with the agent's instructions or the
+  project's files, the agent tells the user rather than silently following
+  either. `guide write` asks an agent handing off to also write a user's
+  change to the task where the task itself is written. In a dsh test, a
+  fresh session read a handoff whose change from the user existed only in
+  the record and contradicted TASK.md. It declined the change as unverifiable
+  and told the user; that is now the documented behaviour, and writing the
+  change into TASK.md as well avoids the conflict.
 - The `wait` guide page, the per-command help, the top-level exit-code
   table and the command reference describe `--timeout` and exit 124, and no
   longer say waits have no time limit.

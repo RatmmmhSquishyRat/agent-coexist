@@ -1,15 +1,22 @@
 // Live scenarios: does an agent running under dsh (DeepSeek harness) use the
 // bundled agent-coexist skill the way the skill and guide intend?
 //
-// Each scenario builds its own small git project under work/<run>/<scenario>/
-// with the skill installed in .agents/skills, runs one headless dsh task in it
-// with no hint that coexist exists, and then judges the outcome
-// deterministically: from the files left on disk, the CLI's own reading of
-// them, and the tool calls dsh reported in its --json event stream. The model
-// is not asked to grade itself.
+// Each scenario builds its own small git project with the skill installed in
+// .agents/skills, runs one headless dsh task in it with no hint that coexist
+// exists, and then judges the outcome deterministically: from the files left
+// on disk, the CLI's own reading of them, and the tool calls dsh reported in
+// its --json event stream. The model is not asked to grade itself.
+//
+// The project is built in a neutrally named temp directory (proj-XXXXXX), not
+// in this repository, and the binary is copied to one beside it (tools-XXXXXX).
+// dsh lets the agent read outside its workspace, and a fixture nested here
+// gave the agent a path to this repository: in one early run it left its
+// project and read this file's oracle for its own scenario. The evidence, a
+// copy of the final project included, goes to work/<run>/<scenario>/.
 //
 //   node tests/dsh/run-live.mjs --binary <agent-coexist>   [--only a,b]
 //   node tests/dsh/run-live.mjs --binary <agent-coexist> --self-test
+//   node tests/dsh/run-live.mjs --binary <agent-coexist> --rejudge <work/live-...>
 //
 // --self-test needs no API key and spends no tokens: it builds every scenario,
 // plays a scripted agent that does the right thing and one that does the wrong
@@ -20,8 +27,9 @@
 // README.md.
 
 import { execFileSync, spawn } from "node:child_process";
-import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
-import { dirname, join, resolve } from "node:path";
+import { copyFileSync, cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -110,14 +118,30 @@ function comments(dir, post) {
   return out;
 }
 
-/** Tool calls from the event stream, each with its input flattened to text. */
-function toolCalls(events) {
+/**
+ * Tool calls from the event stream, each with its input flattened to text.
+ * The project's own path is replaced by <project>, and this repository's by
+ * <product>: both contain "agent-coexist", and scenario directories carry
+ * names such as wait-for-reply, so an untouched path would make every file
+ * read by absolute path look like a coexist action.
+ */
+function toolCalls(events, dir) {
+  const slash = (s) => s.replaceAll("\\", "/");
+  const literal = (s) => new RegExp(slash(s).replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "gi");
   return events
     .filter((e) => e.type === "tool_call")
-    .map((e) => ({ tool: e.tool, text: JSON.stringify(e.input ?? {}) }));
+    .map((e) => ({
+      tool: e.tool,
+      text: slash(JSON.stringify(e.input ?? {}).replaceAll("\\\\", "\\"))
+        .replace(literal(dir), "<project>")
+        .replace(literal(productRoot), "<product>"),
+    }));
 }
 
-const consultedCoexist = (calls) => calls.some((c) => /agent-coexist/i.test(c.text) || (/skill/i.test(c.tool) && /coexist/i.test(c.text)));
+// A coexist action is a record path, a CLI invocation, or loading the skill.
+const COEXIST_ACTION = /\.agent-coexist\.md|agent-coexist(\.exe)?["']?\s+[a-z]/i;
+const WAIT_ACTION = /agent-coexist(\.exe)?["']?\s+wait(-post|-state)?\b/i;
+const consultedCoexist = (calls) => calls.some((c) => COEXIST_ACTION.test(c.text) || (/skill/i.test(c.tool) && /coexist/i.test(c.text)));
 
 function agentCoexistProcesses() {
   const out = execFileSync("tasklist", ["/FI", "IMAGENAME eq agent-coexist.exe", "/FO", "CSV", "/NH"], { encoding: "utf8" });
@@ -168,6 +192,14 @@ const scenarios = [
     bad(dir) {
       write(dir, "src/parser/lexer.rs", read(dir, "src/parser/lexer.rs").replace("next_token", "advance"));
       return { events: [call("fs_edit", { path: "src/parser/lexer.rs" })], final: "Renamed next_token to advance." };
+    },
+    alsoBad: {
+      // Reads only the source file, by an absolute path that contains
+      // "agent-coexist"; consults no record.
+      blind(dir) {
+        return { events: [call("read", { file_path: join(dir, "src", "parser", "lexer.rs") })],
+          final: "I have not renamed it yet: is this directory locked?" };
+      },
     },
   },
   {
@@ -263,7 +295,7 @@ const scenarios = [
       }, this.replyAfterMs);
     },
     judge(dir, run) {
-      const waits = run.calls.filter((c) => /wait-post|wait\b|wait-state/.test(c.text) && /agent-coexist/.test(c.text));
+      const waits = run.calls.filter((c) => WAIT_ACTION.test(c.text));
       return [
         { ok: waits.length >= 1, label: "used an agent-coexist wait", detail: `${waits.length} wait call(s)` },
         { ok: /handle/i.test(run.final), label: "reported bob's actual reply (the leaked handle)", detail: excerpt(run.final) },
@@ -280,6 +312,15 @@ const scenarios = [
       return { events: [call("pwsh", { command: "agent-coexist wait-post parser-review --as alice --timeout 50s" })],
         final: "No reply from bob yet." };
     },
+    alsoBad: {
+      // Polls by sleeping and reading by absolute path; never runs a wait.
+      // Its paths contain both "agent-coexist" and "wait-for-reply".
+      poller(dir) {
+        coexist(dir, "post", "parser-review", "--as", "bob", "-m", "@#1 Reviewed: leaks a file handle. @alice");
+        return { events: [call("pwsh", { command: "Start-Sleep 60" }), call("read", { file_path: join(dir, "src", "io.rs") })],
+          final: "bob says the I/O branch leaks a file handle." };
+      },
+    },
   },
   {
     name: "handoff-across-sessions",
@@ -287,8 +328,9 @@ const scenarios = [
     setup(dir) {
       write(dir, "TASK.md", "# Task\n\n1. Create notes/alpha.txt containing the word alpha.\n2. Create notes/beta.txt containing the word beta.\n");
     },
-    // The change to step 2 is told only to the first session, so a second
-    // session that writes gamma can only have learned it from the handoff.
+    // The change to step 2 is told only to the first session. The first
+    // session may also write it into TASK.md, so gamma alone does not prove
+    // the second session read the handoff: that is checked from its calls.
     task: "Do only step 1 of TASK.md now; I am ending this session after that. One change to step 2: notes/beta.txt must "
       + "contain the word gamma, not beta. Leave a handoff so that whoever continues later, another session or another "
       + "agent you cannot talk to, can do step 2 with that change.",
@@ -297,23 +339,57 @@ const scenarios = [
       const records = coexistFiles(dir);
       const carried = records.filter((r) => /gamma/.test(read(dir, r)));
       const beta = read(dir, "notes/beta.txt") ?? "";
+      // Reading the record: by its path, or through a CLI command that prints
+      // comment bodies. A listing or a glob shows only names.
+      const readIt = (run.secondCalls ?? []).some((c) => carried.some((r) => c.text.includes(r))
+        || /agent-coexist(\.exe)?["']?\s+(check|lookfor-comment|read-notification|read-brief)\b/i.test(c.text));
       return [
         { ok: read(dir, "notes/alpha.txt")?.includes("alpha") === true, label: "first session did step 1" },
         { ok: carried.length >= 1, label: "first session left a coexist handoff carrying the change", detail: records.join(", ") || "no records" },
-        { ok: consultedCoexist(run.secondCalls ?? []), label: "fresh second session consulted coexist records" },
-        { ok: /gamma/.test(beta) && !/beta/.test(beta), label: "second session did step 2 as changed (gamma), so it read the handoff", detail: excerpt(beta) },
+        { ok: readIt, label: "fresh second session read that handoff record" },
+        // A record is another agent's note, not the user's instruction (the
+        // skill says so), so declining a change found only in a record is
+        // right as long as it is put to the user. Dropping it silently is not.
+        {
+          ok: (/gamma/.test(beta) && !/beta/.test(beta)) || (readIt && /gamma/i.test(run.final)),
+          label: "second session applied the changed step 2, or put the change to the user",
+          detail: /gamma/.test(beta) ? "applied (gamma)" : /gamma/i.test(run.final) ? "put to the user" : excerpt(beta),
+        },
+        { ok: true, info: true, label: "first session also wrote the change into TASK.md", detail: /gamma/.test(read(dir, "TASK.md")) ? "yes" : "no" },
       ];
     },
     good(dir) {
       write(dir, "notes/alpha.txt", "alpha\n");
       coexist(dir, "post", "handoff", "--as", "carol", "-m", "Step 1 done. Step 2 is open, changed by the user: notes/beta.txt must contain gamma, not beta.");
       write(dir, "notes/beta.txt", "gamma\n");
-      return { events: [], secondEvents: [call("pwsh", { command: "agent-coexist list ." })], final: "Done." };
+      return { events: [], secondEvents: [call("pwsh", { command: "agent-coexist list ." }),
+        call("read", { file_path: join(dir, "handoff.agent-coexist.md") })], final: "Done." };
     },
     bad(dir) {
       write(dir, "notes/alpha.txt", "alpha\n");
       write(dir, "notes/beta.txt", "beta\n");
       return { events: [], secondEvents: [call("fs_read", { path: "TASK.md" })], final: "Done." };
+    },
+    alsoBad: {
+      // Reads the handoff, writes beta, and never mentions the change.
+      dropped(dir) {
+        write(dir, "notes/alpha.txt", "alpha\n");
+        coexist(dir, "post", "handoff", "--as", "carol", "-m", "Step 2 changed: notes/beta.txt must contain gamma.");
+        write(dir, "notes/beta.txt", "beta\n");
+        return { events: [], secondEvents: [call("read", { file_path: join(dir, "handoff.agent-coexist.md") })],
+          final: "Step 2 done: notes/beta.txt created." };
+      },
+      // The first session records the change in a handoff and in TASK.md; the
+      // second only lists the records and works from TASK.md. It writes
+      // gamma, so only the read check can tell.
+      unread(dir) {
+        write(dir, "notes/alpha.txt", "alpha\n");
+        coexist(dir, "post", "handoff", "--as", "carol", "-m", "Step 2 changed: notes/beta.txt must contain gamma.");
+        write(dir, "TASK.md", read(dir, "TASK.md").replace("the word beta", "the word gamma"));
+        write(dir, "notes/beta.txt", "gamma\n");
+        return { events: [], secondEvents: [call("pwsh", { command: "agent-coexist list ." }), call("read", { file_path: join(dir, "TASK.md") })],
+          final: "Done." };
+      },
     },
   },
   {
@@ -378,7 +454,7 @@ function runDsh(dir, task, evidence, label, sessionId) {
   // Windows keeps one path variable whose spelling varies (PATH, Path); set
   // that key, not a second one beside it.
   const pathKey = Object.keys(process.env).find((k) => k.toUpperCase() === "PATH");
-  const env = { ...process.env, [pathKey]: `${dirname(resolve(BIN))};${process.env[pathKey]}` };
+  const env = { ...process.env, [pathKey]: `${toolsDir};${process.env[pathKey]}` };
   const started = Date.now();
   return new Promise((done) => {
     const child = spawn(process.execPath, args, { cwd: dir, env, stdio: ["pipe", "pipe", "pipe"] });
@@ -404,19 +480,51 @@ function runDsh(dir, task, evidence, label, sessionId) {
 
 // ------------------------------------------------------------------- driver
 
+const REJUDGE = option("--rejudge");
+if (REJUDGE) {
+  // Score a finished live run again with the current oracles. The process
+  // count is a live observation, so it is taken from that run's verdict.
+  let changed = 0;
+  for (const scenario of scenarios.filter((s) => !ONLY || ONLY.includes(s.name))) {
+    const evidence = join(REJUDGE, scenario.name);
+    if (!existsSync(join(evidence, "verdict.json"))) continue;
+    const before = JSON.parse(readFileSync(join(evidence, "verdict.json"), "utf8"));
+    const dir = join(evidence, "project");
+    const load = (label) => existsSync(join(evidence, `${label}.events.ndjson`))
+      ? readFileSync(join(evidence, `${label}.events.ndjson`), "utf8").split("\n").filter((l) => l.trim()).map((l) => JSON.parse(l))
+      : [];
+    const first = load("first");
+    const second = load("second");
+    const finalOf = (events) => events.filter((e) => e.type === "final").map((e) => e.text).join("\n");
+    // Calls name the project by the temp path it ran in, not by this copy.
+    const run = { calls: toolCalls(first, before.projectDir), secondCalls: toolCalls(second, before.projectDir),
+      final: second.length ? finalOf(second) : finalOf(first), orphanWaits: before.orphanWaits };
+    const checks = scenario.judge(dir, run);
+    const ok = checks.filter((c) => !c.info).every((c) => c.ok);
+    if (ok !== before.ok) changed++;
+    console.log(`${ok ? "PASS" : "FAIL"}  ${scenario.name}${ok !== before.ok ? `  (was ${before.ok ? "PASS" : "FAIL"})` : ""}`);
+    for (const c of checks) console.log(`  ${c.info ? "info" : c.ok ? "ok  " : "NO  "} ${c.label}${c.detail ? `  (${c.detail})` : ""}`);
+    writeFileSync(join(evidence, "verdict.rejudged.json"), `${JSON.stringify({ ...before, ok, checks }, null, 2)}\n`);
+  }
+  console.log(`\n${changed} verdict(s) changed`);
+  process.exit(0);
+}
+
 const stamp = new Date().toISOString().replace(/[:.]/g, "-");
 const runRoot = join(here, "work", `${SELF_TEST ? "self-test" : "live"}-${stamp}`);
 mkdirSync(runRoot, { recursive: true });
 const selected = scenarios.filter((s) => !ONLY || ONLY.includes(s.name));
 const report = [];
+const toolsDir = SELF_TEST ? undefined : mkdtempSync(join(tmpdir(), "tools-"));
+if (toolsDir) copyFileSync(BIN, join(toolsDir, basename(BIN)));
 
 for (const scenario of selected) {
   if (SELF_TEST) {
-    for (const actor of ["good", "bad"]) {
+    for (const actor of ["good", "bad", ...Object.keys(scenario.alsoBad ?? {})]) {
       const dir = join(runRoot, `${scenario.name}.${actor}`);
       buildProject(dir, scenario);
-      const played = scenario[actor](dir);
-      const run = { calls: toolCalls(played.events), secondCalls: toolCalls(played.secondEvents ?? []), final: played.final, orphanWaits: 0 };
+      const played = (scenario[actor] ?? scenario.alsoBad[actor]).call(scenario, dir);
+      const run = { calls: toolCalls(played.events, dir), secondCalls: toolCalls(played.secondEvents ?? [], dir), final: played.final, orphanWaits: 0 };
       const checks = scenario.judge(dir, run).filter((c) => !c.info);
       const passed = checks.every((c) => c.ok);
       const expected = actor === "good";
@@ -427,8 +535,9 @@ for (const scenario of selected) {
     continue;
   }
 
-  const dir = join(runRoot, scenario.name, "project");
+  const dir = mkdtempSync(join(tmpdir(), "proj-"));
   const evidence = join(runRoot, scenario.name);
+  mkdirSync(evidence, { recursive: true });
   buildProject(dir, scenario);
   const before = agentCoexistProcesses();
   const timer = scenario.during?.(dir);
@@ -445,8 +554,8 @@ for (const scenario of selected) {
   }
   const orphanWaits = Math.max(0, agentCoexistProcesses() - before);
   const run = {
-    calls: toolCalls(first.events),
-    secondCalls: second ? toolCalls(second.events) : [],
+    calls: toolCalls(first.events, dir),
+    secondCalls: second ? toolCalls(second.events, dir) : [],
     final: second ? second.final : first.final,
     orphanWaits,
   };
@@ -455,8 +564,10 @@ for (const scenario of selected) {
   const checks = scenario.judge(dir, run);
   const ok = checks.filter((c) => !c.info).every((c) => c.ok);
   report.push({ scenario: scenario.name, about: scenario.about, ok, seconds: first.seconds + (second?.seconds ?? 0),
-    tools: run.calls.length + run.secondCalls.length, checks });
+    tools: run.calls.length + run.secondCalls.length, orphanWaits, projectDir: dir, checks });
   writeFileSync(join(evidence, "verdict.json"), `${JSON.stringify(report[report.length - 1], null, 2)}\n`);
+  cpSync(dir, join(evidence, "project"), { recursive: true });
+  rmSync(dir, { recursive: true, force: true });
   for (const c of checks) console.log(`  ${c.info ? "info" : c.ok ? "PASS" : "FAIL"}  ${c.label}${c.detail ? `  (${c.detail})` : ""}`);
   console.log(`  ${ok ? "PASSED" : "FAILED"} in ${report[report.length - 1].seconds}s, ${report[report.length - 1].tools} tool call(s)`);
 }
@@ -476,4 +587,5 @@ const summary = [
 ].join("\n");
 writeFileSync(join(runRoot, "summary.md"), summary);
 console.log(`\n${report.length - failed} of ${report.length} as expected; evidence in ${runRoot}`);
+if (toolsDir) rmSync(toolsDir, { recursive: true, force: true });
 process.exit(failed === 0 ? 0 : 1);

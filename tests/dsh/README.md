@@ -35,12 +35,20 @@ node tests/dsh/run-live.mjs --binary <dir>/bin/agent-coexist[.exe]
 node tests/dsh/run-live.mjs --binary ... --only wait-for-reply,explain-only
 ```
 
-Each scenario builds a small git project of its own under
-`tests/dsh/work/`, with the skill installed and a committed fixture. It then
-runs `dsh --profile headless --json` in that project with no hint that
-coexist exists. The outcome is judged from three things: the files left on
-disk, the CLI's reading of them, and the tool calls dsh reports. The model is
-not asked to grade itself.
+Each scenario builds a small git project of its own, with the skill
+installed and a committed fixture. It then runs `dsh --profile headless
+--json` in that project with no hint that coexist exists. The outcome is
+judged from three things: the files left on disk, the CLI's reading of them,
+and the tool calls dsh reports. The model is not asked to grade itself.
+
+The projects are built outside this repository, in neutrally named temp
+directories (`proj-XXXXXX`), and the binary is copied to one beside them
+(`tools-XXXXXX`). dsh's sandbox lets the agent read anywhere, and in an
+early run with fixtures under `tests/dsh/work/` it did. Its project path
+named both the repository and the scenario, so the agent left the project,
+read the product docs, and then read this runner's oracle for its own
+scenario. That same run's lock scenario passed, but in a neutral directory
+it failed: the path had been doing the triggering.
 
 | Scenario | Passes when |
 |---|---|
@@ -49,7 +57,7 @@ not asked to grade itself.
 | `guard-unrelated-word` | A task about numpy and pandas that "need to coexist" gets done, and no coexist file is created |
 | `explain-only` | Asked what agent-coexist is, the agent answers and writes nothing |
 | `wait-for-reply` | Asked to wait for bob's reply, which arrives 150 s in, after dsh's 120 s shell-call budget, the agent reports what bob said and leaves no `agent-coexist` process running. Whether it used `--timeout` is recorded, not required |
-| `handoff-across-sessions` | One session does step 1 and is told a change to step 2 that only it hears. A fresh session, told only to pick up the work, consults the records and does step 2 with the change, which it can only have learned from the handoff |
+| `handoff-across-sessions` | One session does step 1, is told a change to step 2 that only it hears, and leaves a coexist record carrying it. A fresh session, told only to pick up the work, reads that record and either applies the change or puts it to the user. Silently dropping the change fails. A record is another agent's note, not the user's instruction, so declining a change that contradicts TASK.md is right as long as the user hears about it |
 | `resumed-session-keeps-nick` | A session resumed with `--session-id` posts under the same nick as before |
 
 dsh runs in its default mode, the one a headless user gets: a
@@ -58,12 +66,28 @@ rejected when nobody is there to answer. On Windows the shell tool is pwsh,
 with a 120 s default call budget. A call that runs longer is moved to the
 background rather than stopped.
 
-Evidence for each scenario stays in its work directory:
+Evidence for each scenario goes to `tests/dsh/work/<run>/<scenario>/`:
 
 - `first.events.ndjson` and `second.events.ndjson`, dsh's event streams;
 - `stderr.txt` and `final.txt`;
 - `git-status.txt`, which lists exactly what the agent changed;
-- `verdict.json`.
+- `project/`, a copy of the project as the agent left it;
+- `verdict.json`, which also records the temp path the project ran in.
+
+After changing an oracle, score a finished run again without spending
+tokens:
+
+```sh
+node tests/dsh/run-live.mjs --binary ... --rejudge tests/dsh/work/live-...
+```
+
+This writes `verdict.rejudged.json` next to each verdict and reports which
+verdicts changed.
+
+On some networks dsh's `web_fetch` refuses every host. That happens when DNS
+returns non-public addresses, as a fake-IP proxy does: dsh's guard against
+private-network fetches then blocks them all. An agent there cannot open the
+skill's GitHub links, so the local CLI and guide are its only references.
 
 The run's `summary.md` lists each verdict. dsh also keeps each run as a
 session in its own store under `~/.dsh/sessions`.
@@ -78,7 +102,11 @@ environment, or store the key on dsh's web Models page.
 node tests/dsh/run-live.mjs --binary ... --self-test
 ```
 
-For every scenario this builds the project and plays two scripted agents, one
-that does the right thing and one that does the wrong thing. The oracle must
-pass the first and fail the second. Run it after changing a scenario, so that
-a live failure means the agent and not the test.
+For every scenario this builds the project and plays scripted agents: one
+that does the right thing, and one or more that do the wrong thing. The
+oracle must pass the first and fail the rest. Two of the wrong agents exist
+because of a real oracle bug. Both work only by absolute paths, which
+contain `agent-coexist`: `blind` reads only the source file, and `poller`
+sleeps and reads instead of waiting. An earlier matcher counted any such
+path as a coexist action and passed both. Run the self-test after changing
+a scenario, so that a live failure means the agent and not the test.
