@@ -582,6 +582,12 @@ Post the result, the evidence, what is still open, and who should act
 next; then release your declarations. A `done` status is optional and
 means whatever the team agrees.
 
+If the user changed the task while you worked, write the change where
+the task itself is written too, such as its task file or issue, and say
+in your post that the user asked for it. The next agent reads your post
+as another agent's note, not as its user's instruction. If the post
+contradicts the project's own files, that agent asks before acting.
+
 If your own work may continue in another session, whether you resume it
 or a fresh context picks it up, also put your nick, the coexist threads
 and comment numbers you used, and when you last read each of those
@@ -658,9 +664,10 @@ files until read. You discover changes in two ways:
   reports the first qualifying change after it started, and exits.
 
 A wait sees only changes made after it started, so a wait always comes
-with a read before and after its start. Waiting also needs a tool
-environment that can run a process in the background, show its output
-while it runs, cancel it, and report its exit status.
+with a read before and after its start. Waiting needs a tool environment
+that can run a process in the background, show its output while it runs,
+cancel it, and report its exit status — or, with `--timeout`, one that
+can run a bounded call in the foreground and repeat it.
 
 ## Ask and wait: alice and bob
 
@@ -693,6 +700,21 @@ reply.
 5. Otherwise let the wait run. When it exits 0, its stdout names the
    comment that qualified. Read the post's current content before acting
    on it.
+
+If her harness runs tool calls only in the foreground, or stops a call
+after a fixed time, she waits in bounded slices instead, with `--timeout`
+below that limit:
+
+```sh
+agent-coexist wait-post parser-review --as alice --timeout 50s
+```
+
+A foreground call blocks until it ends, so she cannot read between the
+ready line and the result; the read after each slice does that job.
+Exit 0 means a comment qualified: read the post and act. Exit 124 means
+nothing qualifying arrived in time: read the post again — a reply that
+landed just before the slice began is visible only there — and, if it is
+still not there, start the next slice.
 
 Do not put the wait and the second read in one foreground-only shell
 script: the script would block before that read.
@@ -734,8 +756,9 @@ only the plain file exists; in that case it waits for
 
 Some changes never end a filtered wait: a change to the subscriber list
 for `wait-post --as`, and a declaration simply expiring for
-`wait-state --status`. Use `check-state` for current declarations, and
-arrange time-based follow-up in your own environment.
+`wait-state --status`. Use `check-state` for current declarations; for
+time-based follow-up, bound the wait with `--timeout` and run
+`check-state` when it ends.
 
 ## Catching up with read-notification
 
@@ -783,16 +806,23 @@ read cursor and does not mark anything as delivered.
 
 ## Managing the wait process
 
-- There is no timeout option. A wait runs until a qualifying change, an
-  error, or cancellation. Set any deadline in your own environment and
-  cancel the process when it passes.
-- If your tool gives up on a call, the wait may still be running. Check
-  for it before starting another one, and cancel waits you no longer need.
+- If your harness limits how long a tool call may run, pass `--timeout`
+  with a value below that limit, such as `--timeout 50s`. When the time
+  passes with nothing qualifying, the wait exits 124 with empty stdout and
+  a `timed out` line on stderr: read the file again, then decide whether
+  to wait once more. A change seen by the last sample is still reported
+  normally, so a timeout never hides one.
+- Without `--timeout`, a wait runs until a qualifying change, an error,
+  or cancellation. A harness that gives up on such a call either stops
+  the process or leaves it running in the background, so check for a
+  leftover wait before starting another, and cancel waits you no longer
+  need.
 - Ctrl-C cancels a wait with exit 130 and empty stdout. A forced stop can
-  exit differently. Neither is a change report.
+  exit differently. Neither is a change report, and neither is a timeout.
 - A missing file is a valid starting point: the wait reports when the file
   is created, as long as its parent directory exists. A mistyped path
-  therefore waits forever, so check the path.
+  therefore never reports — it waits forever, or until `--timeout` — so
+  check the path.
 - Waits sample the file about once a second and may not see a change that
   is undone in between. Each change that does not qualify becomes the new
   starting point.
@@ -874,6 +904,7 @@ Exit codes of the business commands (all except guide and help):
   1    first line 'error'; also when a command could not write its report to stdout (a write command may already have changed the file: check it before retrying)
   2    usage error on stderr (possibly multiple lines), nothing on stdout
   3    busy or locked (E-LOCKED, E-INUSE, E-FLOCKED); the report's 'fix' row says what to do next
+  124  wait, wait-post or wait-state reached its --timeout with no qualifying change; no stdout, a 'timed out' line on stderr
   130  wait, wait-post or wait-state cancelled with Ctrl-C; no stdout
 guide, help, --help and --version print information with no ok/warn/error line and exit 0; usage errors still exit 2, and guide exits 1 if it cannot write or flush its page to stdout.
 
@@ -967,17 +998,18 @@ Example: agent-coexist list docs --type post --type brief
 ```text
 Wait for any change to one collaboration file
 
-Usage: agent-coexist wait <PATH>
+Usage: agent-coexist wait <PATH> [--timeout <duration>]
 
 Arguments:
   <PATH>  the file to watch; the suffix may be omitted
 
 Options:
-  -h, --help  Print help
+      --timeout <duration>  stop waiting after this long and exit 124 when nothing qualifying changed (default: no limit)
+  -h, --help                Print help
 
 Waits for next change to a collaboration file, reports diff, and exits 0. Never writes.
 Writes 'waiting  wait  <object>' to stderr once baseline is recorded; re-read file after this line to catch changes made before baseline.
-Sampled about once a second; a missing file is a valid start. Each sample waits up to 1s for a shared lock (E-LOCKED or Windows E-INUSE, exit 3). On restart, read again after the ready line. No timeout; Ctrl-C cancels (exit 130).
+Sampled about once a second; a missing file is a valid start. Each sample waits up to 1s for a shared lock (E-LOCKED or Windows E-INUSE, exit 3). On restart, read again after the ready line. Without --timeout the wait has no limit; Ctrl-C cancels (exit 130). --timeout <duration> ends it with exit 124, no stdout and a 'timed out' line on stderr when nothing qualifying changed in time; a change seen by the last sample is still reported. Under an agent harness, set it below the harness's tool-call limit.
 Example: agent-coexist wait docs/onboarding
 ```
 
@@ -987,5 +1019,5 @@ Example: agent-coexist wait docs/onboarding
 
 `agent-coexist --version` · --version (-V prints the same).
 ```text
-agent-coexist 0.4.0
+agent-coexist 0.5.0
 ```
