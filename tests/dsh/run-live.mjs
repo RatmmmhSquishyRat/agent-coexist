@@ -443,7 +443,9 @@ const scenarios = [
       write(dir, "README.md", "# standup\n");
     },
     task: "You are carol. Post a note in this project's coexist thread named standup saying you are starting on the parser.",
-    second: "Now add a note to the same standup thread saying you have finished the parser.",
+    // The second note must be true: in one run an agent rightly refused to
+    // post "finished the parser" when no parser work had been done.
+    second: "Now add a note to the same standup thread saying you are pausing the parser work until tomorrow.",
     resume: true,
     judge(dir) {
       const all = comments(dir, "standup");
@@ -455,12 +457,12 @@ const scenarios = [
     },
     good(dir) {
       coexist(dir, "post", "standup", "--as", "carol", "-m", "Starting on the parser.");
-      coexist(dir, "post", "standup", "--as", "carol", "-m", "Finished the parser.");
+      coexist(dir, "post", "standup", "--as", "carol", "-m", "Pausing the parser work until tomorrow.");
       return { events: [], final: "Posted." };
     },
     bad(dir) {
       coexist(dir, "post", "standup", "--as", "carol", "-m", "Starting on the parser.");
-      coexist(dir, "post", "standup", "--as", "dsh-agent", "-m", "Finished the parser.");
+      coexist(dir, "post", "standup", "--as", "dsh-agent", "-m", "Pausing the parser work until tomorrow.");
       return { events: [], final: "Posted." };
     },
   },
